@@ -1,7 +1,6 @@
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
 import { useState } from "react";
-import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -9,16 +8,17 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { toast } from "sonner";
 import { Plus, Pencil, Trash2, ClipboardCheck } from "lucide-react";
 import AppLayout from "@/components/AppLayout";
+import { ChecklistModal } from "@/components/ChecklistModal";
 
 const STATUS_LABELS: Record<string, string> = { pending: "Pendente", in_progress: "Em Teste", in_review: "Em Revisão", done: "Concluída" };
 const STATUS_COLORS: Record<string, string> = { pending: "#94a3b8", in_progress: "oklch(0.55 0.18 264)", in_review: "oklch(0.55 0.20 45)", done: "oklch(0.50 0.18 145)" };
 
 export default function SprintsPage() {
   const { user } = useAuth();
-  const [, navigate] = useLocation();
   const isCoordinator = user?.role === "admin";
 
   const { data: projects } = trpc.projects.list.useQuery({ clientId: undefined });
+  const { data: clients } = trpc.clients.list.useQuery(undefined);
   const { data: sprints, refetch } = trpc.sprints.list.useQuery({ projectId: undefined });
   const createMutation = trpc.sprints.create.useMutation({ onSuccess: () => { refetch(); setForm({ name: "", description: "", projectId: "" }); toast.success("Sprint criada!"); } });
   const updateMutation = trpc.sprints.update.useMutation({ onSuccess: () => { refetch(); setEditing(null); toast.success("Sprint atualizada!"); } });
@@ -26,11 +26,29 @@ export default function SprintsPage() {
 
   const [form, setForm] = useState({ name: "", description: "", projectId: "" });
   const [editing, setEditing] = useState<{ id: number; name: string; description: string; status: string } | null>(null);
+  const [modalSprint, setModalSprint] = useState<{ id: number; name: string; projectName: string; clientName: string } | null>(null);
 
   const projectMap = Object.fromEntries((projects ?? []).map(p => [p.id, p.name]));
+  const allProjects = projects ?? [];
+  const allClients = clients ?? [];
+
+  const openChecklist = (sprint: NonNullable<typeof sprints>[number]) => {
+    const project = allProjects.find(p => p.id === sprint.projectId);
+    const client = allClients.find(c => c.id === project?.clientId);
+    setModalSprint({ id: sprint.id, name: sprint.name, projectName: project?.name ?? "—", clientName: client?.name ?? "—" });
+  };
 
   return (
     <AppLayout>
+      {modalSprint && (
+        <ChecklistModal
+          sprintId={modalSprint.id}
+          sprintName={modalSprint.name}
+          projectName={modalSprint.projectName}
+          clientName={modalSprint.clientName}
+          onClose={() => setModalSprint(null)}
+        />
+      )}
       <main className="container py-8 max-w-2xl">
         {/* Formulário de criação — apenas coordenador */}
         {isCoordinator && (
@@ -86,7 +104,7 @@ export default function SprintsPage() {
                       {/* Botão principal: abrir checklist */}
                       <Button
                         size="sm"
-                        onClick={() => navigate(`/checklist/${sprint.id}`)}
+                        onClick={() => openChecklist(sprint)}
                         className="flex items-center gap-1.5 font-semibold"
                         style={{ background: "oklch(0.50 0.20 264)", color: "white" }}
                       >

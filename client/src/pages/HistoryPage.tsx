@@ -1,30 +1,52 @@
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
-import { useLocation } from "wouter";
-import { Button } from "@/components/ui/button";
+import { useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { CheckCircle2, Clock } from "lucide-react";
 import { totalItems } from "@/data/qaData";
 import AppLayout from "@/components/AppLayout";
+import { ChecklistModal } from "@/components/ChecklistModal";
 
 export default function HistoryPage() {
   const { isAuthenticated } = useAuth();
-  const [, navigate] = useLocation();
+  const [modalSprint, setModalSprint] = useState<{ id: number; name: string; projectName: string; clientName: string } | null>(null);
   const { data: history } = trpc.checklists.myHistory.useQuery(undefined, { enabled: isAuthenticated });
   const { data: sprints } = trpc.sprints.list.useQuery({ projectId: undefined }, { enabled: isAuthenticated });
+  const { data: projects } = trpc.projects.list.useQuery({ clientId: undefined }, { enabled: isAuthenticated });
+  const { data: clients } = trpc.clients.list.useQuery(undefined, { enabled: isAuthenticated });
 
-  const sprintMap = Object.fromEntries((sprints ?? []).map(s => [s.id, s.name]));
+  const sprintMap = Object.fromEntries((sprints ?? []).map(s => [s.id, s]));
+  const allProjects = projects ?? [];
+  const allClients = clients ?? [];
+
+  const openChecklist = (sprintId: number) => {
+    const sprint = (sprints ?? []).find(s => s.id === sprintId);
+    if (!sprint) return;
+    const project = allProjects.find(p => p.id === sprint.projectId);
+    const client = allClients.find(c => c.id === project?.clientId);
+    setModalSprint({ id: sprint.id, name: sprint.name, projectName: project?.name ?? "—", clientName: client?.name ?? "—" });
+  };
 
   return (
     <AppLayout>
+      {modalSprint && (
+        <ChecklistModal
+          sprintId={modalSprint.id}
+          sprintName={modalSprint.name}
+          projectName={modalSprint.projectName}
+          clientName={modalSprint.clientName}
+          onClose={() => setModalSprint(null)}
+        />
+      )}
       <main className="container py-8 max-w-2xl">
         {history?.length === 0 && <p className="text-sm text-center text-gray-400 py-12">Nenhum checklist executado ainda.</p>}
         <div className="space-y-3">
           {history?.map(item => {
             const progress = totalItems > 0 ? Math.round((item.completedItems / totalItems) * 100) : 0;
             const isCompleted = item.status === "completed";
+            const sprintName = sprintMap[item.sprintId]?.name ?? `Sprint #${item.sprintId}`;
             return (
-              <Card key={item.id} className="cursor-pointer hover:shadow-md transition-shadow" onClick={() => navigate(`/checklist/${item.sprintId}`)}>
+              <Card key={item.id} className="cursor-pointer hover:shadow-md transition-shadow" onClick={() => openChecklist(item.sprintId)}>
                 <CardContent className="p-4">
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex items-center gap-3">
@@ -32,7 +54,7 @@ export default function HistoryPage() {
                         {isCompleted ? <CheckCircle2 className="w-4 h-4 text-white" style={{ color: "oklch(0.50 0.18 145)" }} /> : <Clock className="w-4 h-4" style={{ color: "oklch(0.55 0.18 264)" }} />}
                       </div>
                       <div>
-                        <p className="font-semibold text-sm">{sprintMap[item.sprintId] ?? `Sprint #${item.sprintId}`}</p>
+                        <p className="font-semibold text-sm">{sprintName}</p>
                         <p className="text-xs text-gray-400">{new Date(item.startedAt).toLocaleDateString("pt-BR")} · {item.completedItems}/{totalItems} itens</p>
                       </div>
                     </div>
