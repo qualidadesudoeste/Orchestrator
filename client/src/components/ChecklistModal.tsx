@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { phases, totalItems } from "@/data/qaData";
 import { ChevronRight, ClipboardCheck, X, FolderOpen, ArrowLeft, ExternalLink } from "lucide-react";
+import { Maximize2, Minimize2 } from "lucide-react";
 
 type CheckedMap = Record<string, boolean>;
 
@@ -20,6 +21,7 @@ export function ChecklistModal({ sprintId, sprintName, projectName, clientName, 
   const { isAuthenticated } = useAuth();
   const [checked, setChecked] = useState<CheckedMap>({});
   const [activePhase, setActivePhase] = useState(phases[0].id);
+  const [maximized, setMaximized] = useState(false);
 
   const { data: existing } = trpc.checklists.get.useQuery(
     { sprintId }, { enabled: isAuthenticated && sprintId > 0 }
@@ -62,8 +64,17 @@ export function ChecklistModal({ sprintId, sprintName, projectName, clientName, 
   });
 
   return (
-    <div className="fixed inset-0 z-50 flex" style={{ background: "rgba(0,0,0,0.7)" }}>
-      <div className="flex w-full h-full" style={{ background: "oklch(0.975 0.006 80)" }}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: "rgba(0,0,0,0.72)", backdropFilter: "blur(4px)" }}>
+      <div
+        className="flex overflow-hidden transition-all duration-300"
+        style={{
+          background: "oklch(0.975 0.006 80)",
+          width: maximized ? "100vw" : "min(92vw, 1100px)",
+          height: maximized ? "100vh" : "min(90vh, 820px)",
+          borderRadius: maximized ? "0" : "16px",
+          boxShadow: maximized ? "none" : "0 24px 80px rgba(0,0,0,0.35)",
+        }}
+      >
         {/* Sidebar de fases */}
         <aside className="w-64 flex flex-col flex-shrink-0 h-full" style={{ background: "oklch(0.13 0.015 260)" }}>
           {/* Contexto */}
@@ -166,6 +177,12 @@ export function ChecklistModal({ sprintId, sprintName, projectName, clientName, 
                 </div>
                 <span className="text-sm font-bold tabular-nums" style={{ color: globalProgress === 100 ? "oklch(0.40 0.18 145)" : "oklch(0.40 0.18 264)" }}>{globalProgress}%</span>
               </div>
+              <button onClick={() => setMaximized(m => !m)} className="p-1.5 rounded-lg transition-colors" title={maximized ? "Restaurar" : "Maximizar"}
+                style={{ color: "oklch(0.50 0.01 260)" }}
+                onMouseEnter={e => (e.currentTarget.style.background = "oklch(0.92 0.008 80)")}
+                onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
+                {maximized ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+              </button>
               <button onClick={onClose} className="p-1.5 rounded-lg transition-colors" style={{ color: "oklch(0.50 0.01 260)" }}
                 onMouseEnter={e => (e.currentTarget.style.background = "oklch(0.92 0.008 80)")}
                 onMouseLeave={e => (e.currentTarget.style.background = "transparent")}>
