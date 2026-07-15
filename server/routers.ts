@@ -78,7 +78,10 @@ export const appRouter = router({
   checklists: router({
     get: protectedProcedure
       .input(z.object({ sprintId: z.number() }))
-      .query(async ({ ctx, input }) => getChecklist(input.sprintId, ctx.user.id)),
+      .query(async ({ ctx, input }) => {
+        const result = await getChecklist(input.sprintId, ctx.user.id);
+        return result ?? null;
+      }),
     save: protectedProcedure
       .input(z.object({
         sprintId: z.number(),

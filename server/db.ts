@@ -137,9 +137,9 @@ export async function deleteSprint(id: number) {
 // ─── Checklists ───────────────────────────────────────────────────────────────
 export async function getChecklist(sprintId: number, analystId: number): Promise<Checklist | undefined> {
   const db = await getDb();
-  if (!db) return undefined;
+  if (!db) return null as any;
   const result = await db.select().from(checklists).where(and(eq(checklists.sprintId, sprintId), eq(checklists.analystId, analystId))).limit(1);
-  return result[0];
+  return result[0] ?? null as any;
 }
 
 export async function getChecklistsByAnalyst(analystId: number) {
