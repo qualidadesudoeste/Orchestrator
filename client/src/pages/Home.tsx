@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { trpc } from "@/lib/trpc";
 import { useLocation } from "wouter";
-import { CheckSquare, Users, FolderOpen, Zap, BarChart2, Shield } from "lucide-react";
+import { CheckSquare, Users, FolderOpen, Zap, BarChart2, Shield, ClipboardCheck } from "lucide-react";
 
 export default function Home() {
   const { user, loading, isAuthenticated } = useAuth();
@@ -26,15 +26,32 @@ export default function Home() {
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen flex items-center justify-center" style={{ background: "oklch(0.13 0.015 260)" }}>
-        <div className="text-center max-w-sm px-6">
+        <div className="text-center max-w-md px-6">
           <div className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-6" style={{ background: "oklch(0.50 0.20 264)" }}>
             <CheckSquare className="w-8 h-8 text-white" />
           </div>
           <h1 className="text-3xl font-extrabold text-white mb-2" style={{ letterSpacing: "-0.02em" }}>Guia de QA</h1>
           <p className="text-white/50 text-sm mb-8">Plataforma de gestão de testes e checklists para equipes de Quality Assurance.</p>
-          <Button onClick={() => startLogin()} className="w-full h-11 font-semibold" style={{ background: "oklch(0.50 0.20 264)" }}>
-            Entrar com Manus
+          <Button onClick={() => startLogin()} className="w-full h-11 font-semibold mb-6" style={{ background: "oklch(0.50 0.20 264)" }}>
+            Entrar com conta Manus
           </Button>
+          <div className="rounded-xl p-4 text-left space-y-3" style={{ background: "oklch(0.20 0.015 260)", border: "1px solid oklch(0.30 0.01 260)" }}>
+            <p className="text-white/70 text-xs font-semibold uppercase tracking-wider">Como funciona o acesso</p>
+            <div className="space-y-2">
+              <div className="flex items-start gap-2.5">
+                <span className="w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 mt-0.5" style={{ background: "oklch(0.50 0.20 264)", color: "white" }}>1</span>
+                <p className="text-white/60 text-xs leading-relaxed">Clique em <strong className="text-white/80">Entrar com conta Manus</strong> — qualquer membro da equipe pode acessar com sua conta Manus existente. Não é necessário criar uma nova conta.</p>
+              </div>
+              <div className="flex items-start gap-2.5">
+                <span className="w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 mt-0.5" style={{ background: "oklch(0.50 0.20 264)", color: "white" }}>2</span>
+                <p className="text-white/60 text-xs leading-relaxed">Após o primeiro acesso, o <strong className="text-white/80">Coordenador</strong> acessa <strong className="text-white/80">Usuários</strong> no menu e promove o analista ao perfil correto.</p>
+              </div>
+              <div className="flex items-start gap-2.5">
+                <span className="w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 mt-0.5" style={{ background: "oklch(0.50 0.20 264)", color: "white" }}>3</span>
+                <p className="text-white/60 text-xs leading-relaxed"><strong className="text-white/80">Coordenador</strong> cadastra Clientes, Projetos e Sprints. <strong className="text-white/80">Analistas</strong> executam os checklists das sprints atribuídas.</p>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     );
@@ -42,6 +59,7 @@ export default function Home() {
 
   const isCoordinator = user?.role === "admin";
   const recentSprints = sprints?.slice(0, 4) ?? [];
+  const allSprints = sprints ?? [];
 
   const statusLabel: Record<string, string> = { pending: "Pendente", in_progress: "Em Teste", in_review: "Em Revisão", done: "Concluída" };
   const statusColor: Record<string, string> = { pending: "oklch(0.60 0.01 260)", in_progress: "oklch(0.55 0.18 264)", in_review: "oklch(0.55 0.20 45)", done: "oklch(0.50 0.18 145)" };
@@ -114,11 +132,18 @@ export default function Home() {
         <div>
           <div className="flex items-center justify-between mb-4">
             <h2 className="font-bold text-base" style={{ color: "oklch(0.15 0.01 260)" }}>Sprints Disponíveis</h2>
-            {isCoordinator && (
-              <Button size="sm" variant="outline" onClick={() => navigate("/sprints")} className="text-xs">Gerenciar Sprints</Button>
-            )}
+            <div className="flex items-center gap-2">
+              {allSprints.length > 0 && (
+                <Button size="sm" variant="outline" onClick={() => navigate("/sprints")} className="text-xs">
+                  {isCoordinator ? "Gerenciar Sprints" : "Ver todas"}
+                </Button>
+              )}
+              {isCoordinator && (
+                <Button size="sm" onClick={() => navigate("/sprints")} className="text-xs" style={{ background: "oklch(0.50 0.20 264)" }}>+ Nova Sprint</Button>
+              )}
+            </div>
           </div>
-          {recentSprints.length === 0 ? (
+          {allSprints.length === 0 ? (
             <Card className="border" style={{ borderColor: "oklch(0.88 0.008 80)" }}>
               <CardContent className="p-8 text-center">
                 <p className="text-sm" style={{ color: "oklch(0.50 0.01 260)" }}>
@@ -132,24 +157,30 @@ export default function Home() {
               </CardContent>
             </Card>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {recentSprints.map(sprint => (
-                <Card key={sprint.id} className="border cursor-pointer hover:shadow-md transition-shadow" style={{ borderColor: "oklch(0.88 0.008 80)" }}
-                  onClick={() => navigate(`/checklist/${sprint.id}`)}>
+            <div className="space-y-3">
+              {allSprints.map(sprint => (
+                <Card key={sprint.id} className="border hover:shadow-md transition-shadow" style={{ borderColor: "oklch(0.88 0.008 80)" }}>
                   <CardContent className="p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex-1 min-w-0">
-                        <h3 className="font-semibold text-sm truncate" style={{ color: "oklch(0.15 0.01 260)" }}>{sprint.name}</h3>
-                        {sprint.description && <p className="text-xs mt-0.5 line-clamp-2" style={{ color: "oklch(0.50 0.01 260)" }}>{sprint.description}</p>}
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-3 flex-1 min-w-0">
+                        <div className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: "oklch(0.50 0.20 264)22" }}>
+                          <ClipboardCheck className="w-4 h-4" style={{ color: "oklch(0.50 0.20 264)" }} />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <h3 className="font-semibold text-sm truncate" style={{ color: "oklch(0.15 0.01 260)" }}>{sprint.name}</h3>
+                          {sprint.description && <p className="text-xs mt-0.5 line-clamp-1" style={{ color: "oklch(0.50 0.01 260)" }}>{sprint.description}</p>}
+                        </div>
                       </div>
-                      <span className="text-xs font-medium px-2 py-0.5 rounded-full shrink-0" style={{ background: `${statusColor[sprint.status]}22`, color: statusColor[sprint.status] }}>
-                        {statusLabel[sprint.status]}
-                      </span>
-                    </div>
-                    <div className="mt-3">
-                      <Button size="sm" className="w-full text-xs h-8" style={{ background: "oklch(0.50 0.20 264)" }}>
-                        Abrir Checklist
-                      </Button>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        <span className="text-xs font-medium px-2 py-0.5 rounded-full hidden sm:inline-block" style={{ background: `${statusColor[sprint.status]}22`, color: statusColor[sprint.status] }}>
+                          {statusLabel[sprint.status]}
+                        </span>
+                        <Button size="sm" className="text-xs h-8 font-semibold flex items-center gap-1.5" style={{ background: "oklch(0.50 0.20 264)" }}
+                          onClick={() => navigate(`/checklist/${sprint.id}`)}>
+                          <ClipboardCheck className="w-3.5 h-3.5" />
+                          Abrir Checklist
+                        </Button>
+                      </div>
                     </div>
                   </CardContent>
                 </Card>

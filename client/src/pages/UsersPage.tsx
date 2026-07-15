@@ -26,7 +26,25 @@ export default function UsersPage() {
         </div>
       </header>
       <main className="container py-8 max-w-2xl">
-        <p className="text-xs text-gray-500 mb-4">Gerencie os perfis de acesso da equipe. <strong>Coordenador (Admin)</strong> tem acesso total; <strong>Analista (User)</strong> executa checklists.</p>
+        {/* Instrução de onboarding */}
+        <div className="rounded-xl p-4 mb-6" style={{ background: "oklch(0.96 0.01 264)", border: "1px solid oklch(0.85 0.05 264)" }}>
+          <p className="text-xs font-bold uppercase tracking-wider mb-2" style={{ color: "oklch(0.45 0.15 264)" }}>Como adicionar novos membros à equipe</p>
+          <ol className="space-y-1.5">
+            <li className="flex items-start gap-2 text-xs" style={{ color: "oklch(0.30 0.01 260)" }}>
+              <span className="w-4 h-4 rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0 mt-0.5" style={{ background: "oklch(0.50 0.20 264)" }}>1</span>
+              O novo membro acessa o site e clica em <strong>"Entrar com conta Manus"</strong>. Não é necessário criar uma conta separada.
+            </li>
+            <li className="flex items-start gap-2 text-xs" style={{ color: "oklch(0.30 0.01 260)" }}>
+              <span className="w-4 h-4 rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0 mt-0.5" style={{ background: "oklch(0.50 0.20 264)" }}>2</span>
+              Após o primeiro login, o usuário aparece automaticamente nesta lista com o perfil <strong>Analista</strong>.
+            </li>
+            <li className="flex items-start gap-2 text-xs" style={{ color: "oklch(0.30 0.01 260)" }}>
+              <span className="w-4 h-4 rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0 mt-0.5" style={{ background: "oklch(0.50 0.20 264)" }}>3</span>
+              Se necessário, promova o usuário a <strong>Coordenador</strong> clicando no botão ao lado do nome.
+            </li>
+          </ol>
+        </div>
+        <p className="text-xs text-gray-500 mb-4"><strong>Coordenador (Admin)</strong> tem acesso total à plataforma; <strong>Analista (User)</strong> executa checklists das sprints.</p>
         <div className="space-y-3">
           {users?.map(u => (
             <Card key={u.id}>
@@ -61,4 +79,3 @@ export default function UsersPage() {
     </div>
   );
 }
-

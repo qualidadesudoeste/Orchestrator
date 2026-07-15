@@ -15,3 +15,12 @@
 - [x] Painel do Coordenador: visão geral de todos os analistas
 - [x] Gerenciamento de usuários e perfis (admin)
 - [x] Testes vitest (auth.logout passando)
+
+## Correções de UX (v2)
+- [x] Tela de boas-vindas/login clara para usuários não autenticados com explicação do sistema
+- [x] Fluxo de onboarding: explicar como novos analistas acessam (login via conta Manus)
+- [x] Home: botão "Abrir Checklist" visível diretamente nos cards de sprint
+- [x] Tela da Sprint: exibir o checklist completo do procedimento ao clicar em uma sprint
+- [x] Checklist da sprint: mostrar as 5 fases e todos os itens do procedimento (igual ao guia original)
+- [x] Sprints: mostrar lista de sprints com botão "Abrir Checklist" em cada uma (analistas também veem)
+- [x] Usuários: tela acessível ao coordenador para gerenciar perfis
