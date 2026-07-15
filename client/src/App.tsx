@@ -5,10 +5,7 @@ import { Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import Home from "./pages/Home";
-import ChecklistPage from "./pages/ChecklistPage";
-import ClientsPage from "./pages/ClientsPage";
-import ProjectsPage from "./pages/ProjectsPage";
-import SprintsPage from "./pages/SprintsPage";
+import WorkspacePage from "./pages/WorkspacePage";
 import HistoryPage from "./pages/HistoryPage";
 import CoordinatorPage from "./pages/CoordinatorPage";
 import UsersPage from "./pages/UsersPage";
@@ -17,10 +14,7 @@ function Router() {
   return (
     <Switch>
       <Route path="/" component={Home} />
-      <Route path="/checklist/:sprintId" component={ChecklistPage} />
-      <Route path="/clients" component={ClientsPage} />
-      <Route path="/projects" component={ProjectsPage} />
-      <Route path="/sprints" component={SprintsPage} />
+      <Route path="/workspace" component={WorkspacePage} />
       <Route path="/history" component={HistoryPage} />
       <Route path="/coordinator" component={CoordinatorPage} />
       <Route path="/users" component={UsersPage} />

@@ -9,9 +9,7 @@ import { Button } from "@/components/ui/button";
 
 const NAV_ITEMS = [
   { label: "Dashboard", icon: LayoutDashboard, path: "/", exact: true },
-  { label: "Clientes", icon: Folder, path: "/clients" },
-  { label: "Projetos", icon: ClipboardList, path: "/projects" },
-  { label: "Sprints", icon: Zap, path: "/sprints" },
+  { label: "Workspace", icon: Folder, path: "/workspace" },
   { label: "Histórico", icon: History, path: "/history" },
 ];
 
