@@ -1,99 +1,26 @@
 import { useAuth } from "@/_core/hooks/useAuth";
-import { startLogin } from "@/const";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { trpc } from "@/lib/trpc";
 import { useLocation } from "wouter";
-import { CheckSquare, Users, FolderOpen, Zap, BarChart2, Shield, ClipboardCheck } from "lucide-react";
+import { FolderOpen, Zap, CheckSquare, BarChart2, Shield, ClipboardCheck } from "lucide-react";
+import AppLayout from "@/components/AppLayout";
 
 export default function Home() {
-  const { user, loading, isAuthenticated } = useAuth();
+  const { user, isAuthenticated } = useAuth();
   const [, navigate] = useLocation();
   const { data: sprints } = trpc.sprints.list.useQuery({ projectId: undefined }, { enabled: isAuthenticated });
   const { data: clients } = trpc.clients.list.useQuery(undefined, { enabled: isAuthenticated });
 
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center" style={{ background: "oklch(0.13 0.015 260)" }}>
-        <div className="text-center">
-          <div className="w-10 h-10 border-2 border-white/20 border-t-white rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-white/60 text-sm">Carregando...</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (!isAuthenticated) {
-    return (
-      <div className="min-h-screen flex items-center justify-center" style={{ background: "oklch(0.13 0.015 260)" }}>
-        <div className="text-center max-w-md px-6">
-          <div className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-6" style={{ background: "oklch(0.50 0.20 264)" }}>
-            <CheckSquare className="w-8 h-8 text-white" />
-          </div>
-          <h1 className="text-3xl font-extrabold text-white mb-2" style={{ letterSpacing: "-0.02em" }}>Guia de QA</h1>
-          <p className="text-white/50 text-sm mb-8">Plataforma de gestão de testes e checklists para equipes de Quality Assurance.</p>
-          <Button onClick={() => startLogin()} className="w-full h-11 font-semibold mb-6" style={{ background: "oklch(0.50 0.20 264)" }}>
-            Entrar com conta Manus
-          </Button>
-          <div className="rounded-xl p-4 text-left space-y-3" style={{ background: "oklch(0.20 0.015 260)", border: "1px solid oklch(0.30 0.01 260)" }}>
-            <p className="text-white/70 text-xs font-semibold uppercase tracking-wider">Como funciona o acesso</p>
-            <div className="space-y-2">
-              <div className="flex items-start gap-2.5">
-                <span className="w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 mt-0.5" style={{ background: "oklch(0.50 0.20 264)", color: "white" }}>1</span>
-                <p className="text-white/60 text-xs leading-relaxed">Clique em <strong className="text-white/80">Entrar com conta Manus</strong> — qualquer membro da equipe pode acessar com sua conta Manus existente. Não é necessário criar uma nova conta.</p>
-              </div>
-              <div className="flex items-start gap-2.5">
-                <span className="w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 mt-0.5" style={{ background: "oklch(0.50 0.20 264)", color: "white" }}>2</span>
-                <p className="text-white/60 text-xs leading-relaxed">Após o primeiro acesso, o <strong className="text-white/80">Coordenador</strong> acessa <strong className="text-white/80">Usuários</strong> no menu e promove o analista ao perfil correto.</p>
-              </div>
-              <div className="flex items-start gap-2.5">
-                <span className="w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 mt-0.5" style={{ background: "oklch(0.50 0.20 264)", color: "white" }}>3</span>
-                <p className="text-white/60 text-xs leading-relaxed"><strong className="text-white/80">Coordenador</strong> cadastra Clientes, Projetos e Sprints. <strong className="text-white/80">Analistas</strong> executam os checklists das sprints atribuídas.</p>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   const isCoordinator = user?.role === "admin";
-  const recentSprints = sprints?.slice(0, 4) ?? [];
   const allSprints = sprints ?? [];
 
   const statusLabel: Record<string, string> = { pending: "Pendente", in_progress: "Em Teste", in_review: "Em Revisão", done: "Concluída" };
   const statusColor: Record<string, string> = { pending: "oklch(0.60 0.01 260)", in_progress: "oklch(0.55 0.18 264)", in_review: "oklch(0.55 0.20 45)", done: "oklch(0.50 0.18 145)" };
 
   return (
-    <div className="min-h-screen" style={{ background: "oklch(0.975 0.006 80)" }}>
-      {/* Header */}
-      <header className="sticky top-0 z-20 border-b bg-white/90 backdrop-blur-sm" style={{ borderColor: "oklch(0.88 0.008 80)" }}>
-        <div className="container flex items-center justify-between h-14">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: "oklch(0.50 0.20 264)" }}>
-              <CheckSquare className="w-4 h-4 text-white" />
-            </div>
-            <span className="font-bold text-sm" style={{ color: "oklch(0.15 0.01 260)" }}>Guia de QA</span>
-          </div>
-          <nav className="flex items-center gap-1">
-            {isCoordinator && (
-              <>
-                <Button variant="ghost" size="sm" onClick={() => navigate("/clients")} className="text-xs">Clientes</Button>
-                <Button variant="ghost" size="sm" onClick={() => navigate("/projects")} className="text-xs">Projetos</Button>
-                <Button variant="ghost" size="sm" onClick={() => navigate("/sprints")} className="text-xs">Sprints</Button>
-                <Button variant="ghost" size="sm" onClick={() => navigate("/coordinator")} className="text-xs">Painel</Button>
-                <Button variant="ghost" size="sm" onClick={() => navigate("/users")} className="text-xs">Usuários</Button>
-              </>
-            )}
-            <Button variant="ghost" size="sm" onClick={() => navigate("/history")} className="text-xs">Histórico</Button>
-            <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white ml-2" style={{ background: "oklch(0.50 0.20 264)" }}>
-              {user?.name?.charAt(0).toUpperCase() ?? "U"}
-            </div>
-          </nav>
-        </div>
-      </header>
-
-      <main className="container py-8">
+    <AppLayout>
+      <main className="px-8 py-8">
         {/* Welcome */}
         <div className="mb-8">
           <h1 className="text-2xl font-extrabold mb-1" style={{ color: "oklch(0.15 0.01 260)", letterSpacing: "-0.02em" }}>
@@ -128,7 +55,7 @@ export default function Home() {
           ))}
         </div>
 
-        {/* Sprints recentes */}
+        {/* Sprints */}
         <div>
           <div className="flex items-center justify-between mb-4">
             <h2 className="font-bold text-base" style={{ color: "oklch(0.15 0.01 260)" }}>Sprints Disponíveis</h2>
@@ -147,7 +74,7 @@ export default function Home() {
             <Card className="border" style={{ borderColor: "oklch(0.88 0.008 80)" }}>
               <CardContent className="p-8 text-center">
                 <p className="text-sm" style={{ color: "oklch(0.50 0.01 260)" }}>
-                  {isCoordinator ? "Nenhuma sprint cadastrada. Crie clientes, projetos e sprints para começar." : "Nenhuma sprint disponível no momento. Aguarde o Coordenador criar uma sprint."}
+                  {isCoordinator ? "Nenhuma sprint cadastrada. Crie clientes, projetos e sprints para começar." : "Nenhuma sprint disponível no momento."}
                 </p>
                 {isCoordinator && (
                   <Button size="sm" className="mt-4" onClick={() => navigate("/clients")} style={{ background: "oklch(0.50 0.20 264)" }}>
@@ -189,6 +116,6 @@ export default function Home() {
           )}
         </div>
       </main>
-    </div>
+    </AppLayout>
   );
 }

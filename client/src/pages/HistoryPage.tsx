@@ -3,8 +3,9 @@ import { trpc } from "@/lib/trpc";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { ArrowLeft, CheckCircle2, Clock } from "lucide-react";
+import { CheckCircle2, Clock } from "lucide-react";
 import { totalItems } from "@/data/qaData";
+import AppLayout from "@/components/AppLayout";
 
 export default function HistoryPage() {
   const { isAuthenticated } = useAuth();
@@ -15,14 +16,7 @@ export default function HistoryPage() {
   const sprintMap = Object.fromEntries((sprints ?? []).map(s => [s.id, s.name]));
 
   return (
-    <div className="min-h-screen" style={{ background: "oklch(0.975 0.006 80)" }}>
-      <header className="sticky top-0 z-20 border-b bg-white/90 backdrop-blur-sm" style={{ borderColor: "oklch(0.88 0.008 80)" }}>
-        <div className="container flex items-center gap-3 h-14">
-          <button onClick={() => navigate("/")} className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-800 transition-colors"><ArrowLeft className="w-4 h-4" /> Voltar</button>
-          <span className="text-gray-300">|</span>
-          <h1 className="font-bold text-sm">Meu Histórico de Checklists</h1>
-        </div>
-      </header>
+    <AppLayout>
       <main className="container py-8 max-w-2xl">
         {history?.length === 0 && <p className="text-sm text-center text-gray-400 py-12">Nenhum checklist executado ainda.</p>}
         <div className="space-y-3">
@@ -58,6 +52,6 @@ export default function HistoryPage() {
           })}
         </div>
       </main>
-    </div>
+  </AppLayout>
   );
 }

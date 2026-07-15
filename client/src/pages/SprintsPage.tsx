@@ -7,7 +7,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
-import { ArrowLeft, Plus, Pencil, Trash2, ClipboardCheck } from "lucide-react";
+import { Plus, Pencil, Trash2, ClipboardCheck } from "lucide-react";
+import AppLayout from "@/components/AppLayout";
 
 const STATUS_LABELS: Record<string, string> = { pending: "Pendente", in_progress: "Em Teste", in_review: "Em Revisão", done: "Concluída" };
 const STATUS_COLORS: Record<string, string> = { pending: "#94a3b8", in_progress: "oklch(0.55 0.18 264)", in_review: "oklch(0.55 0.20 45)", done: "oklch(0.50 0.18 145)" };
@@ -29,14 +30,7 @@ export default function SprintsPage() {
   const projectMap = Object.fromEntries((projects ?? []).map(p => [p.id, p.name]));
 
   return (
-    <div className="min-h-screen" style={{ background: "oklch(0.975 0.006 80)" }}>
-      <header className="sticky top-0 z-20 border-b bg-white/90 backdrop-blur-sm" style={{ borderColor: "oklch(0.88 0.008 80)" }}>
-        <div className="container flex items-center gap-3 h-14">
-          <button onClick={() => navigate("/")} className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-800 transition-colors"><ArrowLeft className="w-4 h-4" /> Voltar</button>
-          <span className="text-gray-300">|</span>
-          <h1 className="font-bold text-sm">Sprints</h1>
-        </div>
-      </header>
+    <AppLayout>
       <main className="container py-8 max-w-2xl">
         {/* Formulário de criação — apenas coordenador */}
         {isCoordinator && (
@@ -122,6 +116,6 @@ export default function SprintsPage() {
           )}
         </div>
       </main>
-    </div>
+  </AppLayout>
   );
 }

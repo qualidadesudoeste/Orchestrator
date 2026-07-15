@@ -7,7 +7,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
-import { ArrowLeft, Plus, Pencil, Trash2 } from "lucide-react";
+import { Plus, Pencil, Trash2 } from "lucide-react";
+import AppLayout from "@/components/AppLayout";
 
 export default function ProjectsPage() {
   const { user } = useAuth();
@@ -28,14 +29,7 @@ export default function ProjectsPage() {
   if (!isCoordinator) return <div className="p-8 text-center text-sm text-gray-500">Acesso restrito ao Coordenador.</div>;
 
   return (
-    <div className="min-h-screen" style={{ background: "oklch(0.975 0.006 80)" }}>
-      <header className="sticky top-0 z-20 border-b bg-white/90 backdrop-blur-sm" style={{ borderColor: "oklch(0.88 0.008 80)" }}>
-        <div className="container flex items-center gap-3 h-14">
-          <button onClick={() => navigate("/")} className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-800 transition-colors"><ArrowLeft className="w-4 h-4" /> Voltar</button>
-          <span className="text-gray-300">|</span>
-          <h1 className="font-bold text-sm">Projetos</h1>
-        </div>
-      </header>
+    <AppLayout>
       <main className="container py-8 max-w-2xl">
         <Card className="mb-6">
           <CardHeader><CardTitle className="text-base">Novo Projeto</CardTitle></CardHeader>
@@ -84,6 +78,6 @@ export default function ProjectsPage() {
           {projects?.length === 0 && <p className="text-sm text-center text-gray-400 py-8">Nenhum projeto cadastrado.</p>}
         </div>
       </main>
-    </div>
+  </AppLayout>
   );
 }

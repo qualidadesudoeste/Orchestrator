@@ -2,9 +2,10 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
 import { useLocation } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { ArrowLeft, Users, CheckCircle2, Clock } from "lucide-react";
+import { Users, CheckCircle2, Clock } from "lucide-react";
 import { totalItems } from "@/data/qaData";
 import { Button } from "@/components/ui/button";
+import AppLayout from "@/components/AppLayout";
 
 export default function CoordinatorPage() {
   const { user } = useAuth();
@@ -23,14 +24,7 @@ export default function CoordinatorPage() {
   const analystIds = Array.from(new Set((allChecklists ?? []).map(c => c.analystId)));
 
   return (
-    <div className="min-h-screen" style={{ background: "oklch(0.975 0.006 80)" }}>
-      <header className="sticky top-0 z-20 border-b bg-white/90 backdrop-blur-sm" style={{ borderColor: "oklch(0.88 0.008 80)" }}>
-        <div className="container flex items-center gap-3 h-14">
-          <button onClick={() => navigate("/")} className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-800 transition-colors"><ArrowLeft className="w-4 h-4" /> Voltar</button>
-          <span className="text-gray-300">|</span>
-          <h1 className="font-bold text-sm">Painel do Coordenador</h1>
-        </div>
-      </header>
+    <AppLayout>
       <main className="container py-8">
         {/* Summary cards */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
@@ -95,6 +89,6 @@ export default function CoordinatorPage() {
           })}
         </div>
       </main>
-    </div>
+  </AppLayout>
   );
 }
