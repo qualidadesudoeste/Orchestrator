@@ -32,7 +32,7 @@ export function Sidebar({
             className="w-9 h-9 object-contain"
           />
           <div>
-            <div className="text-white font-bold text-sm leading-tight" style={{ fontFamily: "Syne, sans-serif" }}>
+          <div className="text-white font-bold text-sm leading-tight" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
               Guia de QA
             </div>
             <div className="text-xs" style={{ color: "oklch(0.6 0.01 260)" }}>
@@ -85,7 +85,7 @@ export function Sidebar({
                 <span className="text-base leading-none">{phase.icon}</span>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between gap-1">
-                      <span className="text-xs font-bold uppercase tracking-wider truncate" style={{ fontFamily: "Syne, sans-serif" }}>
+                      <span className="text-xs font-bold uppercase tracking-wider truncate" style={{ fontFamily: "'Plus Jakarta Sans', sans-serif" }}>
                         Fase {phase.number}
                       </span>
                     {prog && prog.checked > 0 && (

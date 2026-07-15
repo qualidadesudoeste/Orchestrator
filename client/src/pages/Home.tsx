@@ -66,7 +66,7 @@ export default function Home() {
           <div>
             <h1
               className="text-xl font-extrabold leading-tight tracking-tight"
-              style={{ fontFamily: "Syne, sans-serif", color: "#1A1A1A" }}
+              style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", color: "#1A1A1A", letterSpacing: "-0.01em" }}
             >
               Procedimento Detalhado de Testes QA
             </h1>
@@ -122,7 +122,7 @@ export default function Home() {
             </div>
             <h2
               className="text-4xl font-extrabold text-white leading-tight tracking-tight"
-              style={{ fontFamily: "Syne, sans-serif" }}
+              style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", letterSpacing: "-0.02em", lineHeight: "1.15" }}
             >
               Cada sprint testada com método.<br />
               <span style={{ color: "oklch(0.75 0.15 264)" }}>Cada bug registrado com rastreabilidade.</span>

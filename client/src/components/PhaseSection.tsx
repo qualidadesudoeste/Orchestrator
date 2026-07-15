@@ -40,7 +40,7 @@ export function PhaseSection({ phase, checked, onToggle, phaseProgress, isActive
               </div>
               <h2
                 className="text-2xl font-bold leading-tight mt-0.5"
-                style={{ fontFamily: "Syne, sans-serif", color: "#1A1A1A" }}
+                style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", color: "#1A1A1A", letterSpacing: "-0.01em" }}
               >
                 {phase.title}
               </h2>
@@ -50,10 +50,10 @@ export function PhaseSection({ phase, checked, onToggle, phaseProgress, isActive
 
           {/* Phase progress circle */}
           <div className="shrink-0 text-right">
-            <div
-              className="text-3xl font-bold tabular-nums"
-              style={{ fontFamily: "Syne, sans-serif", color: phase.color }}
-            >
+              <div
+                className="text-3xl font-bold tabular-nums"
+                style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", color: phase.color }}
+              >
               {phaseProgress.percent}%
             </div>
             <div className="text-xs text-gray-400">
@@ -84,7 +84,7 @@ export function PhaseSection({ phase, checked, onToggle, phaseProgress, isActive
               </div>
               <h3
                 className="text-sm font-semibold"
-                style={{ fontFamily: "Syne, sans-serif", color: "#374151" }}
+                style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", color: "#374151" }}
               >
                 {step.title}
               </h3>
