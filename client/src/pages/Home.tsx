@@ -1,179 +1,163 @@
-import { useState, useEffect, useRef } from "react";
-import { phases, totalItems } from "@/data/qaData";
-import { useChecklist } from "@/hooks/useChecklist";
-import { Sidebar } from "@/components/Sidebar";
-import { PhaseSection } from "@/components/PhaseSection";
-import { toast } from "sonner";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { startLogin } from "@/const";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { trpc } from "@/lib/trpc";
+import { useLocation } from "wouter";
+import { CheckSquare, Users, FolderOpen, Zap, BarChart2, Shield } from "lucide-react";
 
 export default function Home() {
-  const { checked, toggle, reset, globalProgress, checkedCount, phaseProgress } = useChecklist();
-  const [activePhase, setActivePhase] = useState(phases[0].id);
-  const mainRef = useRef<HTMLDivElement>(null);
+  const { user, loading, isAuthenticated } = useAuth();
+  const [, navigate] = useLocation();
+  const { data: sprints } = trpc.sprints.list.useQuery({ projectId: undefined }, { enabled: isAuthenticated });
+  const { data: clients } = trpc.clients.list.useQuery(undefined, { enabled: isAuthenticated });
 
-  // Scroll to phase when selected from sidebar
-  const handleSelectPhase = (id: string) => {
-    setActivePhase(id);
-    const el = document.getElementById(id);
-    if (el) {
-      el.scrollIntoView({ behavior: "smooth", block: "start" });
-    }
-  };
-
-  // Update active phase on scroll
-  useEffect(() => {
-    const observer = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((entry) => {
-          if (entry.isIntersecting) {
-            setActivePhase(entry.target.id);
-          }
-        });
-      },
-      { rootMargin: "-30% 0px -60% 0px" }
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center" style={{ background: "oklch(0.13 0.015 260)" }}>
+        <div className="text-center">
+          <div className="w-10 h-10 border-2 border-white/20 border-t-white rounded-full animate-spin mx-auto mb-4" />
+          <p className="text-white/60 text-sm">Carregando...</p>
+        </div>
+      </div>
     );
-    phases.forEach((phase) => {
-      const el = document.getElementById(phase.id);
-      if (el) observer.observe(el);
-    });
-    return () => observer.disconnect();
-  }, []);
+  }
 
-  const handleReset = () => {
-    reset();
-    toast.success("Sprint resetada! Todos os itens foram desmarcados.");
-  };
+  if (!isAuthenticated) {
+    return (
+      <div className="min-h-screen flex items-center justify-center" style={{ background: "oklch(0.13 0.015 260)" }}>
+        <div className="text-center max-w-sm px-6">
+          <div className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-6" style={{ background: "oklch(0.50 0.20 264)" }}>
+            <CheckSquare className="w-8 h-8 text-white" />
+          </div>
+          <h1 className="text-3xl font-extrabold text-white mb-2" style={{ letterSpacing: "-0.02em" }}>Guia de QA</h1>
+          <p className="text-white/50 text-sm mb-8">Plataforma de gestão de testes e checklists para equipes de Quality Assurance.</p>
+          <Button onClick={() => startLogin()} className="w-full h-11 font-semibold" style={{ background: "oklch(0.50 0.20 264)" }}>
+            Entrar com Manus
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  const isCoordinator = user?.role === "admin";
+  const recentSprints = sprints?.slice(0, 4) ?? [];
+
+  const statusLabel: Record<string, string> = { pending: "Pendente", in_progress: "Em Teste", in_review: "Em Revisão", done: "Concluída" };
+  const statusColor: Record<string, string> = { pending: "oklch(0.60 0.01 260)", in_progress: "oklch(0.55 0.18 264)", in_review: "oklch(0.55 0.20 45)", done: "oklch(0.50 0.18 145)" };
 
   return (
-    <div className="min-h-screen flex" style={{ background: "oklch(0.975 0.006 80)" }}>
-      {/* Sidebar */}
-      <Sidebar
-        activePhase={activePhase}
-        onSelectPhase={handleSelectPhase}
-        phaseProgress={phaseProgress}
-        globalProgress={globalProgress}
-        checkedCount={checkedCount}
-        totalItems={totalItems}
-        onReset={handleReset}
-      />
-
-      {/* Main content */}
-      <div className="flex-1 ml-72 flex flex-col min-h-screen">
-        {/* Top header */}
-        <header
-          className="sticky top-0 z-10 border-b px-8 py-4 flex items-center justify-between"
-          style={{ background: "rgba(247,246,242,0.96)", backdropFilter: "blur(12px)", borderColor: "oklch(0.82 0.01 80)", borderBottom: "2px solid oklch(0.82 0.01 80)" }}
-        >
-          <div>
-            <h1
-              className="text-xl font-extrabold leading-tight tracking-tight"
-              style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", color: "#1A1A1A", letterSpacing: "-0.01em" }}
-            >
-              Procedimento Detalhado de Testes QA
-            </h1>
-            <p className="text-xs text-gray-500 mt-0.5">
-              Versão Consolidada · Equipe de Quality Assurance
-            </p>
+    <div className="min-h-screen" style={{ background: "oklch(0.975 0.006 80)" }}>
+      {/* Header */}
+      <header className="sticky top-0 z-20 border-b bg-white/90 backdrop-blur-sm" style={{ borderColor: "oklch(0.88 0.008 80)" }}>
+        <div className="container flex items-center justify-between h-14">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: "oklch(0.50 0.20 264)" }}>
+              <CheckSquare className="w-4 h-4 text-white" />
+            </div>
+            <span className="font-bold text-sm" style={{ color: "oklch(0.15 0.01 260)" }}>Guia de QA</span>
           </div>
+          <nav className="flex items-center gap-1">
+            {isCoordinator && (
+              <>
+                <Button variant="ghost" size="sm" onClick={() => navigate("/clients")} className="text-xs">Clientes</Button>
+                <Button variant="ghost" size="sm" onClick={() => navigate("/projects")} className="text-xs">Projetos</Button>
+                <Button variant="ghost" size="sm" onClick={() => navigate("/sprints")} className="text-xs">Sprints</Button>
+                <Button variant="ghost" size="sm" onClick={() => navigate("/coordinator")} className="text-xs">Painel</Button>
+                <Button variant="ghost" size="sm" onClick={() => navigate("/users")} className="text-xs">Usuários</Button>
+              </>
+            )}
+            <Button variant="ghost" size="sm" onClick={() => navigate("/history")} className="text-xs">Histórico</Button>
+            <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white ml-2" style={{ background: "oklch(0.50 0.20 264)" }}>
+              {user?.name?.charAt(0).toUpperCase() ?? "U"}
+            </div>
+          </nav>
+        </div>
+      </header>
 
-          {/* Global progress pill */}
-          <div className="flex items-center gap-3">
-            <div className="text-right">
-              <div className="text-xs text-gray-500">Progresso</div>
-              <div
-                className="text-2xl font-extrabold tabular-nums"
-                style={{ fontFamily: "Syne, sans-serif", color: globalProgress === 100 ? "#059669" : "#1D4ED8" }}
-              >
-                {globalProgress}%
-              </div>
-            </div>
-            <div className="w-40 h-3 overflow-hidden bg-gray-200">
-              <div
-                className="h-full transition-all duration-700"
-                style={{
-                  width: `${globalProgress}%`,
-                  background: globalProgress === 100 ? "#059669" : "#1D4ED8",
-                }}
-              />
-            </div>
-          </div>
-        </header>
-
-        {/* Hero banner */}
-        <div
-          className="relative px-8 py-10 overflow-hidden"
-          style={{
-            background: "linear-gradient(135deg, oklch(0.13 0.015 260) 0%, oklch(0.18 0.04 264) 100%)",
-          }}
-        >
-          <img
-            src="/manus-storage/qa-hero-bg_dc7ab739.png"
-            alt=""
-            className="absolute inset-0 w-full h-full object-cover opacity-10 mix-blend-overlay"
-          />
-          <div className="relative z-10 max-w-2xl">
-            <div className="flex items-center gap-2 mb-3">
-              {phases.map((phase) => (
-                <div
-                  key={phase.id}
-                  className="w-3 h-3"
-                  style={{ background: phase.color }}
-                />
-              ))}
-            </div>
-            <h2
-              className="text-4xl font-extrabold text-white leading-tight tracking-tight"
-              style={{ fontFamily: "'Plus Jakarta Sans', sans-serif", letterSpacing: "-0.02em", lineHeight: "1.15" }}
-            >
-              Cada sprint testada com método.<br />
-              <span style={{ color: "oklch(0.75 0.15 264)" }}>Cada bug registrado com rastreabilidade.</span>
-            </h2>
-            <p className="text-sm mt-3" style={{ color: "oklch(0.65 0.01 260)" }}>
-              Siga o checklist fase a fase. Marque cada item conforme executa. O progresso é salvo automaticamente.
-            </p>
-            <div className="flex items-center gap-4 mt-5">
-              {phases.map((phase) => {
-                const prog = phaseProgress.find((p) => p.phaseId === phase.id);
-                return (
-                  <button
-                    key={phase.id}
-                    onClick={() => handleSelectPhase(phase.id)}
-                    className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full transition-all hover:opacity-80 active:scale-95"
-                    style={{ background: `${phase.color}33`, color: phase.color, border: `1px solid ${phase.color}44` }}
-                  >
-                    <span>{phase.icon}</span>
-                    <span>Fase {phase.number}</span>
-                    {prog && prog.percent === 100 && <span>✓</span>}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
+      <main className="container py-8">
+        {/* Welcome */}
+        <div className="mb-8">
+          <h1 className="text-2xl font-extrabold mb-1" style={{ color: "oklch(0.15 0.01 260)", letterSpacing: "-0.02em" }}>
+            Olá, {user?.name?.split(" ")[0] ?? "QA"} 👋
+          </h1>
+          <p className="text-sm" style={{ color: "oklch(0.50 0.01 260)" }}>
+            {isCoordinator ? "Coordenador — você tem acesso completo à plataforma." : "Analista — selecione uma sprint para iniciar o checklist."}
+          </p>
         </div>
 
-        {/* Phases content */}
-        <main ref={mainRef} className="flex-1 px-8 py-8 space-y-14 max-w-3xl">
-          {phases.map((phase) => {
-            const prog = phaseProgress.find((p) => p.phaseId === phase.id)!;
-            return (
-              <PhaseSection
-                key={phase.id}
-                phase={phase}
-                checked={checked}
-                onToggle={toggle}
-                phaseProgress={prog}
-                isActive={activePhase === phase.id}
-              />
-            );
-          })}
+        {/* Quick stats */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+          {[
+            { icon: <FolderOpen className="w-5 h-5" />, label: "Clientes", value: clients?.length ?? 0, color: "oklch(0.55 0.18 264)" },
+            { icon: <Zap className="w-5 h-5" />, label: "Sprints", value: sprints?.length ?? 0, color: "oklch(0.55 0.20 25)" },
+            { icon: <CheckSquare className="w-5 h-5" />, label: "Em Teste", value: sprints?.filter(s => s.status === "in_progress").length ?? 0, color: "oklch(0.50 0.18 145)" },
+            { icon: isCoordinator ? <Shield className="w-5 h-5" /> : <BarChart2 className="w-5 h-5" />, label: isCoordinator ? "Coordenador" : "Analista", value: isCoordinator ? "Admin" : "QA", color: "oklch(0.50 0.15 45)" },
+          ].map((stat, i) => (
+            <Card key={i} className="border" style={{ borderColor: "oklch(0.88 0.008 80)" }}>
+              <CardContent className="p-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-lg flex items-center justify-center text-white" style={{ background: stat.color }}>
+                    {stat.icon}
+                  </div>
+                  <div>
+                    <div className="text-xl font-bold" style={{ color: "oklch(0.15 0.01 260)" }}>{stat.value}</div>
+                    <div className="text-xs" style={{ color: "oklch(0.50 0.01 260)" }}>{stat.label}</div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
 
-          {/* Footer */}
-          <div className="pb-12 pt-4 border-t" style={{ borderColor: "oklch(0.88 0.008 80)" }}>
-            <p className="text-xs text-gray-400 text-center">
-              Guia Interativo de QA · Procedimento Operacional Padrão
-            </p>
+        {/* Sprints recentes */}
+        <div>
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="font-bold text-base" style={{ color: "oklch(0.15 0.01 260)" }}>Sprints Disponíveis</h2>
+            {isCoordinator && (
+              <Button size="sm" variant="outline" onClick={() => navigate("/sprints")} className="text-xs">Gerenciar Sprints</Button>
+            )}
           </div>
-        </main>
-      </div>
+          {recentSprints.length === 0 ? (
+            <Card className="border" style={{ borderColor: "oklch(0.88 0.008 80)" }}>
+              <CardContent className="p-8 text-center">
+                <p className="text-sm" style={{ color: "oklch(0.50 0.01 260)" }}>
+                  {isCoordinator ? "Nenhuma sprint cadastrada. Crie clientes, projetos e sprints para começar." : "Nenhuma sprint disponível no momento. Aguarde o Coordenador criar uma sprint."}
+                </p>
+                {isCoordinator && (
+                  <Button size="sm" className="mt-4" onClick={() => navigate("/clients")} style={{ background: "oklch(0.50 0.20 264)" }}>
+                    Começar cadastro
+                  </Button>
+                )}
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {recentSprints.map(sprint => (
+                <Card key={sprint.id} className="border cursor-pointer hover:shadow-md transition-shadow" style={{ borderColor: "oklch(0.88 0.008 80)" }}
+                  onClick={() => navigate(`/checklist/${sprint.id}`)}>
+                  <CardContent className="p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex-1 min-w-0">
+                        <h3 className="font-semibold text-sm truncate" style={{ color: "oklch(0.15 0.01 260)" }}>{sprint.name}</h3>
+                        {sprint.description && <p className="text-xs mt-0.5 line-clamp-2" style={{ color: "oklch(0.50 0.01 260)" }}>{sprint.description}</p>}
+                      </div>
+                      <span className="text-xs font-medium px-2 py-0.5 rounded-full shrink-0" style={{ background: `${statusColor[sprint.status]}22`, color: statusColor[sprint.status] }}>
+                        {statusLabel[sprint.status]}
+                      </span>
+                    </div>
+                    <div className="mt-3">
+                      <Button size="sm" className="w-full text-xs h-8" style={{ background: "oklch(0.50 0.20 264)" }}>
+                        Abrir Checklist
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
+        </div>
+      </main>
     </div>
   );
 }
