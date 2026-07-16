@@ -28,6 +28,7 @@ export function ChecklistModal({ sprintId, sprintName, projectName, clientName, 
   );
   const saveMutation = trpc.checklists.save.useMutation();
   const utils = trpc.useUtils();
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (existing?.checkedItems) {
