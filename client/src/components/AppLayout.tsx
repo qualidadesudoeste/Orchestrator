@@ -14,8 +14,7 @@ const NAV_ITEMS = [
 ];
 
 const ADMIN_ITEMS = [
-  { label: "Painel QA", icon: Shield, path: "/coordinator" },
-  { label: "Usuários", icon: Users, path: "/users" },
+  { label: "Dashboard Admin", icon: Shield, path: "/coordinator" },
 ];
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
@@ -76,7 +75,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                 {[
                   "Clique em \"Entrar\" abaixo e faça login com sua conta Manus.",
                   "No primeiro acesso, você entra como Analista automaticamente.",
-                  "O Coordenador pode promover seu perfil em Usuários.",
+                  "O Administrador pode promover seu perfil em Usuários.",
                 ].map((text, i) => (
                   <li key={i} className="flex items-start gap-3 text-xs" style={{ color: "oklch(0.65 0.01 260)" }}>
                     <span className="w-5 h-5 rounded-full flex items-center justify-center text-white font-bold flex-shrink-0 mt-0.5 text-xs" style={{ background: "oklch(0.50 0.20 264)" }}>{i + 1}</span>
@@ -146,7 +145,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
           {isAdmin && (
             <>
-              <p className="text-xs font-bold uppercase tracking-wider px-3 mt-4 mb-2" style={{ color: "oklch(0.38 0.01 260)" }}>Coordenação</p>
+              <p className="text-xs font-bold uppercase tracking-wider px-3 mt-4 mb-2" style={{ color: "oklch(0.38 0.01 260)" }}>Administrador</p>
               {ADMIN_ITEMS.map(item => {
                 const active = isActive(item.path);
                 return (
@@ -178,7 +177,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             <div className="min-w-0">
               <p className="text-xs font-semibold text-white truncate">{user?.name ?? "Usuário"}</p>
               <p className="text-xs truncate" style={{ color: "oklch(0.45 0.01 260)" }}>
-                {isAdmin ? "Coordenador" : "Analista"}
+                {isAdmin ? "Administrador" : "Analista"}
               </p>
             </div>
           </div>

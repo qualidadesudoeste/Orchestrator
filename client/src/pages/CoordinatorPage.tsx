@@ -2,10 +2,12 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
 import { useLocation } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Users, CheckCircle2, Clock } from "lucide-react";
+import { Users, CheckCircle2, Clock, Eye } from "lucide-react";
 import { totalItems } from "@/data/qaData";
 import { Button } from "@/components/ui/button";
 import AppLayout from "@/components/AppLayout";
+import { ChecklistViewModal } from "@/components/ChecklistViewModal";
+import { useState } from "react";
 
 export default function CoordinatorPage() {
   const { user } = useAuth();
@@ -16,15 +18,34 @@ export default function CoordinatorPage() {
   const { data: allUsers } = trpc.users.list.useQuery(undefined, { enabled: isCoordinator });
   const { data: sprints } = trpc.sprints.list.useQuery({ projectId: undefined }, { enabled: isCoordinator });
 
+  type ChecklistRow = NonNullable<typeof allChecklists>[number];
+  const [viewChecklist, setViewChecklist] = useState<ChecklistRow | null>(null);
+
   if (!isCoordinator) return <div className="p-8 text-center text-sm text-gray-500">Acesso restrito ao Coordenador.</div>;
 
   const sprintMap = Object.fromEntries((sprints ?? []).map(s => [s.id, s.name]));
   const userMap = Object.fromEntries((allUsers ?? []).map(u => [u.id, u.name ?? u.email ?? `#${u.id}`]));
+  // Mapas de projeto e cliente para o modal
+  const sprintProjectMap = Object.fromEntries((sprints ?? []).map(s => [s.id, (s as any).projectName ?? ""]));
+  const sprintClientMap = Object.fromEntries((sprints ?? []).map(s => [s.id, (s as any).clientName ?? ""]));
 
   const analystIds = Array.from(new Set((allChecklists ?? []).map(c => c.analystId)));
 
   return (
     <AppLayout>
+      {viewChecklist && (
+        <ChecklistViewModal
+          sprintName={sprintMap[viewChecklist.sprintId] ?? `Sprint #${viewChecklist.sprintId}`}
+          projectName={sprintProjectMap[viewChecklist.sprintId] ?? "—"}
+          clientName={sprintClientMap[viewChecklist.sprintId] ?? "—"}
+          analystName={userMap[viewChecklist.analystId] ?? `Analista #${viewChecklist.analystId}`}
+          checkedItems={viewChecklist.checkedItems ?? "{}"}
+          completedItems={viewChecklist.completedItems}
+          status={viewChecklist.status}
+          startedAt={viewChecklist.startedAt}
+          onClose={() => setViewChecklist(null)}
+        />
+      )}
       <main className="container py-8">
         {/* Summary cards */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
@@ -79,6 +100,15 @@ export default function CoordinatorPage() {
                             </div>
                             <span className="text-xs font-bold tabular-nums w-8 text-right" style={{ color: isCompleted ? "oklch(0.50 0.18 145)" : "oklch(0.55 0.18 264)" }}>{progress}%</span>
                           </div>
+                          <button
+                            onClick={() => setViewChecklist(cl)}
+                            className="p-1.5 rounded-lg transition-colors flex items-center gap-1 text-xs font-medium"
+                            style={{ color: "oklch(0.50 0.18 264)", background: "oklch(0.92 0.02 264)" }}
+                            title="Visualizar checklist"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                            Ver
+                          </button>
                         </div>
                       );
                     })}
