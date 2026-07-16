@@ -1,6 +1,6 @@
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { phases, totalItems } from "@/data/qaData";
@@ -38,9 +38,28 @@ export function ChecklistModal({ sprintId, sprintName, projectName, clientName, 
   const completedCount = Object.values(checked).filter(Boolean).length;
   const globalProgress = totalItems > 0 ? Math.round((completedCount / totalItems) * 100) : 0;
 
+  const autoSave = useCallback(async (nextChecked: Record<string, boolean>, count: number) => {
+    const isCompleted = count === totalItems;
+    try {
+      await saveMutation.mutateAsync({
+        sprintId, checkedItems: JSON.stringify(nextChecked), totalItems,
+        completedItems: count, status: isCompleted ? "completed" : "in_progress",
+        completedAt: isCompleted ? new Date() : null,
+      });
+      utils.checklists.progressBySprints.invalidate();
+      utils.checklists.myHistory.invalidate();
+      utils.checklists.allHistory.invalidate();
+    } catch { /* silencioso */ }
+  }, [sprintId, totalItems, saveMutation, utils]);
   const toggle = useCallback((id: string) => {
-    setChecked(prev => ({ ...prev, [id]: !prev[id] }));
-  }, []);
+    setChecked(prev => {
+      const next = { ...prev, [id]: !prev[id] };
+      const count = Object.values(next).filter(Boolean).length;
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      debounceRef.current = setTimeout(() => autoSave(next, count), 800);
+      return next;
+    });
+  }, [autoSave]);
 
   const save = useCallback(async () => {
     const isCompleted = completedCount === totalItems;
@@ -52,6 +71,7 @@ export function ChecklistModal({ sprintId, sprintName, projectName, clientName, 
       status: isCompleted ? "completed" : "in_progress",
       completedAt: isCompleted ? new Date() : null,
     });
+    utils.checklists.progressBySprints.invalidate();
     utils.checklists.myHistory.invalidate();
     utils.checklists.allHistory.invalidate();
     toast.success("Progresso salvo!");
