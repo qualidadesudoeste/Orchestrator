@@ -16,11 +16,13 @@ export default function Home() {
   const { data: sprints } = trpc.sprints.list.useQuery({ projectId: undefined }, { enabled: isAuthenticated });
   const { data: clients } = trpc.clients.list.useQuery(undefined, { enabled: isAuthenticated });
   const { data: projects } = trpc.projects.list.useQuery({ clientId: undefined }, { enabled: isAuthenticated });
+  const { data: progressData } = trpc.checklists.progressBySprints.useQuery(undefined, { enabled: isAuthenticated });
 
   const isCoordinator = user?.role === "admin";
   const allSprints = sprints ?? [];
   const allProjects = projects ?? [];
   const allClients = clients ?? [];
+  const progressMap = new Map((progressData ?? []).map(p => [p.sprintId, p]));
 
   const openChecklist = (sprint: typeof allSprints[number]) => {
     const project = allProjects.find(p => p.id === sprint.projectId);
@@ -132,6 +134,20 @@ export default function Home() {
                                 {project && <span>{project.name}</span>}
                               </p>
                             )}
+                            {(() => {
+                              const prog = progressMap.get(sprint.id);
+                              if (!prog || prog.totalItems === 0) return null;
+                              const pct = Math.round((prog.completedItems / prog.totalItems) * 100);
+                              const barColor = pct === 100 ? "oklch(0.50 0.18 145)" : "oklch(0.55 0.18 264)";
+                              return (
+                                <div className="flex items-center gap-2 mt-1.5">
+                                  <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: "oklch(0.88 0.008 80)" }}>
+                                    <div className="h-full rounded-full transition-all duration-500" style={{ width: `${pct}%`, background: barColor }} />
+                                  </div>
+                                  <span className="text-xs font-bold tabular-nums flex-shrink-0" style={{ color: barColor, minWidth: "2.5rem", textAlign: "right" }}>{pct}%</span>
+                                </div>
+                              );
+                            })()}
                           </div>
                         </div>
                         <div className="flex items-center gap-2 flex-shrink-0">

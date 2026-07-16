@@ -12,6 +12,7 @@ import {
   getClients, getProjects, getSprints,
   updateClient, updateProject, updateSprint, updateUserRole,
   upsertChecklist,
+  getProgressBySprints,
 } from "./db";
 
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
@@ -97,6 +98,7 @@ export const appRouter = router({
       }),
     myHistory: protectedProcedure.query(async ({ ctx }) => getChecklistsByAnalyst(ctx.user.id)),
     allHistory: adminProcedure.query(async () => getAllChecklists()),
+    progressBySprints: protectedProcedure.query(async ({ ctx }) => getProgressBySprints(ctx.user.id)),
   }),
 });
 

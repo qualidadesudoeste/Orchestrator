@@ -154,6 +154,21 @@ export async function getAllChecklists() {
   return db.select().from(checklists).orderBy(desc(checklists.startedAt));
 }
 
+/** Retorna o progresso mais recente de cada sprint para o analista atual */
+export async function getProgressBySprints(analystId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  const rows = await db.select().from(checklists).where(eq(checklists.analystId, analystId));
+  const map = new Map<number, { sprintId: number; completedItems: number; totalItems: number; status: string; startedAt: Date }>();
+  for (const row of rows) {
+    const existing = map.get(row.sprintId);
+    if (!existing || row.startedAt > existing.startedAt) {
+      map.set(row.sprintId, { sprintId: row.sprintId, completedItems: row.completedItems, totalItems: row.totalItems, status: row.status, startedAt: row.startedAt });
+    }
+  }
+  return Array.from(map.values()).map(({ startedAt: _, ...rest }) => rest);
+}
+
 export async function upsertChecklist(data: {
   sprintId: number;
   analystId: number;
