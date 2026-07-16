@@ -4,7 +4,7 @@ import { useState, useCallback, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { phases, totalItems } from "@/data/qaData";
-import { ChevronRight, ClipboardCheck, X, FolderOpen, ArrowLeft, ExternalLink } from "lucide-react";
+import { ChevronRight, ClipboardCheck, X, FolderOpen, ExternalLink } from "lucide-react";
 import { Maximize2, Minimize2 } from "lucide-react";
 
 type CheckedMap = Record<string, boolean>;
@@ -79,11 +79,6 @@ export function ChecklistModal({ sprintId, sprintName, projectName, clientName, 
         <aside className="w-64 flex flex-col flex-shrink-0 h-full" style={{ background: "oklch(0.13 0.015 260)" }}>
           {/* Contexto */}
           <div className="px-4 pt-5 pb-4 border-b" style={{ borderColor: "oklch(0.22 0.015 260)" }}>
-            <button onClick={onClose} className="flex items-center gap-1.5 mb-4 text-xs transition-colors" style={{ color: "oklch(0.5 0.01 260)" }}
-              onMouseEnter={e => (e.currentTarget.style.color = "white")}
-              onMouseLeave={e => (e.currentTarget.style.color = "oklch(0.5 0.01 260)")}>
-              <ArrowLeft className="w-3.5 h-3.5" /> Fechar Checklist
-            </button>
             {/* Breadcrumb de contexto */}
             <div className="space-y-1 mb-3">
               <div className="flex items-center gap-1.5 text-xs" style={{ color: "oklch(0.45 0.01 260)" }}>
