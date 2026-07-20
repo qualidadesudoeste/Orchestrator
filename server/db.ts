@@ -1,6 +1,6 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull, or } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { Checklist, InsertUser, Sprint, checklists, clients, projects, sprints, users } from "../drizzle/schema";
+import { Checklist, InsertUser, Sprint, TrailProgress, checklists, clients, projects, sprints, trailProgress, users } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -10,6 +10,83 @@ export async function getDb() {
     try { _db = drizzle(process.env.DATABASE_URL); } catch (error) { console.warn("[Database] Failed to connect:", error); _db = null; }
   }
   return _db;
+}
+
+// ─── Auth helpers ─────────────────────────────────────────────────────────────
+
+export async function getUserByUsername(username: string) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(users).where(eq(users.username, username)).limit(1);
+  return result.length > 0 ? result[0] : undefined;
+}
+
+export async function getUserById(id: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(users).where(eq(users.id, id)).limit(1);
+  return result.length > 0 ? result[0] : undefined;
+}
+
+export async function createLocalUser(data: {
+  username: string;
+  passwordHash: string;
+  name: string;
+  email?: string;
+  role: "user" | "admin";
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  await db.insert(users).values({
+    username: data.username,
+    passwordHash: data.passwordHash,
+    name: data.name,
+    email: data.email ?? null,
+    loginMethod: "local",
+    role: data.role,
+    lastSignedIn: new Date(),
+  });
+}
+
+export async function updateLocalUser(
+  userId: number,
+  data: { name?: string; email?: string; role?: "user" | "admin"; passwordHash?: string }
+) {
+  const db = await getDb();
+  if (!db) return;
+  const set: Record<string, unknown> = {};
+  if (data.name !== undefined) set.name = data.name;
+  if (data.email !== undefined) set.email = data.email;
+  if (data.role !== undefined) set.role = data.role;
+  if (data.passwordHash !== undefined) set.passwordHash = data.passwordHash;
+  if (Object.keys(set).length === 0) return;
+  await db.update(users).set(set).where(eq(users.id, userId));
+}
+
+export async function deleteUser(userId: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db.delete(users).where(eq(users.id, userId));
+}
+
+export async function getAllUsers() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(users).orderBy(desc(users.createdAt));
+}
+
+export async function updateLastSignedIn(userId: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(users).set({ lastSignedIn: new Date() }).where(eq(users.id, userId));
+}
+
+// Mantido para compatibilidade com sdk.ts (OAuth legado)
+export async function getUserByOpenId(openId: string) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const result = await db.select().from(users).where(eq(users.openId, openId)).limit(1);
+  return result.length > 0 ? result[0] : undefined;
 }
 
 export async function upsertUser(user: InsertUser): Promise<void> {
@@ -36,19 +113,6 @@ export async function upsertUser(user: InsertUser): Promise<void> {
     if (Object.keys(updateSet).length === 0) updateSet.lastSignedIn = new Date();
     await db.insert(users).values(values).onDuplicateKeyUpdate({ set: updateSet });
   } catch (error) { console.error("[Database] Failed to upsert user:", error); throw error; }
-}
-
-export async function getUserByOpenId(openId: string) {
-  const db = await getDb();
-  if (!db) return undefined;
-  const result = await db.select().from(users).where(eq(users.openId, openId)).limit(1);
-  return result.length > 0 ? result[0] : undefined;
-}
-
-export async function getAllUsers() {
-  const db = await getDb();
-  if (!db) return [];
-  return db.select().from(users).orderBy(desc(users.createdAt));
 }
 
 export async function updateUserRole(userId: number, role: "user" | "admin") {
@@ -189,7 +253,7 @@ export async function upsertChecklist(data: {
       status: data.status,
       completedAt: data.completedAt ?? undefined,
     }).where(eq(checklists.id, existing.id));
-    return existing.id;
+  return existing.id;
   } else {
     await db.insert(checklists).values({
       sprintId: data.sprintId,
@@ -203,4 +267,35 @@ export async function upsertChecklist(data: {
     const created = await getChecklist(data.sprintId, data.analystId);
     return created?.id;
   }
+}
+
+// ─── Trail Progress ───────────────────────────────────────────────────────────
+export async function getTrailProgress(userId: number): Promise<TrailProgress | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const result = await db.select().from(trailProgress).where(eq(trailProgress.userId, userId)).limit(1);
+  return result[0] ?? null;
+}
+
+export async function upsertTrailProgress(userId: number, completedTopics: string[]): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  const existing = await getTrailProgress(userId);
+  const topicsJson = JSON.stringify(completedTopics);
+  if (existing) {
+    await db.update(trailProgress).set({ completedTopics: topicsJson }).where(eq(trailProgress.userId, userId));
+  } else {
+    await db.insert(trailProgress).values({ userId, completedTopics: topicsJson });
+  }
+}
+
+export async function getAllTrailProgress() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select({
+    id: trailProgress.id,
+    userId: trailProgress.userId,
+    completedTopics: trailProgress.completedTopics,
+    updatedAt: trailProgress.updatedAt,
+  }).from(trailProgress).orderBy(desc(trailProgress.updatedAt));
 }

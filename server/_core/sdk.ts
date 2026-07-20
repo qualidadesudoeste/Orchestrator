@@ -287,6 +287,15 @@ class SDKServer {
 
     const sessionUserId = session.openId;
     const signedInAt = new Date();
+    // Sessão local (auth própria): openId = "local:<userId>"
+    if (sessionUserId.startsWith("local:")) {
+      const userId = parseInt(sessionUserId.slice(6), 10);
+      if (isNaN(userId)) throw ForbiddenError("Invalid local session");
+      const user = await db.getUserById(userId);
+      if (!user) throw ForbiddenError("User not found");
+      return user;
+    }
+
     let user = await db.getUserByOpenId(sessionUserId);
 
     // If user not in DB, sync from OAuth server automatically
@@ -311,10 +320,12 @@ class SDKServer {
       throw ForbiddenError("User not found");
     }
 
-    await db.upsertUser({
-      openId: user.openId,
-      lastSignedIn: signedInAt,
-    });
+    if (user.openId) {
+      await db.upsertUser({
+        openId: user.openId,
+        lastSignedIn: signedInAt,
+      });
+    }
 
     return user;
   }

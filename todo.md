@@ -32,3 +32,30 @@
 - [x] Transformar ChecklistPage em ChecklistModal com contexto Cliente/Projeto/Sprint no topo
 - [x] Remover rotas /clients, /projects, /sprints separadas — unificar em /workspace
 - [x] Atualizar sidebar: substituir Clientes/Projetos/Sprints por "Workspace"
+
+## Módulo Trilha do Conhecimento
+- [ ] Criar tabela trail_progress no banco de dados
+- [ ] Criar dados estáticos da trilha (4 níveis, tópicos, recursos)
+- [ ] Criar endpoints backend: getProgress, saveProgress, adminView
+- [ ] Criar TrailPage com 4 níveis progressivos e progresso interativo
+- [ ] Adicionar Trilha no menu lateral
+- [ ] Visão do administrador: progresso de todos os analistas na trilha
+
+## Autenticação Própria (substituir Manus OAuth)
+- [x] Schema: adicionar username, passwordHash; tornar openId nullable
+- [x] Migração SQL aplicada via webdev_execute_sql
+- [x] Backend: auth.login com bcrypt (publicProcedure)
+- [x] Backend: auth.me retorna usuário da sessão JWT local
+- [x] Backend: auth.logout limpa cookie
+- [x] Backend: users.create (admin cria usuário com perfil)
+- [x] Backend: users.update (admin edita nome/email/perfil)
+- [x] Backend: users.delete (admin remove usuário)
+- [x] Backend: users.resetPassword (admin redefine senha)
+- [x] Seed: usuário admin inicial via SQL (admin / admin123)
+- [x] Frontend: LoginPage com formulário usuário/senha
+- [x] Frontend: useAuth sem referência ao Manus OAuth
+- [x] Frontend: main.tsx sem startLogin/manus-cookie
+- [x] Frontend: AppLayout sem tela de "Entrar com Manus"
+- [x] Frontend: UsersPage para admin cadastrar/editar/deletar usuários
+- [x] Frontend: App.tsx com rota /login
+- [x] Testes vitest: auth.login local (4/4 passando)

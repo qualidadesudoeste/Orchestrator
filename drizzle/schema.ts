@@ -5,8 +5,10 @@ import { int, mysqlEnum, mysqlTable, text, timestamp, varchar } from "drizzle-or
  */
 export const users = mysqlTable("users", {
   id: int("id").autoincrement().primaryKey(),
-  openId: varchar("openId", { length: 64 }).notNull().unique(),
-  name: text("name"),
+  openId: varchar("openId", { length: 64 }),
+  username: varchar("username", { length: 64 }),
+  passwordHash: varchar("passwordHash", { length: 255 }),
+  name: varchar("name", { length: 255 }),
   email: varchar("email", { length: 320 }),
   loginMethod: varchar("loginMethod", { length: 64 }),
   /** "admin" = Coordenador, "user" = Analista */
@@ -70,3 +72,13 @@ export const checklists = mysqlTable("checklists", {
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
 export type Checklist = typeof checklists.$inferSelect;
+
+export const trailProgress = mysqlTable("trail_progress", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull().unique(),
+  completedTopics: text("completedTopics").notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+});
+
+export type TrailProgress = typeof trailProgress.$inferSelect;
+export type InsertTrailProgress = typeof trailProgress.$inferInsert;

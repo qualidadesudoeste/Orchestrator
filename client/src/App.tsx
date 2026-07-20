@@ -9,15 +9,19 @@ import WorkspacePage from "./pages/WorkspacePage";
 import HistoryPage from "./pages/HistoryPage";
 import CoordinatorPage from "./pages/CoordinatorPage";
 import UsersPage from "./pages/UsersPage";
+import TrailPage from "./pages/TrailPage";
+import LoginPage from "./pages/LoginPage";
 
 function Router() {
   return (
     <Switch>
+      <Route path="/login" component={LoginPage} />
       <Route path="/" component={Home} />
       <Route path="/workspace" component={WorkspacePage} />
       <Route path="/history" component={HistoryPage} />
       <Route path="/coordinator" component={CoordinatorPage} />
       <Route path="/users" component={UsersPage} />
+      <Route path="/trail" component={TrailPage} />
       <Route path="/404" component={NotFound} />
       <Route component={NotFound} />
     </Switch>

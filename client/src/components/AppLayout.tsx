@@ -1,25 +1,33 @@
 import { useAuth } from "@/_core/hooks/useAuth";
-import { startLogin } from "@/const";
+import { useEffect } from "react";
 import { useLocation } from "wouter";
 import {
-  CheckSquare, LayoutDashboard, Users, Folder, Zap, ClipboardList,
-  History, Shield, LogOut, ChevronRight
+  CheckSquare, LayoutDashboard, Folder, Users,
+  History, Shield, LogOut
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { GraduationCap } from "lucide-react";
 
 const NAV_ITEMS = [
   { label: "Dashboard", icon: LayoutDashboard, path: "/", exact: true },
   { label: "Workspace", icon: Folder, path: "/workspace" },
   { label: "Histórico", icon: History, path: "/history" },
+  { label: "Trilha do Conhecimento", icon: GraduationCap, path: "/trail" },
 ];
 
 const ADMIN_ITEMS = [
   { label: "Dashboard Admin", icon: Shield, path: "/coordinator" },
+  { label: "Usuários", icon: Users, path: "/users" },
 ];
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const { user, isAuthenticated, loading, logout } = useAuth();
   const [location, navigate] = useLocation();
+
+  useEffect(() => {
+    if (!loading && !isAuthenticated) {
+      navigate("/login");
+    }
+  }, [loading, isAuthenticated, navigate]);
 
   if (loading) {
     return (
@@ -35,67 +43,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   }
 
   if (!isAuthenticated) {
-    return (
-      <div className="min-h-screen flex" style={{ background: "oklch(0.13 0.015 260)" }}>
-        {/* Sidebar decorativa */}
-        <aside className="w-64 flex flex-col border-r" style={{ borderColor: "oklch(0.22 0.015 260)" }}>
-          <div className="px-5 pt-8 pb-6 border-b" style={{ borderColor: "oklch(0.22 0.015 260)" }}>
-            <div className="flex items-center gap-2.5 mb-6">
-              <div className="w-8 h-8 rounded-xl flex items-center justify-center" style={{ background: "oklch(0.50 0.20 264)" }}>
-                <CheckSquare className="w-4 h-4 text-white" />
-              </div>
-              <div>
-                <div className="text-white font-bold text-sm">Guia de QA</div>
-                <div className="text-xs" style={{ color: "oklch(0.5 0.01 260)" }}>Plataforma Operacional</div>
-              </div>
-            </div>
-            {NAV_ITEMS.map(item => (
-              <div key={item.path} className="flex items-center gap-2.5 px-3 py-2 rounded-lg mb-1 opacity-30">
-                <item.icon className="w-4 h-4" style={{ color: "oklch(0.5 0.01 260)" }} />
-                <span className="text-xs" style={{ color: "oklch(0.5 0.01 260)" }}>{item.label}</span>
-              </div>
-            ))}
-          </div>
-        </aside>
-        {/* Área de login */}
-        <div className="flex-1 flex items-center justify-center px-8">
-          <div className="max-w-md w-full">
-            <div className="mb-8">
-              <h1 className="text-3xl font-extrabold text-white mb-2" style={{ letterSpacing: "-0.02em" }}>
-                Bem-vindo ao<br />
-                <span style={{ color: "oklch(0.75 0.15 264)" }}>Guia de QA</span>
-              </h1>
-              <p className="text-sm" style={{ color: "oklch(0.55 0.01 260)" }}>
-                Plataforma operacional de testes — checklists, sprints e rastreabilidade em um só lugar.
-              </p>
-            </div>
-            <div className="rounded-2xl p-6 mb-6" style={{ background: "oklch(0.17 0.015 260)", border: "1px solid oklch(0.25 0.015 260)" }}>
-              <p className="text-xs font-bold uppercase tracking-wider mb-4" style={{ color: "oklch(0.50 0.20 264)" }}>Como acessar</p>
-              <ol className="space-y-3">
-                {[
-                  "Clique em \"Entrar\" abaixo e faça login com sua conta Manus.",
-                  "No primeiro acesso, você entra como Analista automaticamente.",
-                  "O Administrador pode promover seu perfil em Usuários.",
-                ].map((text, i) => (
-                  <li key={i} className="flex items-start gap-3 text-xs" style={{ color: "oklch(0.65 0.01 260)" }}>
-                    <span className="w-5 h-5 rounded-full flex items-center justify-center text-white font-bold flex-shrink-0 mt-0.5 text-xs" style={{ background: "oklch(0.50 0.20 264)" }}>{i + 1}</span>
-                    {text}
-                  </li>
-                ))}
-              </ol>
-            </div>
-            <Button
-              onClick={() => startLogin()}
-              className="w-full h-11 font-semibold text-sm"
-              style={{ background: "oklch(0.50 0.20 264)", color: "white" }}
-            >
-              Entrar com conta Manus
-              <ChevronRight className="w-4 h-4 ml-1" />
-            </Button>
-          </div>
-        </div>
-      </div>
-    );
+    return null; // useEffect abaixo cuida do redirect
   }
 
   const isActive = (path: string, exact?: boolean) => {
