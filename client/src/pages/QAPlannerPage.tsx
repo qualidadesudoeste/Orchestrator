@@ -308,7 +308,7 @@ function CaseGenerator({ onExport }: { onExport: (cases: TestCase[], project: { 
   return (
     <div className="flex flex-col gap-6">
       {/* Layout em duas colunas: painel de configuração | área de HU + resultado */}
-      <div style={{ display: "grid", gridTemplateColumns: "340px 1fr", gap: "1.25rem", alignItems: "start" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "280px 1fr", gap: "1.25rem", alignItems: "start" }}>
 
         {/* ── Coluna esquerda: configuração ── */}
         <Card style={{ background: "white", border: "1px solid #e2e8f0", borderRadius: "0.75rem", boxShadow: "0 1px 3px rgba(0,0,0,0.07)" }}>
@@ -364,35 +364,6 @@ function CaseGenerator({ onExport }: { onExport: (cases: TestCase[], project: { 
                 </SelectContent>
               </Select>
             </div>
-            {/* Tipo de Sistema */}
-            <div>
-              <Label className="text-xs" style={{ color: "#64748b" }}>Tipo de Sistema</Label>
-              <Select value={systemType} onValueChange={setSystemType}>
-                <SelectTrigger className="mt-1">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {["web", "mobile", "api", "desktop", "integração"].map(t => (
-                    <SelectItem key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            {/* Criticidade */}
-            <div>
-              <Label className="text-xs" style={{ color: "#64748b" }}>Criticidade</Label>
-              <Select value={criticality} onValueChange={v => setCriticality(v as any)}>
-                <SelectTrigger className="mt-1">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="low">Baixa</SelectItem>
-                  <SelectItem value="medium">Média</SelectItem>
-                  <SelectItem value="high">Alta</SelectItem>
-                  <SelectItem value="critical">Crítica</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
           </CardContent>
         </Card>
 
@@ -423,8 +394,38 @@ function CaseGenerator({ onExport }: { onExport: (cases: TestCase[], project: { 
                 onChange={e => setUserStory(e.target.value)}
                 placeholder="Cole aqui a História de Usuário, ou use os botões acima para importar de JSON, PDF ou DOCX..."
                 className="resize-none text-sm"
-                style={{ minHeight: "220px" }}
+                style={{ minHeight: "280px" }}
               />
+              {/* Linha de configurações: Tipo de Sistema + Criticidade */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label className="text-xs" style={{ color: "#64748b" }}>Tipo de Sistema</Label>
+                  <Select value={systemType} onValueChange={setSystemType}>
+                    <SelectTrigger className="mt-1 h-8 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {["web", "mobile", "api", "desktop", "integração"].map(t => (
+                        <SelectItem key={t} value={t}>{t.charAt(0).toUpperCase() + t.slice(1)}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-xs" style={{ color: "#64748b" }}>Criticidade</Label>
+                  <Select value={criticality} onValueChange={v => setCriticality(v as any)}>
+                    <SelectTrigger className="mt-1 h-8 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="low">Baixa</SelectItem>
+                      <SelectItem value="medium">Média</SelectItem>
+                      <SelectItem value="high">Alta</SelectItem>
+                      <SelectItem value="critical">Crítica</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
               {/* Ações */}
               <div className="flex gap-2">
                 <Button

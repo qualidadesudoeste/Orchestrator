@@ -231,76 +231,99 @@ export const appRouter = router({
           high: "alta",
           critical: "crítica",
         };
-        const systemPrompt = `Você é um especialista em Quality Assurance com profundo conhecimento em técnicas de teste de software.
-Sua tarefa é analisar Histórias de Usuário e gerar casos de teste abrangentes no formato BDD (Dado/Quando/Então).
+        // Truncar input para evitar respostas gigantescas que causam truncamento do JSON
+        const MAX_HU_CHARS = 4000;
+        const truncatedStory = input.userStory.length > MAX_HU_CHARS
+          ? input.userStory.substring(0, MAX_HU_CHARS) + "\n\n[... HU truncada para processamento. Gere casos com base no contexto acima.]"
+          : input.userStory;
 
-IMPORTANTE: Responda SOMENTE com o JSON abaixo, sem nenhum texto antes ou depois:
+        const systemPrompt = `Você é um especialista em Quality Assurance. Analise a História de Usuário e gere casos de teste BDD (Dado/Quando/Então).
+Seja conciso: máximo 3 categorias, máximo 4 casos por categoria (total máximo: 12 casos).
+Campos de texto devem ter no máximo 120 caracteres cada.`;
 
-{
-  "resumo": "Breve análise da HU e principais riscos identificados",
-  "cobertura": {
-    "funcional": ["lista de pontos funcionais cobertos"],
-    "naoFuncional": ["lista de aspectos não-funcionais a considerar"],
-    "heuristicas": ["heurísticas de teste aplicadas (SFDPOT, FEW HICCUPPS, etc.)"]
-  },
-  "cards": [
-    {
-      "categoria": "nome da categoria (ex: Fluxo Principal, Validações, Segurança)",
-      "casos": [
-        {
-          "id": "CT-001",
-          "titulo": "título do caso",
-          "prioridade": "alta|média|baixa",
-          "dado": "contexto inicial",
-          "quando": "ação executada",
-          "entao": "resultado esperado",
-          "resultado_esperado": "detalhamento do resultado esperado",
-          "tipo": "funcional|segurança|performance|usabilidade|regressão"
-        }
-      ]
-    }
-  ]
-}`;
+        const userMessage = `HU: ${truncatedStory}
+Sistema: ${input.systemType} | Criticidade: ${critMap[input.criticality] || input.criticality}${input.projectContext ? ` | Contexto: ${input.projectContext}` : ""}`;
 
-        const userMessage = `**História de Usuário:**
-${input.userStory}
+        // Schema JSON estruturado para garantir saída válida sem markdown
+        const outputSchema = {
+          name: "qa_cases",
+          strict: true,
+          schema: {
+            type: "object",
+            properties: {
+              resumo: { type: "string" },
+              cobertura: {
+                type: "object",
+                properties: {
+                  funcional: { type: "array", items: { type: "string" } },
+                  naoFuncional: { type: "array", items: { type: "string" } },
+                  heuristicas: { type: "array", items: { type: "string" } },
+                },
+                required: ["funcional", "naoFuncional", "heuristicas"],
+                additionalProperties: false,
+              },
+              cards: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    categoria: { type: "string" },
+                    casos: {
+                      type: "array",
+                      items: {
+                        type: "object",
+                        properties: {
+                          id: { type: "string" },
+                          titulo: { type: "string" },
+                          prioridade: { type: "string", enum: ["alta", "média", "baixa"] },
+                          dado: { type: "string" },
+                          quando: { type: "string" },
+                          entao: { type: "string" },
+                          resultado_esperado: { type: "string" },
+                          tipo: { type: "string", enum: ["funcional", "segurança", "performance", "usabilidade", "regressão"] },
+                        },
+                        required: ["id", "titulo", "prioridade", "dado", "quando", "entao", "resultado_esperado", "tipo"],
+                        additionalProperties: false,
+                      },
+                    },
+                  },
+                  required: ["categoria", "casos"],
+                  additionalProperties: false,
+                },
+              },
+            },
+            required: ["resumo", "cobertura", "cards"],
+            additionalProperties: false,
+          },
+        };
 
-**Tipo de Sistema:** ${input.systemType}
-**Criticidade:** ${critMap[input.criticality] || input.criticality}
-${input.projectContext ? `**Contexto adicional:** ${input.projectContext}` : ""}
-
-Gere casos de teste abrangentes cobrindo: fluxo principal, fluxos alternativos, validações, casos de borda, segurança básica e usabilidade.
-Organize em no máximo 3 categorias lógicas, com no máximo 4 casos cada (total máximo: 12 casos).`;
-
-        const response = await invokeLLM({
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: userMessage },
-          ],
-          maxTokens: 4096,
-        });
-
-        const content = response.choices?.[0]?.message?.content ?? "";
         try {
-          const raw = String(content ?? "").trim();
+          const response = await invokeLLM({
+            model: "gpt-5-mini",
+            messages: [
+              { role: "system", content: systemPrompt },
+              { role: "user", content: userMessage },
+            ],
+            maxTokens: 8192,
+            response_format: {
+              type: "json_schema",
+              json_schema: outputSchema,
+            },
+          });
+
+          const content = response.choices?.[0]?.message?.content ?? "";
+          const raw = String(content).trim();
           if (!raw) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "IA retornou resposta vazia. Tente novamente." });
-          // Remover qualquer bloco markdown (```json ... ``` ou ``` ... ```)
-          const stripped = raw
-            .replace(/^```(?:json)?\s*/i, "")
-            .replace(/\s*```\s*$/, "")
-            .trim();
-          // 1) JSON puro direto
-          if (stripped.startsWith("{")) return JSON.parse(stripped);
-          // 2) Primeiro objeto JSON no texto (fallback)
-          const objMatch = stripped.match(/(\{[\s\S]*\})/);
-          if (objMatch) return JSON.parse(objMatch[1]);
-          console.error("[qaPlanner.generateCases] No JSON found in:", raw.substring(0, 400));
-          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "IA retornou resposta inválida. Tente novamente." });
+
+          // json_schema garante JSON puro, mas mantemos fallback
+          const stripped = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
+          const jsonStr = stripped.startsWith("{") ? stripped : (stripped.match(/(\{[\s\S]*\})/)?.[1] ?? "");
+          if (!jsonStr) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "IA retornou resposta inválida. Tente novamente." });
+          return JSON.parse(jsonStr);
         } catch (err: any) {
           if (err instanceof TRPCError) throw err;
-          console.error("[qaPlanner.generateCases] JSON parse error:", err?.message);
-          console.error("[qaPlanner.generateCases] Content sample:", String(content).substring(0, 300));
-          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Erro ao processar resposta da IA. Tente novamente." });
+          console.error("[qaPlanner.generateCases] Error:", err?.message);
+          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Erro ao gerar casos de teste. Tente novamente." });
         }
       }),
 
