@@ -89,11 +89,11 @@ const MOCK_EFICIENCIA = {
 };
 
 const MOCK_INSIGHTS = [
-  { icon: "💰", text: "Financeiro concentra 38% das falhas do período", highlight: "Financeiro", color: "#ef4444" },
-  { icon: "🔧", text: "Ambiente QA foi responsável por 27% dos testes bloqueados", highlight: "Ambiente QA", color: "#f97316" },
-  { icon: "📈", text: "A taxa de aprovação aumentou 12% em relação à sprint anterior", highlight: "aumentou", color: "#22c55e" },
-  { icon: "🤖", text: "15 testes automatizados apresentaram comportamento instável", highlight: "15 testes automatizados", color: "#6366f1" },
-  { icon: "⏰", text: "Existem 42 casos de teste sem execução há mais de 90 dias", highlight: "42 casos de teste", color: "#f59e0b" },
+  { text: "Financeiro concentra 38% das falhas do período", highlight: "Financeiro", color: "#ef4444" },
+  { text: "Ambiente QA foi responsável por 27% dos testes bloqueados", highlight: "Ambiente QA", color: "#f97316" },
+  { text: "A taxa de aprovação aumentou 12% em relação à sprint anterior", highlight: "aumentou", color: "#22c55e" },
+  { text: "15 testes automatizados apresentaram comportamento instável", highlight: "15 testes automatizados", color: "#6366f1" },
+  { text: "Existem 42 casos de teste sem execução há mais de 90 dias", highlight: "42 casos de teste", color: "#f59e0b" },
 ];
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -249,7 +249,6 @@ export default function DashboardPage() {
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 10 }}>
             {MOCK_INSIGHTS.map((ins, i) => (
               <div key={i} style={{ border: "1px solid #f3f4f6", borderRadius: 8, padding: "10px 12px", fontSize: 12, color: "#374151", lineHeight: 1.5 }}>
-                <span style={{ marginRight: 6 }}>{ins.icon}</span>
                 {ins.text.split(ins.highlight).map((part, j, arr) => (
                   <span key={j}>{part}{j < arr.length - 1 && <strong style={{ color: ins.color }}>{ins.highlight}</strong>}</span>
                 ))}
@@ -428,28 +427,26 @@ export default function DashboardPage() {
             <div style={{ fontSize: 12, fontWeight: 700, color: "#374151", marginBottom: 12, textTransform: "uppercase", letterSpacing: "0.05em" }}>Eficiência dos Testes</div>
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", marginBottom: 12 }}>
               {/* Gauge simplificado */}
-              <div style={{ position: "relative", width: 100, height: 60 }}>
-                <svg viewBox="0 0 100 55" width="100" height="55">
+              <div style={{ position: "relative", width: 130, height: 80 }}>
+                <svg viewBox="0 0 100 60" width="130" height="75">
                   <path d="M 10 50 A 40 40 0 0 1 90 50" fill="none" stroke="#f3f4f6" strokeWidth="10" strokeLinecap="round" />
                   <path d="M 10 50 A 40 40 0 0 1 90 50" fill="none" stroke="#6366f1" strokeWidth="10" strokeLinecap="round"
                     strokeDasharray={`${(MOCK_EFICIENCIA.geral / 100) * 125.6} 125.6`} />
+                  <text x="50" y="44" textAnchor="middle" fontSize="15" fontWeight="700" fill="#111827">{MOCK_EFICIENCIA.geral}%</text>
+                  <text x="50" y="55" textAnchor="middle" fontSize="7" fill="#6b7280">Eficiência Geral</text>
                 </svg>
-                <div style={{ position: "absolute", bottom: 0, left: "50%", transform: "translateX(-50%)", textAlign: "center" }}>
-                  <div style={{ fontSize: 20, fontWeight: 700, color: "#111827" }}>{MOCK_EFICIENCIA.geral}%</div>
-                  <div style={{ fontSize: 9, color: "#6b7280" }}>Eficiência Geral</div>
-                </div>
               </div>
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
               {[
-                { icon: "🟣", label: "Testes que nunca falham", count: MOCK_EFICIENCIA.nuncaFalham.count, pct: MOCK_EFICIENCIA.nuncaFalham.pct },
-                { icon: "🔴", label: "Testes redundantes", count: MOCK_EFICIENCIA.redundantes.count, pct: MOCK_EFICIENCIA.redundantes.pct },
-                { icon: "🟠", label: "Casos obsoletos", count: MOCK_EFICIENCIA.obsoletos.count, pct: MOCK_EFICIENCIA.obsoletos.pct },
-                { icon: "🟡", label: "Casos sem execução >90d", count: MOCK_EFICIENCIA.semExecucao.count, pct: MOCK_EFICIENCIA.semExecucao.pct },
-                { icon: "⏱️", label: "Tempo médio por execução", count: MOCK_EFICIENCIA.tempoMedio, pct: null },
+                { label: "Testes que nunca falham", count: MOCK_EFICIENCIA.nuncaFalham.count, pct: MOCK_EFICIENCIA.nuncaFalham.pct },
+                { label: "Testes redundantes", count: MOCK_EFICIENCIA.redundantes.count, pct: MOCK_EFICIENCIA.redundantes.pct },
+                { label: "Casos obsoletos", count: MOCK_EFICIENCIA.obsoletos.count, pct: MOCK_EFICIENCIA.obsoletos.pct },
+                { label: "Casos sem execução >90d", count: MOCK_EFICIENCIA.semExecucao.count, pct: MOCK_EFICIENCIA.semExecucao.pct },
+                { label: "Tempo médio por execução", count: MOCK_EFICIENCIA.tempoMedio, pct: null },
               ].map((item, i) => (
                 <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 11 }}>
-                  <span style={{ color: "#374151" }}>{item.icon} {item.label}</span>
+                  <span style={{ color: "#374151" }}>{item.label}</span>
                   <span style={{ fontWeight: 600, color: "#111827" }}>
                     {item.count}{item.pct !== null ? ` (${item.pct}%)` : ""}
                   </span>
