@@ -211,18 +211,17 @@ export default function DashboardPage() {
 
         {/* ── KPIs ── */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginBottom: 20 }}>
-          {[
-            { label: "Total de Execuções", value: MOCK_KPIS.totalExecucoes.toLocaleString("pt-BR"), delta: MOCK_KPIS.totalExecucoesDelta, icon: "📋", iconBg: "#ede9fe", invert: false },
-            { label: "Pass Rate", value: `${MOCK_KPIS.passRate}%`, delta: MOCK_KPIS.passRateDelta, icon: "✅", iconBg: "#dcfce7", invert: false },
-            { label: "Fail Rate", value: `${MOCK_KPIS.failRate}%`, delta: MOCK_KPIS.failRateDelta, icon: "❌", iconBg: "#fee2e2", invert: true },
-            { label: "Defeitos Encontrados", value: MOCK_KPIS.defeitosEncontrados, delta: MOCK_KPIS.defeitosDelta, icon: "🐛", iconBg: "#ffedd5", invert: true },
-            { label: "Defeitos Críticos", value: MOCK_KPIS.defeitosCriticos, delta: MOCK_KPIS.defeitosCriticosDelta, icon: "⚠️", iconBg: "#fef9c3", invert: true },
-            { label: "Módulos em Risco", value: MOCK_KPIS.modulosEmRisco, delta: null, icon: "🛡️", iconBg: "#dbeafe", link: "Ver detalhes" },
+        {[
+            { label: "Total de Execuções", value: MOCK_KPIS.totalExecucoes.toLocaleString("pt-BR"), delta: MOCK_KPIS.totalExecucoesDelta, iconBg: "#ede9fe", invert: false },
+            { label: "Pass Rate", value: `${MOCK_KPIS.passRate}%`, delta: MOCK_KPIS.passRateDelta, iconBg: "#dcfce7", invert: false },
+            { label: "Fail Rate", value: `${MOCK_KPIS.failRate}%`, delta: MOCK_KPIS.failRateDelta, iconBg: "#fee2e2", invert: true },
+            { label: "Defeitos Encontrados", value: MOCK_KPIS.defeitosEncontrados, delta: MOCK_KPIS.defeitosDelta, iconBg: "#ffedd5", invert: true },
+            { label: "Defeitos Críticos", value: MOCK_KPIS.defeitosCriticos, delta: MOCK_KPIS.defeitosCriticosDelta, iconBg: "#fef9c3", invert: true },
+            { label: "Módulos em Risco", value: MOCK_KPIS.modulosEmRisco, delta: null, iconBg: "#dbeafe", link: "Ver detalhes" },
           ].map((kpi, i) => (
             <div key={i} style={{ background: "white", borderRadius: 12, padding: "16px", boxShadow: "0 1px 4px rgba(0,0,0,0.06)" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-                <span style={{ fontSize: 24, background: kpi.iconBg, borderRadius: 8, padding: "6px 8px" }}>{kpi.icon}</span>
-                <span style={{ fontSize: 12, color: "#6b7280", fontWeight: 500 }}>{kpi.label}</span>
+              <div style={{ marginBottom: 10 }}>
+                <span style={{ fontSize: 14, color: "#6b7280", fontWeight: 600 }}>{kpi.label}</span>
               </div>
               <div style={{ fontSize: 28, fontWeight: 700, color: "#111827", marginBottom: 4 }}>{kpi.value}</div>
               {kpi.delta !== null && kpi.delta !== undefined ? (
