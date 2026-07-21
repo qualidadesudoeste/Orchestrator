@@ -11,7 +11,7 @@ import {
 const MODULES = [
   {
     id: "projetos",
-    label: "Projetos",
+    label: "Workspace",
     icon: Folder,
     items: [
       { label: "Projetos", icon: Folder, path: "/workspace" },
