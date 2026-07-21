@@ -276,19 +276,30 @@ Organize em categorias lógicas. Mínimo de 8 casos de teste, máximo de 20.`;
             { role: "system", content: systemPrompt },
             { role: "user", content: userMessage },
           ],
+          responseFormat: { type: "json_object" },
         });
 
         const content = response.choices?.[0]?.message?.content ?? "";
-        // Extrair JSON da resposta (pode vir dentro de ```json ... ```)
-        const jsonMatch = content.match(/```json\s*([\s\S]*?)```/) || content.match(/(\{[\s\S]*\})/);
-        if (!jsonMatch) {
-          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "IA retornou resposta inválida. Tente novamente." });
-        }
         try {
-          const parsed = JSON.parse(jsonMatch[1]);
-          return parsed;
-        } catch {
-          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Erro ao processar resposta da IA." });
+          // Tentar parsear diretamente (json_object garante JSON puro)
+          if (typeof content === "string" && content.trim()) {
+            return JSON.parse(content);
+          }
+          // Fallback: extrair JSON de blocos markdown ou texto livre
+          const jsonMatch =
+            content.match(/```json\s*([\s\S]*?)```/) ||
+            content.match(/```\s*([\s\S]*?)```/) ||
+            content.match(/(\{[\s\S]*\})/);
+          if (!jsonMatch) {
+            throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "IA retornou resposta inválida. Tente novamente." });
+          }
+          return JSON.parse(jsonMatch[1]);
+        } catch (err: any) {
+          if (err instanceof TRPCError) throw err;
+          // Log para debug
+          console.error("[qaPlanner.generateCases] JSON parse error:", err?.message);
+          console.error("[qaPlanner.generateCases] Content sample:", String(content).substring(0, 300));
+          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Erro ao processar resposta da IA. Tente novamente." });
         }
       }),
 
