@@ -27,6 +27,14 @@ import {
   upsertTrailProgress,
   getAllTrailProgress,
 } from "./db";
+import {
+  insertQAPlanDocument,
+  listQAPlanDocuments,
+  getQAPlanDocument,
+  deleteQAPlanDocument,
+} from "./db";
+import { invokeLLM } from "./_core/llm";
+import { storagePut } from "./storage";
 
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
   if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Acesso restrito ao Administrador." });
@@ -205,6 +213,212 @@ export const appRouter = router({
         return { success: true };
       }),
     allProgress: adminProcedure.query(async () => getAllTrailProgress()),
+  }),
+
+  qaPlanner: router({
+    // ── Gerar casos de teste via IA ───────────────────────────────────────────
+    generateCases: protectedProcedure
+      .input(z.object({
+        userStory: z.string().min(10),
+        systemType: z.string().default("web"),
+        criticality: z.enum(["low", "medium", "high", "critical"]).default("medium"),
+        projectContext: z.string().optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const critMap: Record<string, string> = {
+          low: "baixa",
+          medium: "média",
+          high: "alta",
+          critical: "crítica",
+        };
+        const systemPrompt = `Você é um especialista em Quality Assurance com profundo conhecimento em técnicas de teste de software.
+Sua tarefa é analisar Histórias de Usuário e gerar casos de teste abrangentes no formato BDD (Dado/Quando/Então).
+
+Responda SEMPRE em JSON válido com a seguinte estrutura:
+{
+  "resumo": "Breve análise da HU e principais riscos identificados",
+  "cobertura": {
+    "funcional": ["lista de pontos funcionais cobertos"],
+    "naoFuncional": ["lista de aspectos não-funcionais a considerar"],
+    "heuristicas": ["heurísticas de teste aplicadas (SFDPOT, FEW HICCUPPS, etc.)"]
+  },
+  "cards": [
+    {
+      "categoria": "nome da categoria (ex: Fluxo Principal, Validações, Segurança)",
+      "casos": [
+        {
+          "id": "CT-001",
+          "titulo": "título do caso",
+          "prioridade": "alta|média|baixa",
+          "dado": "contexto inicial",
+          "quando": "ação executada",
+          "entao": "resultado esperado",
+          "resultado_esperado": "detalhamento do resultado esperado",
+          "tipo": "funcional|segurança|performance|usabilidade|regressão"
+        }
+      ]
+    }
+  ]
+}`;
+
+        const userMessage = `**História de Usuário:**
+${input.userStory}
+
+**Tipo de Sistema:** ${input.systemType}
+**Criticidade:** ${critMap[input.criticality] || input.criticality}
+${input.projectContext ? `**Contexto adicional:** ${input.projectContext}` : ""}
+
+Gere casos de teste abrangentes cobrindo: fluxo principal, fluxos alternativos, validações, casos de borda, segurança básica e usabilidade.
+Organize em categorias lógicas. Mínimo de 8 casos de teste, máximo de 20.`;
+
+        const response = await invokeLLM({
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userMessage },
+          ],
+        });
+
+        const content = response.choices?.[0]?.message?.content ?? "";
+        // Extrair JSON da resposta (pode vir dentro de ```json ... ```)
+        const jsonMatch = content.match(/```json\s*([\s\S]*?)```/) || content.match(/(\{[\s\S]*\})/);
+        if (!jsonMatch) {
+          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "IA retornou resposta inválida. Tente novamente." });
+        }
+        try {
+          const parsed = JSON.parse(jsonMatch[1]);
+          return parsed;
+        } catch {
+          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Erro ao processar resposta da IA." });
+        }
+      }),
+
+    // ── Gerar documento LaTeX/PDF de evidências ───────────────────────────────
+    generateDocument: protectedProcedure
+      .input(z.object({
+        projectName: z.string().min(1),
+        clientName: z.string().optional(),
+        sprintName: z.string().optional(),
+        version: z.string().optional(),
+        redator: z.string().optional(),
+        sprintObjective: z.string().optional(),
+        testScope: z.string().optional(),
+        scenarios: z.array(z.object({
+          id: z.string(),
+          title: z.string(),
+          bdd: z.string().optional(),
+          evidence: z.string().optional(),
+          images: z.array(z.object({
+            url: z.string(),
+            key: z.string().optional(),
+            filename: z.string().optional(),
+          })).optional(),
+        })),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const date = new Date().toLocaleDateString("pt-BR");
+        const escape = (s?: string) =>
+          (s ?? "").replace(/[&%$#_{}~^\\]/g, c => `\\${c}`).replace(/\[/g, "{[}").replace(/\]/g, "{]}");
+
+        const scenariosLatex = input.scenarios.map((s, i) => {
+          const images = (s.images ?? []).map(img => {
+            // Para imagens no S3 do Manus, não conseguimos incluir diretamente no LaTeX
+            // Incluímos uma nota com a URL
+            return `\\textit{Evidência visual disponível em: ${escape(img.url)}}`;
+          }).join("\n\n");
+
+          return `\\subsection*{Cenário ${i + 1}: ${escape(s.title)}}
+${s.bdd ? `\\textbf{Passos BDD:}\n\\begin{verbatim}\n${s.bdd}\n\\end{verbatim}` : ""}
+${s.evidence ? `\\textbf{Resultado Observado:} ${escape(s.evidence)}\n` : ""}
+${images}
+\\vspace{0.5cm}`;
+        }).join("\n\n");
+
+        const texContent = `\\documentclass[12pt,a4paper]{article}
+\\usepackage[utf8]{inputenc}
+\\usepackage[T1]{fontenc}
+\\usepackage[brazil]{babel}
+\\usepackage{geometry}
+\\usepackage{fancyhdr}
+\\usepackage{titlesec}
+\\usepackage{xcolor}
+\\usepackage{hyperref}
+\\usepackage{parskip}
+\\geometry{margin=2.5cm}
+\\definecolor{qagreen}{RGB}{22,163,74}
+\\pagestyle{fancy}
+\\fancyhf{}
+\\rhead{\\textcolor{qagreen}{${escape(input.projectName)}}}
+\\lhead{Evidências de Teste}
+\\rfoot{\\thepage}
+\\lfoot{${date}}
+
+\\begin{document}
+
+\\begin{center}
+{\\LARGE \\textbf{\\textcolor{qagreen}{Evidências de Teste}}}\\\\[0.5cm]
+{\\large ${escape(input.projectName)}}\\\\[0.2cm]
+${input.clientName ? `{\\normalsize Cliente: ${escape(input.clientName)}}\\\\[0.2cm]` : ""}
+${input.sprintName ? `{\\normalsize Sprint: ${escape(input.sprintName)}}\\\\[0.1cm]` : ""}
+${input.version ? `{\\normalsize Versão: ${escape(input.version)}}\\\\[0.1cm]` : ""}
+{\\normalsize Data: ${date}}\\\\[0.1cm]
+${input.redator ? `{\\normalsize Redator: ${escape(input.redator)}}` : ""}
+\\end{center}
+
+\\hrule
+\\vspace{1cm}
+
+${input.sprintObjective ? `\\section*{Objetivo da Sprint}\n${escape(input.sprintObjective)}\n` : ""}
+${input.testScope ? `\\section*{Escopo dos Testes}\n${escape(input.testScope)}\n` : ""}
+
+\\section*{Cenários Testados}
+
+${scenariosLatex}
+
+\\end{document}`;
+
+        const baseName = `evidencias_${input.projectName.replace(/\s+/g, "_")}_${Date.now()}`;
+        const texKey = `qa-docs/${baseName}.tex`;
+        const { url: texUrl } = await storagePut(texKey, texContent, "text/plain; charset=utf-8");
+
+        const docId = await insertQAPlanDocument({
+          createdById: ctx.user.id,
+          projectName: input.projectName,
+          clientName: input.clientName,
+          sprintName: input.sprintName,
+          version: input.version,
+          redator: input.redator,
+          baseName,
+          texStorageKey: texKey,
+          texUrl,
+          pdfError: "PDF não disponível (compilação LaTeX não suportada no servidor cloud). Baixe o .tex e compile no Overleaf.",
+          projectJson: JSON.stringify(input),
+        });
+
+        return {
+          id: docId,
+          texUrl,
+          pdfUrl: null,
+          pdfError: "Baixe o arquivo .tex e compile no Overleaf (overleaf.com) para obter o PDF.",
+        };
+      }),
+
+    // ── Listar documentos ─────────────────────────────────────────────────────
+    listDocuments: protectedProcedure.query(async ({ ctx }) => {
+      return listQAPlanDocuments(ctx.user.id, ctx.user.role === "admin");
+    }),
+
+    // ── Deletar documento ─────────────────────────────────────────────────────
+    deleteDocument: protectedProcedure
+      .input(z.object({ id: z.number() }))
+      .mutation(async ({ ctx, input }) => {
+        const doc = await getQAPlanDocument(input.id);
+        if (!doc) throw new TRPCError({ code: "NOT_FOUND" });
+        if (doc.createdById !== ctx.user.id && ctx.user.role !== "admin") {
+          throw new TRPCError({ code: "FORBIDDEN" });
+        }
+        await deleteQAPlanDocument(input.id);
+        return { success: true };
+      }),
   }),
 });
 

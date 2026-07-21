@@ -5,13 +5,14 @@ import {
   CheckSquare, LayoutDashboard, Folder, Users,
   History, Shield, LogOut
 } from "lucide-react";
-import { GraduationCap } from "lucide-react";
+import { GraduationCap, Wand2 } from "lucide-react";
 
 const NAV_ITEMS = [
   { label: "Dashboard", icon: LayoutDashboard, path: "/", exact: true },
   { label: "Workspace", icon: Folder, path: "/workspace" },
   { label: "Histórico", icon: History, path: "/history" },
   { label: "Trilha do Conhecimento", icon: GraduationCap, path: "/trail" },
+  { label: "Gerador de Plano de Teste", icon: Wand2, path: "/qa-planner" },
 ];
 
 const ADMIN_ITEMS = [

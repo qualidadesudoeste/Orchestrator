@@ -82,3 +82,24 @@ export const trailProgress = mysqlTable("trail_progress", {
 
 export type TrailProgress = typeof trailProgress.$inferSelect;
 export type InsertTrailProgress = typeof trailProgress.$inferInsert;
+
+// ─── QA Plan Documents ────────────────────────────────────────────────────────
+export const qaPlanDocuments = mysqlTable("qa_plan_documents", {
+  id: int("id").autoincrement().primaryKey(),
+  createdById: int("createdById").notNull(),
+  projectName: varchar("projectName", { length: 255 }).notNull(),
+  clientName: varchar("clientName", { length: 255 }),
+  sprintName: varchar("sprintName", { length: 100 }),
+  version: varchar("version", { length: 50 }).default("1.0"),
+  redator: varchar("redator", { length: 255 }),
+  baseName: varchar("baseName", { length: 500 }).notNull(),
+  texStorageKey: varchar("texStorageKey", { length: 500 }),
+  texUrl: varchar("texUrl", { length: 1000 }),
+  pdfStorageKey: varchar("pdfStorageKey", { length: 500 }),
+  pdfUrl: varchar("pdfUrl", { length: 1000 }),
+  pdfError: text("pdfError"),
+  /** JSON completo do projeto (cenários, imagens, etc.) para reabrir no editor */
+  projectJson: text("projectJson"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+export type QAPlanDocument = typeof qaPlanDocuments.$inferSelect;

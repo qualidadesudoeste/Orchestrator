@@ -11,6 +11,7 @@ import CoordinatorPage from "./pages/CoordinatorPage";
 import UsersPage from "./pages/UsersPage";
 import TrailPage from "./pages/TrailPage";
 import LoginPage from "./pages/LoginPage";
+import QAPlannerPage from "./pages/QAPlannerPage";
 
 function Router() {
   return (
@@ -22,6 +23,7 @@ function Router() {
       <Route path="/coordinator" component={CoordinatorPage} />
       <Route path="/users" component={UsersPage} />
       <Route path="/trail" component={TrailPage} />
+      <Route path="/qa-planner" component={QAPlannerPage} />
       <Route path="/404" component={NotFound} />
       <Route component={NotFound} />
     </Switch>

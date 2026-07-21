@@ -1,6 +1,6 @@
 import { and, desc, eq, isNull, or } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { Checklist, InsertUser, Sprint, TrailProgress, checklists, clients, projects, sprints, trailProgress, users } from "../drizzle/schema";
+import { Checklist, InsertUser, QAPlanDocument, Sprint, TrailProgress, checklists, clients, projects, qaPlanDocuments, sprints, trailProgress, users } from "../drizzle/schema";
 import { ENV } from "./_core/env";
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -298,4 +298,51 @@ export async function getAllTrailProgress() {
     completedTopics: trailProgress.completedTopics,
     updatedAt: trailProgress.updatedAt,
   }).from(trailProgress).orderBy(desc(trailProgress.updatedAt));
+}
+
+// ─── QA Plan Documents ────────────────────────────────────────────────────────
+export async function insertQAPlanDocument(data: {
+  createdById: number;
+  projectName: string;
+  clientName?: string;
+  sprintName?: string;
+  version?: string;
+  redator?: string;
+  baseName: string;
+  texStorageKey?: string;
+  texUrl?: string;
+  pdfStorageKey?: string;
+  pdfUrl?: string;
+  pdfError?: string;
+  projectJson?: string;
+}): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  const [result] = await db.insert(qaPlanDocuments).values(data);
+  return (result as any).insertId;
+}
+
+export async function listQAPlanDocuments(userId: number, isAdmin: boolean): Promise<QAPlanDocument[]> {
+  const db = await getDb();
+  if (!db) return [];
+  if (isAdmin) {
+    return db.select().from(qaPlanDocuments).orderBy(desc(qaPlanDocuments.createdAt)).limit(100);
+  }
+  return db.select().from(qaPlanDocuments)
+    .where(eq(qaPlanDocuments.createdById, userId))
+    .orderBy(desc(qaPlanDocuments.createdAt))
+    .limit(100);
+}
+
+export async function getQAPlanDocument(id: number): Promise<QAPlanDocument | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const result = await db.select().from(qaPlanDocuments).where(eq(qaPlanDocuments.id, id)).limit(1);
+  return result[0] ?? null;
+}
+
+export async function deleteQAPlanDocument(id: number): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  await db.delete(qaPlanDocuments).where(eq(qaPlanDocuments.id, id));
 }
