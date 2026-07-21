@@ -234,7 +234,8 @@ export const appRouter = router({
         const systemPrompt = `Você é um especialista em Quality Assurance com profundo conhecimento em técnicas de teste de software.
 Sua tarefa é analisar Histórias de Usuário e gerar casos de teste abrangentes no formato BDD (Dado/Quando/Então).
 
-Responda SEMPRE em JSON válido com a seguinte estrutura:
+IMPORTANTE: Responda SOMENTE com o JSON abaixo, sem nenhum texto antes ou depois, sem blocos de código markdown:
+
 {
   "resumo": "Breve análise da HU e principais riscos identificados",
   "cobertura": {
@@ -276,27 +277,27 @@ Organize em categorias lógicas. Mínimo de 8 casos de teste, máximo de 20.`;
             { role: "system", content: systemPrompt },
             { role: "user", content: userMessage },
           ],
-          responseFormat: { type: "json_object" },
         });
 
         const content = response.choices?.[0]?.message?.content ?? "";
         try {
-          // Tentar parsear diretamente (json_object garante JSON puro)
-          if (typeof content === "string" && content.trim()) {
-            return JSON.parse(content);
-          }
-          // Fallback: extrair JSON de blocos markdown ou texto livre
-          const jsonMatch =
-            content.match(/```json\s*([\s\S]*?)```/) ||
-            content.match(/```\s*([\s\S]*?)```/) ||
-            content.match(/(\{[\s\S]*\})/);
-          if (!jsonMatch) {
-            throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "IA retornou resposta inválida. Tente novamente." });
-          }
-          return JSON.parse(jsonMatch[1]);
+          const raw = String(content ?? "").trim();
+          if (!raw) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "IA retornou resposta vazia. Tente novamente." });
+          // 1) JSON puro direto
+          if (raw.startsWith("{")) return JSON.parse(raw);
+          // 2) Bloco ```json ... ```
+          const fenced = raw.match(/```json[\r\n]+([\s\S]*?)[\r\n]*```/);
+          if (fenced) return JSON.parse(fenced[1].trim());
+          // 3) Bloco ``` ... ``` sem linguagem
+          const fencedPlain = raw.match(/```[\r\n]+([\s\S]*?)[\r\n]*```/);
+          if (fencedPlain) return JSON.parse(fencedPlain[1].trim());
+          // 4) Primeiro objeto JSON no texto
+          const objMatch = raw.match(/(\{[\s\S]*\})/);
+          if (objMatch) return JSON.parse(objMatch[1]);
+          console.error("[qaPlanner.generateCases] No JSON found:", raw.substring(0, 400));
+          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "IA retornou resposta inválida. Tente novamente." });
         } catch (err: any) {
           if (err instanceof TRPCError) throw err;
-          // Log para debug
           console.error("[qaPlanner.generateCases] JSON parse error:", err?.message);
           console.error("[qaPlanner.generateCases] Content sample:", String(content).substring(0, 300));
           throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Erro ao processar resposta da IA. Tente novamente." });

@@ -1,28 +1,74 @@
 import { useAuth } from "@/_core/hooks/useAuth";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import {
-  CheckSquare, LayoutDashboard, Folder, Users,
-  History, Shield, LogOut
+  CheckSquare, Folder, Users, History,
+  Shield, LogOut, GraduationCap, Wand2,
+  ChevronDown, ChevronRight, LayoutGrid
 } from "lucide-react";
-import { GraduationCap, Wand2 } from "lucide-react";
 
-const NAV_ITEMS = [
-  { label: "Dashboard", icon: LayoutDashboard, path: "/", exact: true },
-  { label: "Workspace", icon: Folder, path: "/workspace" },
-  { label: "Histórico", icon: History, path: "/history" },
-  { label: "Trilha do Conhecimento", icon: GraduationCap, path: "/trail" },
-  { label: "Gerador de Plano de Teste", icon: Wand2, path: "/qa-planner" },
+// Estrutura de módulos recolhíveis
+const MODULES = [
+  {
+    id: "projetos",
+    label: "Projetos",
+    icon: Folder,
+    items: [
+      { label: "Projetos", icon: Folder, path: "/workspace" },
+      { label: "Histórico", icon: History, path: "/history" },
+      { label: "Gerador de Plano de Teste", icon: Wand2, path: "/qa-planner" },
+    ],
+  },
+  {
+    id: "capacitacao",
+    label: "Capacitação",
+    icon: GraduationCap,
+    items: [
+      { label: "Trilha do Conhecimento", icon: GraduationCap, path: "/trail" },
+    ],
+  },
 ];
 
-const ADMIN_ITEMS = [
-  { label: "Dashboard Admin", icon: Shield, path: "/coordinator" },
-  { label: "Usuários", icon: Users, path: "/users" },
-];
+const ADMIN_MODULE = {
+  id: "administracao",
+  label: "Administração",
+  icon: Shield,
+  items: [
+    { label: "Gestão de Atividades", icon: LayoutGrid, path: "/coordinator" },
+    { label: "Usuários", icon: Users, path: "/users" },
+  ],
+};
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const { user, isAuthenticated, loading, logout } = useAuth();
   const [location, navigate] = useLocation();
+  const isAdmin = user?.role === "admin";
+
+  // Determinar módulo ativo com base na rota atual
+  const getActiveModule = () => {
+    const allModules = isAdmin ? [...MODULES, ADMIN_MODULE] : MODULES;
+    for (const mod of allModules) {
+      if (mod.items.some(item => location.startsWith(item.path))) return mod.id;
+    }
+    return null;
+  };
+
+  const [openModules, setOpenModules] = useState<string[]>(() => {
+    // Começa com o módulo da rota atual aberto
+    const allModules = [...MODULES, ADMIN_MODULE];
+    for (const mod of allModules) {
+      if (mod.items.some(item => location.startsWith(item.path))) return [mod.id];
+    }
+    return ["projetos"]; // padrão: Projetos aberto
+  });
+
+  // Abrir módulo automaticamente ao navegar para uma rota dentro dele
+  useEffect(() => {
+    const active = getActiveModule();
+    if (active && !openModules.includes(active)) {
+      setOpenModules(prev => [...prev, active]);
+    }
+  }, [location]);
 
   useEffect(() => {
     if (!loading && !isAuthenticated) {
@@ -43,16 +89,87 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (!isAuthenticated) {
-    return null; // useEffect abaixo cuida do redirect
-  }
+  if (!isAuthenticated) return null;
 
-  const isActive = (path: string, exact?: boolean) => {
-    if (exact) return location === path;
-    return location.startsWith(path);
+  const toggleModule = (id: string) => {
+    setOpenModules(prev =>
+      prev.includes(id) ? prev.filter(m => m !== id) : [...prev, id]
+    );
   };
 
-  const isAdmin = user?.role === "admin";
+  const isItemActive = (path: string) => location.startsWith(path);
+
+  const renderModule = (mod: typeof MODULES[0], adminOnly = false) => {
+    if (adminOnly && !isAdmin) return null;
+    const isOpen = openModules.includes(mod.id);
+    const hasActive = mod.items.some(item => isItemActive(item.path));
+
+    return (
+      <div key={mod.id} className="mb-1">
+        {/* Cabeçalho do módulo */}
+        <button
+          onClick={() => toggleModule(mod.id)}
+          className="w-full flex items-center justify-between px-3 py-2 rounded-lg transition-all group"
+          style={{
+            background: hasActive && !isOpen ? "oklch(0.18 0.015 260)" : "transparent",
+            color: hasActive ? "oklch(0.75 0.05 264)" : "oklch(0.45 0.01 260)",
+          }}
+          onMouseEnter={e => {
+            if (!hasActive) e.currentTarget.style.background = "oklch(0.18 0.015 260)";
+            e.currentTarget.style.color = "oklch(0.75 0.05 264)";
+          }}
+          onMouseLeave={e => {
+            if (!hasActive) e.currentTarget.style.background = "transparent";
+            e.currentTarget.style.color = hasActive ? "oklch(0.75 0.05 264)" : "oklch(0.45 0.01 260)";
+          }}
+        >
+          <div className="flex items-center gap-2.5">
+            <mod.icon className="w-4 h-4 flex-shrink-0" />
+            <span className="text-xs font-semibold uppercase tracking-wider">{mod.label}</span>
+          </div>
+          {isOpen
+            ? <ChevronDown className="w-3.5 h-3.5 flex-shrink-0" />
+            : <ChevronRight className="w-3.5 h-3.5 flex-shrink-0" />
+          }
+        </button>
+
+        {/* Itens do módulo */}
+        {isOpen && (
+          <div className="mt-0.5 ml-2 pl-3 border-l" style={{ borderColor: "oklch(0.25 0.015 260)" }}>
+            {mod.items.map(item => {
+              const active = isItemActive(item.path);
+              return (
+                <button
+                  key={item.path}
+                  onClick={() => navigate(item.path)}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg mb-0.5 text-left transition-all"
+                  style={{
+                    background: active ? "oklch(0.50 0.20 264)" : "transparent",
+                    color: active ? "white" : "oklch(0.55 0.01 260)",
+                  }}
+                  onMouseEnter={e => {
+                    if (!active) {
+                      e.currentTarget.style.background = "oklch(0.20 0.015 260)";
+                      e.currentTarget.style.color = "oklch(0.75 0.05 264)";
+                    }
+                  }}
+                  onMouseLeave={e => {
+                    if (!active) {
+                      e.currentTarget.style.background = "transparent";
+                      e.currentTarget.style.color = "oklch(0.55 0.01 260)";
+                    }
+                  }}
+                >
+                  <item.icon className="w-3.5 h-3.5 flex-shrink-0" />
+                  <span className="text-xs font-medium">{item.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div className="min-h-screen flex" style={{ background: "oklch(0.975 0.006 80)" }}>
@@ -71,49 +188,10 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           </div>
         </div>
 
-        {/* Navegação principal */}
-        <nav className="flex-1 overflow-y-auto py-3 px-2">
-          <p className="text-xs font-bold uppercase tracking-wider px-3 mb-2" style={{ color: "oklch(0.38 0.01 260)" }}>Menu</p>
-          {NAV_ITEMS.map(item => {
-            const active = isActive(item.path, item.exact);
-            return (
-              <button
-                key={item.path}
-                onClick={() => navigate(item.path)}
-                className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg mb-0.5 text-left transition-all"
-                style={{
-                  background: active ? "oklch(0.50 0.20 264)" : "transparent",
-                  color: active ? "white" : "oklch(0.55 0.01 260)",
-                }}
-              >
-                <item.icon className="w-4 h-4 flex-shrink-0" />
-                <span className="text-xs font-medium">{item.label}</span>
-              </button>
-            );
-          })}
-
-          {isAdmin && (
-            <>
-              <p className="text-xs font-bold uppercase tracking-wider px-3 mt-4 mb-2" style={{ color: "oklch(0.38 0.01 260)" }}>Administrador</p>
-              {ADMIN_ITEMS.map(item => {
-                const active = isActive(item.path);
-                return (
-                  <button
-                    key={item.path}
-                    onClick={() => navigate(item.path)}
-                    className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg mb-0.5 text-left transition-all"
-                    style={{
-                      background: active ? "oklch(0.50 0.20 264)" : "transparent",
-                      color: active ? "white" : "oklch(0.55 0.01 260)",
-                    }}
-                  >
-                    <item.icon className="w-4 h-4 flex-shrink-0" />
-                    <span className="text-xs font-medium">{item.label}</span>
-                  </button>
-                );
-              })}
-            </>
-          )}
+        {/* Navegação por módulos */}
+        <nav className="flex-1 overflow-y-auto py-4 px-2">
+          {MODULES.map(mod => renderModule(mod))}
+          {isAdmin && renderModule(ADMIN_MODULE, true)}
         </nav>
 
         {/* Usuário + logout */}
@@ -126,7 +204,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             <div className="min-w-0">
               <p className="text-xs font-semibold text-white truncate">{user?.name ?? "Usuário"}</p>
               <p className="text-xs truncate" style={{ color: "oklch(0.45 0.01 260)" }}>
-                {isAdmin ? "Administrador" : "Analista"}
+                {isAdmin ? "Coordenador" : "Analista"}
               </p>
             </div>
           </div>
@@ -134,8 +212,14 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             onClick={() => logout()}
             className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs transition-all"
             style={{ color: "oklch(0.45 0.01 260)", background: "transparent" }}
-            onMouseEnter={e => (e.currentTarget.style.background = "oklch(0.20 0.015 260)")}
-            onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+            onMouseEnter={e => {
+              e.currentTarget.style.background = "oklch(0.20 0.015 260)";
+              e.currentTarget.style.color = "oklch(0.65 0.01 260)";
+            }}
+            onMouseLeave={e => {
+              e.currentTarget.style.background = "transparent";
+              e.currentTarget.style.color = "oklch(0.45 0.01 260)";
+            }}
           >
             <LogOut className="w-3.5 h-3.5" />
             Sair
