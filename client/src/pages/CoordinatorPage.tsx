@@ -2,8 +2,9 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
 import { useLocation } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Users, CheckCircle2, Clock, Eye } from "lucide-react";
+import { Users, CheckCircle2, Clock, Eye, GraduationCap } from "lucide-react";
 import { totalItems } from "@/data/qaData";
+import { totalTrailTopics } from "@/data/trailData";
 import { Button } from "@/components/ui/button";
 import AppLayout from "@/components/AppLayout";
 import { ChecklistViewModal } from "@/components/ChecklistViewModal";
@@ -17,6 +18,7 @@ export default function CoordinatorPage() {
   const { data: allChecklists } = trpc.checklists.allHistory.useQuery(undefined, { enabled: isCoordinator });
   const { data: allUsers } = trpc.users.list.useQuery(undefined, { enabled: isCoordinator });
   const { data: sprints } = trpc.sprints.list.useQuery({ projectId: undefined }, { enabled: isCoordinator });
+  const { data: allTrailProgress } = trpc.trail.allProgress.useQuery(undefined, { enabled: isCoordinator });
 
   type ChecklistRow = NonNullable<typeof allChecklists>[number];
   const [viewChecklist, setViewChecklist] = useState<ChecklistRow | null>(null);
@@ -118,6 +120,58 @@ export default function CoordinatorPage() {
             );
           })}
         </div>
+
+        {/* Progresso da Trilha do Conhecimento por analista */}
+        <h2 className="font-bold text-base mt-10 mb-4 flex items-center gap-2" style={{ color: "oklch(0.15 0.01 260)" }}>
+          <GraduationCap className="w-4 h-4" style={{ color: "oklch(0.50 0.20 264)" }} />
+          Trilha do Conhecimento — Progresso por Analista
+        </h2>
+        {(!allTrailProgress || allTrailProgress.length === 0) ? (
+          <p className="text-sm text-gray-400 py-8 text-center">Nenhum analista iniciou a trilha ainda.</p>
+        ) : (
+          <div className="space-y-3">
+            {allTrailProgress.map(tp => {
+              let completed = 0;
+              try {
+                const parsed = JSON.parse(tp.completedTopics);
+                if (Array.isArray(parsed)) completed = parsed.length;
+              } catch { /* ignore */ }
+              const percent = totalTrailTopics > 0 ? Math.round((completed / totalTrailTopics) * 100) : 0;
+              const analystName = userMap[tp.userId] ?? `Analista #${tp.userId}`;
+              return (
+                <Card key={tp.id}>
+                  <CardContent className="p-4 flex items-center gap-4">
+                    <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white flex-shrink-0"
+                      style={{ background: "oklch(0.50 0.20 264)" }}>
+                      {analystName.charAt(0).toUpperCase()}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold truncate" style={{ color: "oklch(0.15 0.01 260)" }}>{analystName}</p>
+                      <p className="text-xs text-gray-400">
+                        Atualizado em {new Date(tp.updatedAt).toLocaleDateString("pt-BR")}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-3 flex-shrink-0">
+                      <div className="w-32 h-2 rounded-full overflow-hidden" style={{ background: "oklch(0.88 0.008 80)" }}>
+                        <div className="h-full rounded-full transition-all"
+                          style={{
+                            width: `${percent}%`,
+                            background: percent === 100 ? "oklch(0.50 0.18 145)" : "linear-gradient(90deg, oklch(0.50 0.20 264), oklch(0.45 0.20 300))",
+                          }}
+                        />
+                      </div>
+                      <span className="text-sm font-bold tabular-nums w-10 text-right"
+                        style={{ color: percent === 100 ? "oklch(0.50 0.18 145)" : "oklch(0.50 0.20 264)" }}>
+                        {percent}%
+                      </span>
+                      <span className="text-xs text-gray-400 w-16 text-right">{completed}/{totalTrailTopics} tópicos</span>
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+        )}
       </main>
   </AppLayout>
   );

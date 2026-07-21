@@ -234,7 +234,7 @@ export const appRouter = router({
         const systemPrompt = `Você é um especialista em Quality Assurance com profundo conhecimento em técnicas de teste de software.
 Sua tarefa é analisar Histórias de Usuário e gerar casos de teste abrangentes no formato BDD (Dado/Quando/Então).
 
-IMPORTANTE: Responda SOMENTE com o JSON abaixo, sem nenhum texto antes ou depois, sem blocos de código markdown:
+IMPORTANTE: Responda SOMENTE com o JSON abaixo, sem nenhum texto antes ou depois:
 
 {
   "resumo": "Breve análise da HU e principais riscos identificados",
@@ -270,31 +270,31 @@ ${input.userStory}
 ${input.projectContext ? `**Contexto adicional:** ${input.projectContext}` : ""}
 
 Gere casos de teste abrangentes cobrindo: fluxo principal, fluxos alternativos, validações, casos de borda, segurança básica e usabilidade.
-Organize em categorias lógicas. Mínimo de 8 casos de teste, máximo de 20.`;
+Organize em no máximo 3 categorias lógicas, com no máximo 4 casos cada (total máximo: 12 casos).`;
 
         const response = await invokeLLM({
           messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: userMessage },
           ],
+          maxTokens: 4096,
         });
 
         const content = response.choices?.[0]?.message?.content ?? "";
         try {
           const raw = String(content ?? "").trim();
           if (!raw) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "IA retornou resposta vazia. Tente novamente." });
+          // Remover qualquer bloco markdown (```json ... ``` ou ``` ... ```)
+          const stripped = raw
+            .replace(/^```(?:json)?\s*/i, "")
+            .replace(/\s*```\s*$/, "")
+            .trim();
           // 1) JSON puro direto
-          if (raw.startsWith("{")) return JSON.parse(raw);
-          // 2) Bloco ```json ... ```
-          const fenced = raw.match(/```json[\r\n]+([\s\S]*?)[\r\n]*```/);
-          if (fenced) return JSON.parse(fenced[1].trim());
-          // 3) Bloco ``` ... ``` sem linguagem
-          const fencedPlain = raw.match(/```[\r\n]+([\s\S]*?)[\r\n]*```/);
-          if (fencedPlain) return JSON.parse(fencedPlain[1].trim());
-          // 4) Primeiro objeto JSON no texto
-          const objMatch = raw.match(/(\{[\s\S]*\})/);
+          if (stripped.startsWith("{")) return JSON.parse(stripped);
+          // 2) Primeiro objeto JSON no texto (fallback)
+          const objMatch = stripped.match(/(\{[\s\S]*\})/);
           if (objMatch) return JSON.parse(objMatch[1]);
-          console.error("[qaPlanner.generateCases] No JSON found:", raw.substring(0, 400));
+          console.error("[qaPlanner.generateCases] No JSON found in:", raw.substring(0, 400));
           throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "IA retornou resposta inválida. Tente novamente." });
         } catch (err: any) {
           if (err instanceof TRPCError) throw err;

@@ -34,12 +34,12 @@
 - [x] Atualizar sidebar: substituir Clientes/Projetos/Sprints por "Workspace"
 
 ## Módulo Trilha do Conhecimento
-- [ ] Criar tabela trail_progress no banco de dados
-- [ ] Criar dados estáticos da trilha (4 níveis, tópicos, recursos)
-- [ ] Criar endpoints backend: getProgress, saveProgress, adminView
-- [ ] Criar TrailPage com 4 níveis progressivos e progresso interativo
-- [ ] Adicionar Trilha no menu lateral
-- [ ] Visão do administrador: progresso de todos os analistas na trilha
+- [x] Criar tabela trail_progress no banco de dados
+- [x] Criar dados estáticos da trilha (4 níveis, tópicos, recursos)
+- [x] Criar endpoints backend: getProgress, saveProgress, adminView
+- [x] Criar TrailPage com 4 níveis progressivos e progresso interativo
+- [x] Adicionar Trilha no menu lateral
+- [x] Visão do administrador: progresso de todos os analistas na trilha
 
 ## Autenticação Própria (substituir Manus OAuth)
 - [x] Schema: adicionar username, passwordHash; tornar openId nullable
