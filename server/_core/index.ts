@@ -12,6 +12,8 @@ import { storagePut } from "../storage";
 import { sdk } from "./sdk";
 import { COOKIE_NAME } from "@shared/const";
 import cookie from "cookie";
+import { createRequire } from "module";
+const require = createRequire(import.meta.url);
 
 // ─── Multipart upload helper (no external deps) ───────────────────────────────
 async function parseMultipartImages(req: express.Request): Promise<{ buffer: Buffer; mimetype: string; filename: string }[]> {
@@ -106,9 +108,50 @@ async function startServer() {
         return { url, key, filename };
       }));
 
-      res.json(uploaded);
+    res.json(uploaded);
     } catch (e: any) {
       console.error("[qa-upload] error:", e);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ── Extração de texto de PDF/DOCX para o Gerador de Plano de Teste ──────────
+  app.post("/api/qa-extract", async (req, res) => {
+    try {
+      const cookieHeader = req.headers.cookie ?? "";
+      const cookies = cookie.parse(cookieHeader);
+      const token = cookies[COOKIE_NAME] ?? (req.headers.authorization?.replace("Bearer ", "") ?? "");
+      if (!token) { res.status(401).json({ error: "Não autenticado" }); return; }
+      const session = await sdk.verifySession(token).catch(() => null);
+      if (!session) { res.status(401).json({ error: "Sessão inválida" }); return; }
+
+      const files = await parseMultipartImages(req);
+      if (files.length === 0) { res.status(400).json({ error: "Nenhum arquivo enviado" }); return; }
+
+      const { buffer, mimetype, filename } = files[0];
+      let text = "";
+
+      if (mimetype === "application/pdf" || filename.toLowerCase().endsWith(".pdf")) {
+        const pdfParse = require("pdf-parse");
+        const data = await pdfParse(buffer);
+        text = data.text ?? "";
+      } else if (
+        mimetype === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+        filename.toLowerCase().endsWith(".docx")
+      ) {
+        const mammoth = require("mammoth");
+        const result = await mammoth.extractRawText({ buffer });
+        text = result.value ?? "";
+      } else {
+        res.status(400).json({ error: "Formato não suportado. Use PDF ou DOCX." });
+        return;
+      }
+
+      // Limpar e truncar o texto extraído (máx 8000 chars para não explodir o prompt)
+      text = text.replace(/\s+/g, " ").trim().slice(0, 8000);
+      res.json({ text, filename });
+    } catch (e: any) {
+      console.error("[qa-extract] error:", e);
       res.status(500).json({ error: e.message });
     }
   });
