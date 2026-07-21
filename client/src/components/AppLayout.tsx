@@ -192,20 +192,20 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         <nav className="flex-1 overflow-y-auto py-4 px-2">
           {/* Dashboard — fora dos módulos */}
           <button
-            onClick={() => navigate("/")}
+            onClick={() => navigate("/dashboard")}
             className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg mb-3 text-left transition-all"
             style={{
-              background: location === "/" ? "oklch(0.50 0.20 264)" : "transparent",
-              color: location === "/" ? "white" : "oklch(0.55 0.01 260)",
+              background: location === "/dashboard" ? "oklch(0.50 0.20 264)" : "transparent",
+              color: location === "/dashboard" ? "white" : "oklch(0.55 0.01 260)",
             }}
             onMouseEnter={e => {
-              if (location !== "/") {
+              if (location !== "/dashboard") {
                 e.currentTarget.style.background = "oklch(0.20 0.015 260)";
                 e.currentTarget.style.color = "oklch(0.75 0.05 264)";
               }
             }}
             onMouseLeave={e => {
-              if (location !== "/") {
+              if (location !== "/dashboard") {
                 e.currentTarget.style.background = "transparent";
                 e.currentTarget.style.color = "oklch(0.55 0.01 260)";
               }

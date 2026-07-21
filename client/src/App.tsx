@@ -12,12 +12,14 @@ import UsersPage from "./pages/UsersPage";
 import TrailPage from "./pages/TrailPage";
 import LoginPage from "./pages/LoginPage";
 import QAPlannerPage from "./pages/QAPlannerPage";
+import DashboardPage from "./pages/DashboardPage";
 
 function Router() {
   return (
     <Switch>
       <Route path="/login" component={LoginPage} />
       <Route path="/" component={Home} />
+      <Route path="/dashboard" component={DashboardPage} />
       <Route path="/workspace" component={WorkspacePage} />
       <Route path="/history" component={HistoryPage} />
       <Route path="/coordinator" component={CoordinatorPage} />
