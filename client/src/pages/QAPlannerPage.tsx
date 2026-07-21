@@ -307,17 +307,19 @@ function CaseGenerator({ onExport }: { onExport: (cases: TestCase[], project: { 
 
   return (
     <div className="flex flex-col gap-6">
-      {/* Formulário de entrada */}
-      <Card style={{ background: "white", border: "1px solid #e2e8f0", borderRadius: "0.75rem", boxShadow: "0 1px 3px rgba(0,0,0,0.07)" }}>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base flex items-center gap-2" style={{ color: "#0f172a" }}>
-            <ClipboardList className="w-4 h-4 text-blue-500" />
-            Configuração do Plano
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-4">
-          {/* Projeto e Sprint — obrigatórios, vinculados ao Workspace */}
-          <div className="grid grid-cols-2 gap-3">
+      {/* Layout em duas colunas: painel de configuração | área de HU + resultado */}
+      <div style={{ display: "grid", gridTemplateColumns: "340px 1fr", gap: "1.25rem", alignItems: "start" }}>
+
+        {/* ── Coluna esquerda: configuração ── */}
+        <Card style={{ background: "white", border: "1px solid #e2e8f0", borderRadius: "0.75rem", boxShadow: "0 1px 3px rgba(0,0,0,0.07)" }}>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm flex items-center gap-2" style={{ color: "#0f172a" }}>
+              <ClipboardList className="w-4 h-4 text-blue-500" />
+              Configuração
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-4">
+            {/* Projeto */}
             <div>
               <Label className="text-xs font-medium" style={{ color: "#374151" }}>
                 Projeto <span style={{ color: "#ef4444" }}>*</span>
@@ -340,6 +342,7 @@ function CaseGenerator({ onExport }: { onExport: (cases: TestCase[], project: { 
                 </SelectContent>
               </Select>
             </div>
+            {/* Sprint */}
             <div>
               <Label className="text-xs font-medium" style={{ color: "#374151" }}>
                 Sprint <span style={{ color: "#ef4444" }}>*</span>
@@ -361,10 +364,7 @@ function CaseGenerator({ onExport }: { onExport: (cases: TestCase[], project: { 
                 </SelectContent>
               </Select>
             </div>
-          </div>
-
-          {/* Tipo de sistema e criticidade */}
-          <div className="grid grid-cols-2 gap-3">
+            {/* Tipo de Sistema */}
             <div>
               <Label className="text-xs" style={{ color: "#64748b" }}>Tipo de Sistema</Label>
               <Select value={systemType} onValueChange={setSystemType}>
@@ -378,6 +378,7 @@ function CaseGenerator({ onExport }: { onExport: (cases: TestCase[], project: { 
                 </SelectContent>
               </Select>
             </div>
+            {/* Criticidade */}
             <div>
               <Label className="text-xs" style={{ color: "#64748b" }}>Criticidade</Label>
               <Select value={criticality} onValueChange={v => setCriticality(v as any)}>
@@ -392,138 +393,129 @@ function CaseGenerator({ onExport }: { onExport: (cases: TestCase[], project: { 
                 </SelectContent>
               </Select>
             </div>
-          </div>
+          </CardContent>
+        </Card>
 
-          {/* História de Usuário + botões de importação */}
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <Label className="text-xs font-medium" style={{ color: "#374151" }}>
-                História de Usuário <span style={{ color: "#ef4444" }}>*</span>
-              </Label>
-              <div className="flex gap-1.5">
-                <input ref={jsonRef} type="file" accept="application/json" className="hidden" onChange={handleImportJSON} />
-                <input ref={docRef} type="file" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" multiple className="hidden" onChange={handleImportDoc} />
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="h-7 text-xs gap-1.5 px-2"
-                  disabled={importWorking}
-                  onClick={() => jsonRef.current?.click()}
-                >
-                  {importWorking ? <Loader2 className="w-3 h-3 animate-spin" /> : <FileJson className="w-3 h-3" />}
-                  Importar JSON
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="h-7 text-xs gap-1.5 px-2"
-                  disabled={importWorking}
-                  onClick={() => docRef.current?.click()}
-                >
-                  {importWorking ? <Loader2 className="w-3 h-3 animate-spin" /> : <FileUp className="w-3 h-3" />}
-                  Importar PDF/DOCX
-                </Button>
-              </div>
-            </div>
-            <Textarea
-              value={userStory}
-              onChange={e => setUserStory(e.target.value)}
-              placeholder="Cole aqui a História de Usuário, ou use os botões acima para importar de JSON, PDF ou DOCX..."
-              className="min-h-[140px] resize-none text-sm"
-            />
-          </div>
-
-          {/* Ações */}
-          <div className="flex gap-2">
-            <Button
-              onClick={handleGenerate}
-              disabled={generateMutation.isPending || !selectedProjectId || !selectedSprintId || userStory.trim().length < 10}
-              className="flex-1"
-              style={{ background: "#2563eb", color: "white" }}
-            >
-              {generateMutation.isPending ? (
-                <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Gerando casos...</>
-              ) : (
-                <><Wand2 className="w-4 h-4 mr-2" />Gerar Casos de Teste</>
-              )}
-            </Button>
-            {result && (
-              <Button onClick={handleExport} variant="outline">
-                <FileText className="w-4 h-4 mr-2" />
-                Exportar para Evidências
-              </Button>
-            )}
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Resultado da IA */}
-      {result && (
+        {/* ── Coluna direita: HU + resultado ── */}
         <div className="flex flex-col gap-4">
           <Card style={{ background: "white", border: "1px solid #e2e8f0", borderRadius: "0.75rem", boxShadow: "0 1px 3px rgba(0,0,0,0.07)" }}>
-            <CardContent className="pt-4">
-              <p className="text-sm" style={{ color: "#334155" }}>{result.resumo}</p>
-              <div className="grid grid-cols-3 gap-3 mt-3">
-                <div style={{ background: "#f0fdf4", borderRadius: "0.5rem", padding: "0.75rem" }}>
-                  <p className="text-xs mb-1" style={{ color: "#64748b" }}>Total de Casos</p>
-                  <p className="text-2xl font-bold" style={{ color: "#16a34a" }}>{totalCases}</p>
+            <CardContent className="pt-4 flex flex-col gap-3">
+              {/* Cabeçalho da HU com botões de importação */}
+              <div className="flex items-center justify-between">
+                <Label className="text-xs font-medium" style={{ color: "#374151" }}>
+                  História de Usuário <span style={{ color: "#ef4444" }}>*</span>
+                </Label>
+                <div className="flex gap-1.5">
+                  <input ref={jsonRef} type="file" accept="application/json" className="hidden" onChange={handleImportJSON} />
+                  <input ref={docRef} type="file" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" multiple className="hidden" onChange={handleImportDoc} />
+                  <Button type="button" variant="outline" size="sm" className="h-7 text-xs gap-1.5 px-2" disabled={importWorking} onClick={() => jsonRef.current?.click()}>
+                    {importWorking ? <Loader2 className="w-3 h-3 animate-spin" /> : <FileJson className="w-3 h-3" />}
+                    Importar JSON
+                  </Button>
+                  <Button type="button" variant="outline" size="sm" className="h-7 text-xs gap-1.5 px-2" disabled={importWorking} onClick={() => docRef.current?.click()}>
+                    {importWorking ? <Loader2 className="w-3 h-3 animate-spin" /> : <FileUp className="w-3 h-3" />}
+                    Importar PDF/DOCX
+                  </Button>
                 </div>
-                <div style={{ background: "#eff6ff", borderRadius: "0.5rem", padding: "0.75rem" }}>
-                  <p className="text-xs mb-1" style={{ color: "#64748b" }}>Categorias</p>
-                  <p className="text-2xl font-bold" style={{ color: "#2563eb" }}>{result.cards.length}</p>
-                </div>
-                <div style={{ background: "#faf5ff", borderRadius: "0.5rem", padding: "0.75rem" }}>
-                  <p className="text-xs mb-1" style={{ color: "#64748b" }}>Cobertura Funcional</p>
-                  <p className="text-2xl font-bold" style={{ color: "#7c3aed" }}>{result.cobertura.funcional.length}</p>
-                </div>
+              </div>
+              <Textarea
+                value={userStory}
+                onChange={e => setUserStory(e.target.value)}
+                placeholder="Cole aqui a História de Usuário, ou use os botões acima para importar de JSON, PDF ou DOCX..."
+                className="resize-none text-sm"
+                style={{ minHeight: "220px" }}
+              />
+              {/* Ações */}
+              <div className="flex gap-2">
+                <Button
+                  onClick={handleGenerate}
+                  disabled={generateMutation.isPending || !selectedProjectId || !selectedSprintId || userStory.trim().length < 10}
+                  className="flex-1"
+                  style={{ background: "#2563eb", color: "white" }}
+                >
+                  {generateMutation.isPending ? (
+                    <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Gerando casos...</>
+                  ) : (
+                    <><Wand2 className="w-4 h-4 mr-2" />Gerar Casos de Teste</>
+                  )}
+                </Button>
+                {result && (
+                  <Button onClick={handleExport} variant="outline">
+                    <FileText className="w-4 h-4 mr-2" />
+                    Exportar para Evidências
+                  </Button>
+                )}
               </div>
             </CardContent>
           </Card>
 
-          {result.cards.map((card, idx) => (
-            <Card key={idx} style={{ background: "white", border: "1px solid #e2e8f0", borderRadius: "0.75rem", boxShadow: "0 1px 3px rgba(0,0,0,0.07)" }}>
-              <CardHeader className="pb-2 cursor-pointer" onClick={() => toggleCard(idx)}>
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-sm flex items-center gap-2" style={{ color: "#0f172a" }}>
-                    <span className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold text-white" style={{ background: "#2563eb" }}>{idx + 1}</span>
-                    {card.categoria}
-                    <Badge variant="outline" className="text-xs" style={{ color: "#64748b" }}>{card.casos.length} casos</Badge>
-                  </CardTitle>
-                  {expandedCards.has(idx) ? <ChevronUp className="w-4 h-4" style={{ color: "#94a3b8" }} /> : <ChevronDown className="w-4 h-4" style={{ color: "#94a3b8" }} />}
-                </div>
-              </CardHeader>
-              {expandedCards.has(idx) && (
-                <CardContent className="pt-0 flex flex-col gap-3">
-                  {card.casos.map((caso) => (
-                    <div key={caso.id} style={{ background: "#f8fafc", borderRadius: "0.5rem", padding: "0.75rem", border: "1px solid #e2e8f0" }}>
-                      <div className="flex items-start justify-between gap-2 mb-2">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-xs font-mono" style={{ color: "#94a3b8" }}>{caso.id}</span>
-                          <span className="text-sm font-medium" style={{ color: "#0f172a" }}>{caso.titulo}</span>
-                        </div>
-                        <div className="flex gap-1 flex-shrink-0">
-                          <Badge className={`text-xs border ${priorityColor[caso.prioridade] ?? "bg-slate-100 text-slate-600"}`}>{caso.prioridade}</Badge>
-                          <Badge variant="outline" className="text-xs" style={{ color: "#64748b" }}>{caso.tipo}</Badge>
-                        </div>
-                      </div>
-                      <div className="grid gap-1 text-xs">
-                        <p><span className="font-medium" style={{ color: "#64748b" }}>Dado:</span> <span style={{ color: "#334155" }}>{caso.dado}</span></p>
-                        <p><span className="font-medium" style={{ color: "#64748b" }}>Quando:</span> <span style={{ color: "#334155" }}>{caso.quando}</span></p>
-                        <p><span className="font-medium" style={{ color: "#64748b" }}>Então:</span> <span style={{ color: "#334155" }}>{caso.entao}</span></p>
-                        {caso.resultado_esperado && (
-                          <p><span className="font-medium" style={{ color: "#64748b" }}>Resultado:</span> <span style={{ color: "#334155" }}>{caso.resultado_esperado}</span></p>
-                        )}
-                      </div>
+          {/* Resultado da IA */}
+          {result && (
+            <div className="flex flex-col gap-4">
+              <Card style={{ background: "white", border: "1px solid #e2e8f0", borderRadius: "0.75rem", boxShadow: "0 1px 3px rgba(0,0,0,0.07)" }}>
+                <CardContent className="pt-4">
+                  <p className="text-sm" style={{ color: "#334155" }}>{result.resumo}</p>
+                  <div className="grid grid-cols-3 gap-3 mt-3">
+                    <div style={{ background: "#f0fdf4", borderRadius: "0.5rem", padding: "0.75rem" }}>
+                      <p className="text-xs mb-1" style={{ color: "#64748b" }}>Total de Casos</p>
+                      <p className="text-2xl font-bold" style={{ color: "#16a34a" }}>{totalCases}</p>
                     </div>
-                  ))}
+                    <div style={{ background: "#eff6ff", borderRadius: "0.5rem", padding: "0.75rem" }}>
+                      <p className="text-xs mb-1" style={{ color: "#64748b" }}>Categorias</p>
+                      <p className="text-2xl font-bold" style={{ color: "#2563eb" }}>{result.cards.length}</p>
+                    </div>
+                    <div style={{ background: "#faf5ff", borderRadius: "0.5rem", padding: "0.75rem" }}>
+                      <p className="text-xs mb-1" style={{ color: "#64748b" }}>Cobertura Funcional</p>
+                      <p className="text-2xl font-bold" style={{ color: "#7c3aed" }}>{result.cobertura.funcional.length}</p>
+                    </div>
+                  </div>
                 </CardContent>
-              )}
-            </Card>
-          ))}
+              </Card>
+
+              {result.cards.map((card, idx) => (
+                <Card key={idx} style={{ background: "white", border: "1px solid #e2e8f0", borderRadius: "0.75rem", boxShadow: "0 1px 3px rgba(0,0,0,0.07)" }}>
+                  <CardHeader className="pb-2 cursor-pointer" onClick={() => toggleCard(idx)}>
+                    <div className="flex items-center justify-between">
+                      <CardTitle className="text-sm flex items-center gap-2" style={{ color: "#0f172a" }}>
+                        <span className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold text-white" style={{ background: "#2563eb" }}>{idx + 1}</span>
+                        {card.categoria}
+                        <Badge variant="outline" className="text-xs" style={{ color: "#64748b" }}>{card.casos.length} casos</Badge>
+                      </CardTitle>
+                      {expandedCards.has(idx) ? <ChevronUp className="w-4 h-4" style={{ color: "#94a3b8" }} /> : <ChevronDown className="w-4 h-4" style={{ color: "#94a3b8" }} />}
+                    </div>
+                  </CardHeader>
+                  {expandedCards.has(idx) && (
+                    <CardContent className="pt-0 flex flex-col gap-3">
+                      {card.casos.map((caso) => (
+                        <div key={caso.id} style={{ background: "#f8fafc", borderRadius: "0.5rem", padding: "0.75rem", border: "1px solid #e2e8f0" }}>
+                          <div className="flex items-start justify-between gap-2 mb-2">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-xs font-mono" style={{ color: "#94a3b8" }}>{caso.id}</span>
+                              <span className="text-sm font-medium" style={{ color: "#0f172a" }}>{caso.titulo}</span>
+                            </div>
+                            <div className="flex gap-1 flex-shrink-0">
+                              <Badge className={`text-xs border ${priorityColor[caso.prioridade] ?? "bg-slate-100 text-slate-600"}`}>{caso.prioridade}</Badge>
+                              <Badge variant="outline" className="text-xs" style={{ color: "#64748b" }}>{caso.tipo}</Badge>
+                            </div>
+                          </div>
+                          <div className="grid gap-1 text-xs">
+                            <p><span className="font-medium" style={{ color: "#64748b" }}>Dado:</span> <span style={{ color: "#334155" }}>{caso.dado}</span></p>
+                            <p><span className="font-medium" style={{ color: "#64748b" }}>Quando:</span> <span style={{ color: "#334155" }}>{caso.quando}</span></p>
+                            <p><span className="font-medium" style={{ color: "#64748b" }}>Então:</span> <span style={{ color: "#334155" }}>{caso.entao}</span></p>
+                            {caso.resultado_esperado && (
+                              <p><span className="font-medium" style={{ color: "#64748b" }}>Resultado:</span> <span style={{ color: "#334155" }}>{caso.resultado_esperado}</span></p>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </CardContent>
+                  )}
+                </Card>
+              ))}
+            </div>
+          )}
         </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -847,19 +839,9 @@ export default function QAPlannerPage() {
 
   return (
     <AppLayout>
-      <div style={{ padding: "2rem", maxWidth: "1200px", margin: "0 auto" }}>
-        {/* Cabeçalho */}
-        <div style={{ marginBottom: "1.5rem" }}>
-          <h1 style={{ fontSize: "1.75rem", fontWeight: 700, color: "#0f172a", margin: 0 }}>
-            Gerador de Plano de Teste
-          </h1>
-          <p style={{ color: "#64748b", marginTop: "0.25rem", fontSize: "0.95rem" }}>
-            Gere casos de teste com IA e documente evidências
-          </p>
-        </div>
-
+      <div style={{ padding: "1.5rem 2rem", width: "100%" }}>
         {/* Abas */}
-        <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1.5rem", borderBottom: "2px solid #e2e8f0", paddingBottom: "0" }}>
+        <div style={{ display: "flex", gap: "0.5rem", marginBottom: "1.25rem", borderBottom: "2px solid #e2e8f0", paddingBottom: "0" }}>
           {[
             { key: "generator", label: "Gerador de Casos", icon: <Wand2 style={{ width: 16, height: 16 }} /> },
             { key: "evidence", label: "Editor de Evidências", icon: <FileText style={{ width: 16, height: 16 }} />, badge: exportedCases.length > 0 ? exportedCases.length : null },
