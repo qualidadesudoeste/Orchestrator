@@ -1,0 +1,89 @@
+{
+  "execution_id": "n8n-exemplo-docx",
+  "projeto": "Projeto Exemplo",
+  "cliente": "Cliente Demonstração",
+  "sprint": "Sprint 1",
+  "sistema_url": "https://example.com",
+  "inicio_processamento": "2026-07-22T20:00:00.000Z",
+  "fim_processamento": "2026-07-22T20:04:30.000Z",
+  "total_cenarios": 2,
+  "totais": {
+    "PASSOU": 1,
+    "FALHOU": 1,
+    "BLOQUEADO": 0,
+    "ERRO_AUTOMACAO": 0
+  },
+  "status_geral": "FALHOU",
+  "resultados": [
+    {
+      "scenario_id": "CT-001-validar-titulo",
+      "scenario_title": "Validar o título da página",
+      "cenario": "Cenário: Validar o título da página\n  Dado que acesso a página Example Domain\n  Então o título deve conter a palavra \"Example\"",
+      "status": "PASSOU",
+      "data_execucao": "2026-07-22T20:02:00.000Z",
+      "resultado_teste": {
+        "resumo": "A página foi carregada e o título Example Domain foi confirmado.",
+        "passos": [
+          {
+            "descricao": "Acessar a página Example Domain",
+            "status": "PASSOU",
+            "detalhe": "A URL respondeu e o conteúdo principal foi exibido."
+          },
+          {
+            "descricao": "Validar o título",
+            "status": "PASSOU",
+            "detalhe": "O título contém a palavra Example."
+          }
+        ],
+        "evidencias": [
+          {
+            "tipo": "screenshot",
+            "caminho": "../../../artifacts/playwright-mcp/smoke-example.png",
+            "momento": "Resultado final"
+          }
+        ],
+        "falhas_reais": [],
+        "falhas_automacao": []
+      }
+    },
+    {
+      "scenario_id": "CT-002-validar-mensagem",
+      "scenario_title": "Validar mensagem obrigatória",
+      "cenario": "Cenário: Validar mensagem obrigatória\n  Dado que acesso o formulário\n  Quando envio sem preencher o campo obrigatório\n  Então deve ser exibida a mensagem de validação",
+      "status": "FALHOU",
+      "data_execucao": "2026-07-22T20:04:30.000Z",
+      "resultado_teste": {
+        "resumo": "O formulário não apresentou a mensagem de campo obrigatório esperada.",
+        "passos": [
+          {
+            "descricao": "Acessar o formulário",
+            "status": "PASSOU",
+            "detalhe": "Formulário carregado."
+          },
+          {
+            "descricao": "Enviar sem preencher o campo",
+            "status": "PASSOU",
+            "detalhe": "A ação de envio foi concluída."
+          },
+          {
+            "descricao": "Validar a mensagem obrigatória",
+            "status": "FALHOU",
+            "detalhe": "Nenhuma mensagem foi exibida."
+          }
+        ],
+        "evidencias": [
+          {
+            "tipo": "screenshot",
+            "caminho": "../../../artifacts/playwright-mcp/smoke-example.png",
+            "momento": "Falha funcional"
+          }
+        ],
+        "falhas_reais": [
+          "A mensagem de validação do campo obrigatório não foi exibida após o envio."
+        ],
+        "falhas_automacao": []
+      }
+    }
+  ]
+}
+

@@ -94,6 +94,16 @@ Erros de um cenário não interrompem o restante do lote.
 4. Confirme que há screenshot em `artifacts/playwright-mcp`.
 5. Confirme que o resultado diferencia falha funcional de erro de automação.
 
+## 7. Gerar o documento de evidências
+
+O resultado do nó **Consolidar Execução** já possui o formato aceito pelo gerador DOCX. Salve esse resultado como JSON e execute:
+
+```powershell
+npm run evidence:docx -- --input .\caminho\execucao.json --output .\artifacts\evidence-docx\evidencias.docx
+```
+
+O gerador incorpora screenshots locais, cria o resumo da execução e mantém falhas funcionais separadas de falhas de automação. Consulte [`evidence-docx/README.md`](evidence-docx/README.md) para o contrato completo e um exemplo executável.
+
 ## Diagnóstico rápido
 
 ```powershell
@@ -117,3 +127,7 @@ Em 22/07/2026, o workflow de diagnóstico foi executado com sucesso no n8n 2.31.
 ## Resultado validado da Fase 2
 
 Em 22/07/2026, o workflow principal separou dois cenários Gherkin, processou ambos sequencialmente e consolidou os dois resultados. Como a API OpenAI estava sem quota, cada item foi corretamente classificado como `ERRO_AUTOMACAO` e o lote continuou até o fim. No diagnóstico sem IA, os dois cenários chamaram o Playwright MCP e foram aprovados com dois snapshots independentes.
+
+## Resultado validado do gerador DOCX
+
+O gerador produziu um relatório com dois cenários e duas screenshots incorporadas. A auditoria estrutural confirmou página Letter, margens de 1 polegada, tabelas com geometria fixa e zero achados de acessibilidade. A renderização automática por LibreOffice depende da instalação local desse aplicativo.

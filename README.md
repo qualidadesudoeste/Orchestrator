@@ -78,4 +78,5 @@ http://host.docker.internal:8931/mcp
 - Loop sequencial por cenário Gherkin, consolidação e separação de falhas: concluídos.
 - Captura rastreável de screenshots pelo agente: configurada; teste funcional aguarda crédito na API OpenAI.
 - Execução completa pelo agente GPT-4o: tecnicamente configurada; aguarda crédito disponível na conta da API OpenAI.
-- Persistência de execuções, DOCX, cards Markdown e dashboard: planejados.
+- Gerador Node.js de evidências DOCX com screenshots: concluído.
+- Persistência de execuções, cards Markdown e dashboard: planejados.
