@@ -1,0 +1,23 @@
+{
+  "browser": {
+    "browserName": "chromium",
+    "isolated": true,
+    "launchOptions": {
+      "headless": false,
+      "channel": "chrome"
+    }
+  },
+  "server": {
+    "port": 8931,
+    "host": "0.0.0.0",
+    "allowedHosts": [
+      "host.docker.internal",
+      "host.docker.internal:8931",
+      "localhost",
+      "localhost:8931",
+      "127.0.0.1",
+      "127.0.0.1:8931"
+    ]
+  },
+  "saveSession": true
+}

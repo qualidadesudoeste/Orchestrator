@@ -15,5 +15,9 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["server/**/*.test.ts", "server/**/*.spec.ts"],
+    env: {
+      JWT_SECRET: "test-only-jwt-secret-not-for-production",
+      OAUTH_SERVER_URL: "http://oauth.example.test",
+    },
   },
 });

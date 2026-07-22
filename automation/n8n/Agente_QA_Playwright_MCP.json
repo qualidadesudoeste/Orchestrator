@@ -1,0 +1,172 @@
+{
+  "name": "Agente QA — Playwright MCP",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "trigger-manual",
+      "name": "Iniciar Teste",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "cenario",
+              "name": "cenario",
+              "value": "Acesse https://example.com, verifique se o título da página contém a palavra 'Example' e tire um screenshot da tela.",
+              "type": "string"
+            },
+            {
+              "id": "projeto",
+              "name": "projeto",
+              "value": "Projeto Exemplo",
+              "type": "string"
+            },
+            {
+              "id": "sistema_url",
+              "name": "sistema_url",
+              "value": "https://example.com",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "set-cenario",
+      "name": "Definir Cenário de Teste",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [460, 300],
+      "notes": "Substitua 'cenario' pelo cenário Gherkin e 'sistema_url' pela URL autorizada do sistema."
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Você é um especialista sênior em Quality Assurance. Execute o cenário abaixo usando obrigatoriamente as ferramentas do Playwright MCP.\n\nCENÁRIO:\n{{ $json.cenario }}\n\nSISTEMA: {{ $json.sistema_url }}\nPROJETO: {{ $json.projeto }}\n\nPara cada passo: aguarde o carregamento, execute a ação, valide o resultado e registre evidência nos pontos críticos. Ao final, responda com status PASSOU, FALHOU, BLOQUEADO ou ERRO_AUTOMACAO; passos executados; evidências; falhas reais; e falhas de automação separadamente.",
+        "options": {
+          "systemMessage": "Você é um agente de QA autônomo. Use seletores semânticos como role, label e texto visível. Nunca exponha credenciais. Se uma ação falhar por instabilidade, tente somente mais uma vez e registre as duas tentativas. Não classifique falha de infraestrutura ou automação como defeito do sistema."
+        }
+      },
+      "id": "agente-qa",
+      "name": "Agente QA",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [700, 300]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o",
+        "options": {
+          "maxTokens": 4096,
+          "temperature": 0.1
+        }
+      },
+      "id": "openai-model",
+      "name": "GPT-4o",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [580, 520],
+      "credentials": {
+        "openAiApi": {
+          "id": "SELECIONE_NO_N8N",
+          "name": "OpenAI — selecione a credencial no n8n"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "connectionType": "streamableHttp",
+        "url": "http://host.docker.internal:8931/mcp"
+      },
+      "id": "playwright-mcp",
+      "name": "Playwright MCP (Navegador)",
+      "type": "n8n-nodes-mcp.mcpClientTool",
+      "typeVersion": 1,
+      "position": [820, 520]
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ 'qa-session-' + $('Definir Cenário de Teste').item.json.projeto }}"
+      },
+      "id": "memory",
+      "name": "Memória da Sessão",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [700, 520]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "resultado",
+              "name": "resultado_teste",
+              "value": "={{ $json.output }}",
+              "type": "string"
+            },
+            {
+              "id": "projeto_final",
+              "name": "projeto",
+              "value": "={{ $('Definir Cenário de Teste').item.json.projeto }}",
+              "type": "string"
+            },
+            {
+              "id": "cenario_final",
+              "name": "cenario_executado",
+              "value": "={{ $('Definir Cenário de Teste').item.json.cenario }}",
+              "type": "string"
+            },
+            {
+              "id": "data_execucao",
+              "name": "data_execucao",
+              "value": "={{ new Date().toLocaleString('pt-BR') }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "formatar-resultado",
+      "name": "Formatar Resultado",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [960, 300]
+    }
+  ],
+  "connections": {
+    "Iniciar Teste": {
+      "main": [[{ "node": "Definir Cenário de Teste", "type": "main", "index": 0 }]]
+    },
+    "Definir Cenário de Teste": {
+      "main": [[{ "node": "Agente QA", "type": "main", "index": 0 }]]
+    },
+    "Agente QA": {
+      "main": [[{ "node": "Formatar Resultado", "type": "main", "index": 0 }]]
+    },
+    "GPT-4o": {
+      "ai_languageModel": [[{ "node": "Agente QA", "type": "ai_languageModel", "index": 0 }]]
+    },
+    "Playwright MCP (Navegador)": {
+      "ai_tool": [[{ "node": "Agente QA", "type": "ai_tool", "index": 0 }]]
+    },
+    "Memória da Sessão": {
+      "ai_memory": [[{ "node": "Agente QA", "type": "ai_memory", "index": 0 }]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    { "name": "QA" },
+    { "name": "Playwright" },
+    { "name": "Automação" }
+  ],
+  "triggerCount": 0,
+  "versionId": "qa-playwright-v2"
+}

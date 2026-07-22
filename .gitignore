@@ -1,11 +1,14 @@
 node_modules/
 dist/
+artifacts/
+.npm-cache/
 .env
 .env.*
+!.env.example
 *.log
+smoke-*.png
 .manus-logs/
 .manus/
 .git-corrupted/
-drizzle/migrations/
 .project-config.json
 client/public/__manus__/
