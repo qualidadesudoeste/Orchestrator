@@ -1,5 +1,7 @@
 {
+  "id": "mrqcEZGkwBYN132M",
   "name": "Agente QA — Playwright MCP",
+  "active": false,
   "nodes": [
     {
       "parameters": {},
@@ -30,6 +32,12 @@
               "name": "sistema_url",
               "value": "https://example.com",
               "type": "string"
+            },
+            {
+              "id": "diretorio-evidencias",
+              "name": "diretorio_evidencias",
+              "value": "C:\\Users\\jessi\\Documents\\Orchestrator\\orchestrator-platform\\artifacts\\playwright-mcp",
+              "type": "string"
             }
           ]
         },
@@ -40,12 +48,12 @@
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
       "position": [460, 300],
-      "notes": "Substitua 'cenario' pelo cenário Gherkin e 'sistema_url' pela URL autorizada do sistema."
+      "notes": "Substitua 'cenario' pelo cenário Gherkin e 'sistema_url' pela URL autorizada do sistema. Atualize 'diretorio_evidencias' se o projeto for movido."
     },
     {
       "parameters": {
         "promptType": "define",
-        "text": "=Você é um especialista sênior em Quality Assurance. Execute o cenário abaixo usando obrigatoriamente as ferramentas do Playwright MCP.\n\nCENÁRIO:\n{{ $json.cenario }}\n\nSISTEMA: {{ $json.sistema_url }}\nPROJETO: {{ $json.projeto }}\n\nPara cada passo: aguarde o carregamento, execute a ação, valide o resultado e registre evidência nos pontos críticos. Ao final, responda com status PASSOU, FALHOU, BLOQUEADO ou ERRO_AUTOMACAO; passos executados; evidências; falhas reais; e falhas de automação separadamente.",
+        "text": "=Você é um especialista sênior em Quality Assurance. Execute o cenário abaixo usando obrigatoriamente as ferramentas do Playwright MCP.\n\nCENÁRIO:\n{{ $json.cenario }}\n\nSISTEMA: {{ $json.sistema_url }}\nPROJETO: {{ $json.projeto }}\nDIRETÓRIO DE EVIDÊNCIAS: {{ $json.diretorio_evidencias }}\n\nPara cada passo: aguarde o carregamento, execute a ação, valide o resultado e registre evidência nos pontos críticos. Ao tirar screenshots, informe um caminho absoluto dentro do DIRETÓRIO DE EVIDÊNCIAS. Ao final, responda com status PASSOU, FALHOU, BLOQUEADO ou ERRO_AUTOMACAO; passos executados; evidências; falhas reais; e falhas de automação separadamente.",
         "options": {
           "systemMessage": "Você é um agente de QA autônomo. Use seletores semânticos como role, label e texto visível. Nunca exponha credenciais. Se uma ação falhar por instabilidade, tente somente mais uma vez e registre as duas tentativas. Não classifique falha de infraestrutura ou automação como defeito do sistema."
         }
@@ -58,7 +66,10 @@
     },
     {
       "parameters": {
-        "model": "gpt-4o",
+        "model": {
+          "mode": "list",
+          "value": "gpt-4o"
+        },
         "options": {
           "maxTokens": 4096,
           "temperature": 0.1
@@ -71,20 +82,21 @@
       "position": [580, 520],
       "credentials": {
         "openAiApi": {
-          "id": "SELECIONE_NO_N8N",
-          "name": "OpenAI — selecione a credencial no n8n"
+          "id": "Vr4idKY5ymrrpFj5",
+          "name": "OpenAI account"
         }
       }
     },
     {
       "parameters": {
-        "connectionType": "streamableHttp",
-        "url": "http://host.docker.internal:8931/mcp"
+        "endpointUrl": "http://host.docker.internal:8931/mcp",
+        "serverTransport": "httpStreamable",
+        "options": {}
       },
       "id": "playwright-mcp",
-      "name": "Playwright MCP (Navegador)",
-      "type": "n8n-nodes-mcp.mcpClientTool",
-      "typeVersion": 1,
+      "name": "MCP Client",
+      "type": "@n8n/n8n-nodes-langchain.mcpClientTool",
+      "typeVersion": 1.4,
       "position": [820, 520]
     },
     {
@@ -150,7 +162,7 @@
     "GPT-4o": {
       "ai_languageModel": [[{ "node": "Agente QA", "type": "ai_languageModel", "index": 0 }]]
     },
-    "Playwright MCP (Navegador)": {
+    "MCP Client": {
       "ai_tool": [[{ "node": "Agente QA", "type": "ai_tool", "index": 0 }]]
     },
     "Memória da Sessão": {
@@ -159,14 +171,16 @@
   },
   "pinData": {},
   "settings": {
-    "executionOrder": "v1"
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false
   },
   "staticData": null,
   "tags": [
-    { "name": "QA" },
-    { "name": "Playwright" },
-    { "name": "Automação" }
+    { "id": "znprY8zbbzBivxT3", "name": "QA" },
+    { "id": "TQDsMm1UpvSqmHQR", "name": "Playwright" },
+    { "id": "BnOGQUnEE7uAeXCO", "name": "Automação" }
   ],
   "triggerCount": 0,
-  "versionId": "qa-playwright-v2"
+  "versionId": "f746a5bd-70db-433d-87a0-56928e83f94c"
 }

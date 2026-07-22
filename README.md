@@ -10,7 +10,7 @@ O agente de execução utiliza n8n e Playwright MCP. Os artefatos dessa integra�
 - Backend: Node.js, Express e tRPC.
 - Banco: MySQL com Drizzle ORM.
 - IA: endpoint compatível com OpenAI Chat Completions por meio de `invokeLLM`.
-- Automação: n8n com `n8n-nodes-mcp` e Playwright MCP.
+- Automação: n8n 2.31.4 com MCP Client nativo e Playwright MCP.
 
 ## Pré-requisitos
 
@@ -74,5 +74,7 @@ http://host.docker.internal:8931/mcp
 
 - Geração de cenários e análise de cobertura: concluídas.
 - Configuração e smoke test do Playwright MCP: concluídos.
-- Execução completa iniciada pelo n8n: próxima entrega.
+- Conexão n8n → Playwright MCP com workflow de diagnóstico: concluída.
+- Execução completa pelo agente GPT-4o: tecnicamente configurada; aguarda crédito disponível na conta da API OpenAI.
+- Loop de execução por cenário e captura estruturada de evidências: próxima entrega.
 - Persistência de execuções, DOCX, cards Markdown e dashboard: planejados.

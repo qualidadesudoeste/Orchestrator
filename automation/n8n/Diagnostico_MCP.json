@@ -1,0 +1,46 @@
+{
+  "id": "qaMcpDiagnostic01",
+  "name": "Diagnóstico — Conexão n8n com Playwright MCP",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "trigger-manual",
+      "name": "Iniciar Diagnóstico",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [260, 300]
+    },
+    {
+      "parameters": {
+        "serverTransport": "httpStreamable",
+        "endpointUrl": "http://host.docker.internal:8931/mcp",
+        "authentication": "none",
+        "tool": {
+          "mode": "id",
+          "value": "browser_navigate"
+        },
+        "inputMode": "json",
+        "jsonInput": "{\n  \"url\": \"https://example.com\"\n}",
+        "options": {
+          "timeout": 60000,
+          "convertToBinary": true
+        }
+      },
+      "id": "mcp-diagnostico",
+      "name": "Abrir Página pelo Playwright",
+      "type": "@n8n/n8n-nodes-langchain.mcpClient",
+      "typeVersion": 1.1,
+      "position": [500, 300]
+    }
+  ],
+  "connections": {
+    "Iniciar Diagnóstico": {
+      "main": [[{ "node": "Abrir Página pelo Playwright", "type": "main", "index": 0 }]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false
+}
