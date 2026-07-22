@@ -191,6 +191,31 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
         {/* Navegação por módulos */}
         <nav className="flex-1 overflow-y-auto py-4 px-2">
+          {/* Dashboard — fora dos módulos, como item fixo */}
+          <button
+            onClick={() => navigate("/dashboard")}
+            className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg mb-3 text-left transition-all"
+            style={{
+              background: location === "/dashboard" || location === "/" ? "oklch(0.50 0.20 264)" : "transparent",
+              color: location === "/dashboard" || location === "/" ? "white" : "oklch(0.55 0.01 260)",
+            }}
+            onMouseEnter={e => {
+              if (location !== "/dashboard" && location !== "/") {
+                e.currentTarget.style.background = "oklch(0.20 0.015 260)";
+                e.currentTarget.style.color = "oklch(0.75 0.05 264)";
+              }
+            }}
+            onMouseLeave={e => {
+              if (location !== "/dashboard" && location !== "/") {
+                e.currentTarget.style.background = "transparent";
+                e.currentTarget.style.color = "oklch(0.55 0.01 260)";
+              }
+            }}
+          >
+            <LayoutDashboard className="w-4 h-4 flex-shrink-0" />
+            <span className="text-xs font-medium">Dashboard</span>
+          </button>
+          <div className="border-t mb-3" style={{ borderColor: "oklch(0.22 0.015 260)" }} />
           {MODULES.map(mod => renderModule(mod))}
           {isAdmin && renderModule(ADMIN_MODULE, true)}
         </nav>

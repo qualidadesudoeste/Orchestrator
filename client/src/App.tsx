@@ -21,7 +21,7 @@ function Router() {
       <Route path="/login" component={LoginPage} />
       <Route path="/">{() => <Redirect to="/painel" />}</Route>
       <Route path="/painel" component={Home} />
-      <Route path="/dashboard">{() => <Redirect to="/painel" />}</Route>
+      <Route path="/dashboard" component={DashboardPage} />
       <Route path="/workspace" component={WorkspacePage} />
       <Route path="/history" component={HistoryPage} />
       <Route path="/coordinator" component={CoordinatorPage} />
