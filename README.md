@@ -75,6 +75,7 @@ http://host.docker.internal:8931/mcp
 - Geração de cenários e análise de cobertura: concluídas.
 - Configuração e smoke test do Playwright MCP: concluídos.
 - Conexão n8n → Playwright MCP com workflow de diagnóstico: concluída.
+- Loop sequencial por cenário Gherkin, consolidação e separação de falhas: concluídos.
+- Captura rastreável de screenshots pelo agente: configurada; teste funcional aguarda crédito na API OpenAI.
 - Execução completa pelo agente GPT-4o: tecnicamente configurada; aguarda crédito disponível na conta da API OpenAI.
-- Loop de execução por cenário e captura estruturada de evidências: próxima entrega.
 - Persistência de execuções, DOCX, cards Markdown e dashboard: planejados.

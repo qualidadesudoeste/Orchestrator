@@ -1,6 +1,7 @@
 {
   "id": "qaMcpDiagnostic01",
-  "name": "Diagnóstico — Conexão n8n com Playwright MCP",
+  "name": "Diagnóstico — Lote Gherkin e Playwright MCP",
+  "active": false,
   "nodes": [
     {
       "parameters": {},
@@ -8,7 +9,55 @@
       "name": "Iniciar Diagnóstico",
       "type": "n8n-nodes-base.manualTrigger",
       "typeVersion": 1,
-      "position": [260, 300]
+      "position": [180, 300]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "sistema-url",
+              "name": "sistema_url",
+              "value": "https://example.com",
+              "type": "string"
+            },
+            {
+              "id": "cenarios-gherkin",
+              "name": "cenarios_gherkin",
+              "value": "Funcionalidade: Diagnóstico do lote\n\nCenário: Abrir a página no primeiro item\n  Dado que existe uma página de diagnóstico\n  Quando o Playwright acessa a URL\n  Então deve retornar o título da página\n\nCenário: Abrir a página no segundo item\n  Dado que existe uma página de diagnóstico\n  Quando o Playwright acessa a URL\n  Então deve retornar o título da página",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "definir-diagnostico",
+      "name": "Definir Lote de Diagnóstico",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [390, 300]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const entrada = $input.first().json;\nconst texto = String(entrada.cenarios_gherkin || '').replace(/\\r\\n/g, '\\n').trim();\nlet blocos = texto.split(/(?=^\\s*(?:Cenário|Scenario):)/gmi).filter((bloco) => /^\\s*(?:Cenário|Scenario):/i.test(bloco));\nif (blocos.length === 0) blocos = [texto];\nreturn blocos.map((bloco, indice) => ({\n  json: {\n    sistema_url: entrada.sistema_url,\n    execution_id: `diagnostico-${$execution.id}`,\n    scenario_id: `DIAG-${String(indice + 1).padStart(3, '0')}`,\n    cenario: bloco.trim()\n  }\n}));"
+      },
+      "id": "preparar-diagnostico",
+      "name": "Preparar Cenários do Diagnóstico",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [610, 300]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "loop-diagnostico",
+      "name": "Loop do Diagnóstico",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [830, 300]
     },
     {
       "parameters": {
@@ -30,17 +79,56 @@
       "name": "Abrir Página pelo Playwright",
       "type": "@n8n/n8n-nodes-langchain.mcpClient",
       "typeVersion": 1.1,
-      "position": [500, 300]
+      "position": [1060, 420]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const origem = $('Loop do Diagnóstico').item.json;\nconst texto = JSON.stringify($json.content || []);\nconst passou = texto.includes('Page Title: Example Domain');\nreturn {\n  json: {\n    ...origem,\n    status: passou ? 'PASSOU' : 'ERRO_AUTOMACAO',\n    detalhe_mcp: $json.content || [],\n    data_execucao: new Date().toISOString()\n  }\n};"
+      },
+      "id": "registrar-diagnostico",
+      "name": "Registrar Resultado do Diagnóstico",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1280, 420]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const resultados = $input.all().map((item) => item.json);\nconst passou = resultados.length > 0 && resultados.every((item) => item.status === 'PASSOU');\nreturn [{\n  json: {\n    status: passou ? 'PASSOU' : 'ERRO_AUTOMACAO',\n    total_cenarios: resultados.length,\n    cenarios_aprovados: resultados.filter((item) => item.status === 'PASSOU').length,\n    mensagem: passou ? 'Loop Gherkin e conexão Playwright MCP funcionando.' : 'O diagnóstico encontrou erro no loop ou no MCP.',\n    resultados\n  }\n}];"
+      },
+      "id": "consolidar-diagnostico",
+      "name": "Consolidar Diagnóstico",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1060, 160]
     }
   ],
   "connections": {
     "Iniciar Diagnóstico": {
-      "main": [[{ "node": "Abrir Página pelo Playwright", "type": "main", "index": 0 }]]
+      "main": [[{ "node": "Definir Lote de Diagnóstico", "type": "main", "index": 0 }]]
+    },
+    "Definir Lote de Diagnóstico": {
+      "main": [[{ "node": "Preparar Cenários do Diagnóstico", "type": "main", "index": 0 }]]
+    },
+    "Preparar Cenários do Diagnóstico": {
+      "main": [[{ "node": "Loop do Diagnóstico", "type": "main", "index": 0 }]]
+    },
+    "Loop do Diagnóstico": {
+      "main": [
+        [{ "node": "Consolidar Diagnóstico", "type": "main", "index": 0 }],
+        [{ "node": "Abrir Página pelo Playwright", "type": "main", "index": 0 }]
+      ]
+    },
+    "Abrir Página pelo Playwright": {
+      "main": [[{ "node": "Registrar Resultado do Diagnóstico", "type": "main", "index": 0 }]]
+    },
+    "Registrar Resultado do Diagnóstico": {
+      "main": [[{ "node": "Loop do Diagnóstico", "type": "main", "index": 0 }]]
     }
   },
   "pinData": {},
   "settings": {
     "executionOrder": "v1"
-  },
-  "active": false
+  }
 }

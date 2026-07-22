@@ -43,20 +43,50 @@ As entradas de host na configuração incluem também a porta `:8931`. A versão
 Importe estes arquivos no n8n:
 
 - `automation/n8n/Agente_QA_Playwright_MCP.json`: agente principal.
-- `automation/n8n/Diagnostico_MCP.json`: verificação sem IA e sem consumo de créditos.
+- `automation/n8n/Diagnostico_MCP.json`: verificação do lote Gherkin e do MCP sem IA e sem consumo de créditos.
 
 No agente principal, confirme que o nó **GPT-4o** usa a credencial OpenAI cadastrada. Não coloque a chave diretamente no JSON. A conta da API precisa ter crédito disponível; uma assinatura do ChatGPT não inclui automaticamente créditos da API.
 
 ## 4. Teste de conexão sem IA
 
-1. Abra o workflow **Diagnóstico — Conexão n8n com Playwright MCP**.
+1. Abra o workflow **Diagnóstico — Lote Gherkin e Playwright MCP**.
 2. Execute-o manualmente.
-3. Confirme que o nó **Abrir Página pelo Playwright** retorna a URL `https://example.com/` e o título `Example Domain`.
-4. Confirme a criação de um snapshot em `artifacts/playwright-mcp`.
+3. Confirme que o nó **Loop do Diagnóstico** processou `DIAG-001` e `DIAG-002` separadamente.
+4. Confirme que as duas execuções retornaram a URL `https://example.com/` e o título `Example Domain`.
+5. Confirme que **Consolidar Diagnóstico** retornou `PASSOU`, com 2 cenários aprovados.
+6. Confirme a criação dos dois snapshots em `artifacts/playwright-mcp`.
 
-Esse teste valida especificamente o caminho n8n → Docker → host Windows → Playwright MCP.
+Esse teste valida o caminho n8n → Docker → host Windows → Playwright MCP e o processamento sequencial, sem depender da OpenAI.
 
-## 5. Teste do agente completo
+## 5. Preparar uma execução Gherkin
+
+No workflow principal, abra o nó **Definir Execução** e preencha:
+
+- `projeto`: nome do cliente ou projeto.
+- `sprint`: identificação da sprint.
+- `sistema_url`: endereço autorizado para o teste.
+- `cenarios_gherkin`: um ou mais blocos iniciados por `Cenário:` ou `Scenario:`.
+- `diretorio_evidencias`: pasta absoluta onde os prints serão gravados.
+
+O nó **Preparar Cenários** gera automaticamente um identificador como `CT-001-validar-login`. O **Loop Sobre Cenários** usa lote 1, portanto cada cenário termina antes do seguinte começar.
+
+Para cada cenário, o agente deve gerar uma screenshot final e, se houver falha, uma screenshot adicional do estado da falha. Os nomes usam o padrão:
+
+```text
+n8n-ID-CT-NNN-titulo-final.png
+n8n-ID-CT-NNN-titulo-falha.png
+```
+
+O resultado consolidado contém `total_cenarios`, totais por status e a lista `resultados`. Os status permitidos são:
+
+- `PASSOU`: comportamento esperado confirmado.
+- `FALHOU`: defeito funcional real.
+- `BLOQUEADO`: pré-condição ou acesso impediu a execução.
+- `ERRO_AUTOMACAO`: problema de IA, infraestrutura, seletor ou formato da resposta.
+
+Erros de um cenário não interrompem o restante do lote.
+
+## 6. Teste do agente completo
 
 1. Execute o workflow manualmente.
 2. Confirme que o agente abre `https://example.com`.
@@ -83,3 +113,7 @@ O transporte correto é **HTTP Streamable** no endpoint `/mcp`. O endpoint `/sse
 ## Resultado validado da Fase 1
 
 Em 22/07/2026, o workflow de diagnóstico foi executado com sucesso no n8n 2.31.4. O Playwright abriu `https://example.com/`, retornou o título `Example Domain` e gerou o snapshot esperado. O agente completo alcançou a API OpenAI, que respondeu apenas com bloqueio de quota.
+
+## Resultado validado da Fase 2
+
+Em 22/07/2026, o workflow principal separou dois cenários Gherkin, processou ambos sequencialmente e consolidou os dois resultados. Como a API OpenAI estava sem quota, cada item foi corretamente classificado como `ERRO_AUTOMACAO` e o lote continuou até o fim. No diagnóstico sem IA, os dois cenários chamaram o Playwright MCP e foram aprovados com dois snapshots independentes.
