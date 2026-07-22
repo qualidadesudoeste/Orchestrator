@@ -19,7 +19,7 @@ function Router() {
   return (
     <Switch>
       <Route path="/login" component={LoginPage} />
-      <Route path="/">{() => <Redirect to="/painel" />}</Route>
+      <Route path="/">{() => <Redirect to="/dashboard" />}</Route>
       <Route path="/painel" component={Home} />
       <Route path="/dashboard" component={DashboardPage} />
       <Route path="/workspace" component={WorkspacePage} />
