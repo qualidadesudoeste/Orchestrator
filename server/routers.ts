@@ -437,6 +437,73 @@ ${scenariosLatex}
         };
       }),
 
+    // ── Analisar cobertura dos cenários gerados vs. requisitos da HU ────────────
+    analyzeCoverage: protectedProcedure
+      .input(z.object({
+        userStory: z.string().min(10),
+        generatedCases: z.array(z.object({
+          id: z.string(),
+          titulo: z.string(),
+          prioridade: z.string(),
+          dado: z.string(),
+          quando: z.string(),
+          entao: z.string(),
+          resultado_esperado: z.string(),
+          tipo: z.string(),
+        })),
+        projectContext: z.string().optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const casesText = input.generatedCases.map((c, i) =>
+          `${i + 1}. [${c.tipo.toUpperCase()}] ${c.titulo} (prioridade: ${c.prioridade})\n   Dado: ${c.dado}\n   Quando: ${c.quando}\n   Então: ${c.entao}`
+        ).join("\n\n");
+
+        const systemPrompt = `Você é um especialista sênior em Quality Assurance. Sua tarefa é analisar criticamente um conjunto de cenários de teste gerados para uma História de Usuário e identificar problemas de cobertura.
+
+Analise com rigor e retorne APENAS um JSON válido, sem markdown, com a seguinte estrutura:
+{
+  "parecer_geral": "string com resumo executivo da análise (máx 200 chars)",
+  "score_cobertura": número de 0 a 100 representando % de cobertura estimada,
+  "cenarios_faltantes": [
+    { "titulo": "string", "justificativa": "string", "risco": "alto|medio|baixo" }
+  ],
+  "cenarios_repetitivos": [
+    { "ids": ["id1", "id2"], "motivo": "string" }
+  ],
+  "cenarios_irrelevantes": [
+    { "id": "string", "motivo": "string" }
+  ],
+  "classificacao_risco": [
+    { "id": "string", "titulo": "string", "risco": "critico|alto|medio|baixo", "justificativa": "string" }
+  ],
+  "recomendacao_execucao": "string com orientação sobre ordem de execução (máx 200 chars)"
+}`;
+
+        const userMessage = `HISTÓRIA DE USUÁRIO:\n${input.userStory.substring(0, 3000)}\n\n${input.projectContext ? `CONTEXTO DO PROJETO: ${input.projectContext}\n\n` : ""}CENÁRIOS GERADOS (${input.generatedCases.length} cenários):\n${casesText}`;
+
+        try {
+          const response = await invokeLLM({
+            model: "gpt-4o",
+            messages: [
+              { role: "system", content: systemPrompt },
+              { role: "user", content: userMessage },
+            ],
+            maxTokens: 4096,
+          });
+          const content = response.choices?.[0]?.message?.content ?? "";
+          const raw = String(content).trim();
+          if (!raw) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "IA retornou resposta vazia." });
+          const stripped = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
+          const jsonStr = stripped.startsWith("{") ? stripped : (stripped.match(/(\{[\s\S]*\})/)?.[1] ?? "");
+          if (!jsonStr) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "IA retornou formato inválido." });
+          return JSON.parse(jsonStr);
+        } catch (err: any) {
+          if (err instanceof TRPCError) throw err;
+          console.error("[qaPlanner.analyzeCoverage] Error:", err?.message);
+          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Erro ao analisar cobertura. Tente novamente." });
+        }
+      }),
+
     // ── Listar documentos ─────────────────────────────────────────────────────
     listDocuments: protectedProcedure.query(async ({ ctx }) => {
       return listQAPlanDocuments(ctx.user.id, ctx.user.role === "admin");

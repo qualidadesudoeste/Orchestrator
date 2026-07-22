@@ -12,7 +12,7 @@ import { toast } from "sonner";
 import {
   Wand2, FileText, Plus, Trash2, Upload, Download,
   ChevronDown, ChevronUp, Loader2, ClipboardList, History, X,
-  FileJson, FileUp
+  FileJson, FileUp, ShieldCheck, AlertTriangle, AlertCircle, Info, CheckCircle2
 } from "lucide-react";
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
@@ -34,6 +34,15 @@ interface AIResult {
   resumo: string;
   cobertura: { funcional: string[]; naoFuncional: string[]; heuristicas: string[] };
   cards: TestCard[];
+}
+interface CoverageAnalysis {
+  parecer_geral: string;
+  score_cobertura: number;
+  cenarios_faltantes: { titulo: string; justificativa: string; risco: "alto" | "medio" | "baixo" }[];
+  cenarios_repetitivos: { ids: string[]; motivo: string }[];
+  cenarios_irrelevantes: { id: string; motivo: string }[];
+  classificacao_risco: { id: string; titulo: string; risco: "critico" | "alto" | "medio" | "baixo"; justificativa: string }[];
+  recomendacao_execucao: string;
 }
 interface Scenario {
   id: string;
@@ -200,13 +209,36 @@ function CaseGenerator({ onExport }: { onExport: (cases: TestCase[], project: { 
   const selectedSprint = allSprints.find(s => String(s.id) === selectedSprintId);
   const selectedClient = selectedProject ? clients.find(c => c.id === selectedProject.clientId) : null;
 
+  const [coverageResult, setCoverageResult] = useState<CoverageAnalysis | null>(null);
+  const [showCoveragePanel, setShowCoveragePanel] = useState(false);
+
   const generateMutation = trpc.qaPlanner.generateCases.useMutation({
     onSuccess: (data) => {
       setResult(data as AIResult);
+      setCoverageResult(null); // reset análise anterior ao gerar novos casos
       toast.success("Casos de teste gerados com sucesso!");
     },
     onError: (err) => toast.error("Erro ao gerar casos: " + err.message),
   });
+
+  const analyzeMutation = trpc.qaPlanner.analyzeCoverage.useMutation({
+    onSuccess: (data) => {
+      setCoverageResult(data as CoverageAnalysis);
+      setShowCoveragePanel(true);
+      toast.success("Análise de cobertura concluída!");
+    },
+    onError: (err) => toast.error("Erro na análise: " + err.message),
+  });
+
+  const handleAnalyzeCoverage = () => {
+    if (!result) return;
+    const allCases = result.cards.flatMap(c => c.casos);
+    analyzeMutation.mutate({
+      userStory,
+      generatedCases: allCases,
+      projectContext: selectedProject?.name,
+    });
+  };
 
   const toggleCard = (idx: number) => {
     setExpandedCards(prev => {
@@ -427,7 +459,7 @@ function CaseGenerator({ onExport }: { onExport: (cases: TestCase[], project: { 
                 </div>
               </div>
               {/* Ações */}
-              <div className="flex gap-2">
+              <div className="flex gap-2 flex-wrap">
                 <Button
                   onClick={handleGenerate}
                   disabled={generateMutation.isPending || !selectedProjectId || !selectedSprintId || userStory.trim().length < 10}
@@ -441,6 +473,20 @@ function CaseGenerator({ onExport }: { onExport: (cases: TestCase[], project: { 
                   )}
                 </Button>
                 {result && (
+                  <Button
+                    onClick={handleAnalyzeCoverage}
+                    disabled={analyzeMutation.isPending}
+                    variant="outline"
+                    style={{ borderColor: "#f59e0b", color: "#b45309", background: "#fffbeb" }}
+                  >
+                    {analyzeMutation.isPending ? (
+                      <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Analisando...</>
+                    ) : (
+                      <><ShieldCheck className="w-4 h-4 mr-2" />Analisar Cobertura</>
+                    )}
+                  </Button>
+                )}
+                {result && (
                   <Button onClick={handleExport} variant="outline">
                     <FileText className="w-4 h-4 mr-2" />
                     Exportar para Evidências
@@ -449,6 +495,129 @@ function CaseGenerator({ onExport }: { onExport: (cases: TestCase[], project: { 
               </div>
             </CardContent>
           </Card>
+
+          {/* ── Painel de Análise de Cobertura ── */}
+          {showCoveragePanel && coverageResult && (
+            <Card style={{ background: "#fffbeb", border: "2px solid #f59e0b", borderRadius: "0.75rem", boxShadow: "0 2px 8px rgba(245,158,11,0.15)" }}>
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-sm flex items-center gap-2" style={{ color: "#92400e" }}>
+                    <ShieldCheck className="w-4 h-4" />
+                    Análise de Cobertura — Parecer da IA
+                  </CardTitle>
+                  <div className="flex items-center gap-2">
+                    {/* Score de cobertura */}
+                    <div className="flex items-center gap-1.5 px-3 py-1 rounded-full" style={{
+                      background: coverageResult.score_cobertura >= 80 ? "#dcfce7" : coverageResult.score_cobertura >= 60 ? "#fef9c3" : "#fee2e2",
+                      border: `1px solid ${coverageResult.score_cobertura >= 80 ? "#86efac" : coverageResult.score_cobertura >= 60 ? "#fde047" : "#fca5a5"}`
+                    }}>
+                      <span className="text-xs font-bold" style={{
+                        color: coverageResult.score_cobertura >= 80 ? "#16a34a" : coverageResult.score_cobertura >= 60 ? "#ca8a04" : "#dc2626"
+                      }}>{coverageResult.score_cobertura}% cobertura</span>
+                    </div>
+                    <button onClick={() => setShowCoveragePanel(false)} className="text-amber-400 hover:text-amber-600">
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+                <p className="text-xs mt-1" style={{ color: "#78350f" }}>{coverageResult.parecer_geral}</p>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-4 pt-0">
+
+                {/* Cenários Faltantes */}
+                {coverageResult.cenarios_faltantes.length > 0 && (
+                  <div>
+                    <p className="text-xs font-semibold mb-2 flex items-center gap-1" style={{ color: "#dc2626" }}>
+                      <AlertCircle className="w-3.5 h-3.5" /> Cenários Faltantes ({coverageResult.cenarios_faltantes.length})
+                    </p>
+                    <div className="flex flex-col gap-1.5">
+                      {coverageResult.cenarios_faltantes.map((c, i) => (
+                        <div key={i} style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: "0.5rem", padding: "0.6rem 0.75rem" }}>
+                          <div className="flex items-center gap-2 mb-0.5">
+                            <span className="text-xs font-medium" style={{ color: "#991b1b" }}>{c.titulo}</span>
+                            <Badge className="text-xs" style={{
+                              background: c.risco === "alto" ? "#fee2e2" : c.risco === "medio" ? "#fef9c3" : "#f0fdf4",
+                              color: c.risco === "alto" ? "#dc2626" : c.risco === "medio" ? "#ca8a04" : "#16a34a",
+                              border: "none"
+                            }}>risco {c.risco}</Badge>
+                          </div>
+                          <p className="text-xs" style={{ color: "#7f1d1d" }}>{c.justificativa}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Cenários Repetitivos */}
+                {coverageResult.cenarios_repetitivos.length > 0 && (
+                  <div>
+                    <p className="text-xs font-semibold mb-2 flex items-center gap-1" style={{ color: "#d97706" }}>
+                      <AlertTriangle className="w-3.5 h-3.5" /> Cenários Repetitivos ou Sobrepostos ({coverageResult.cenarios_repetitivos.length})
+                    </p>
+                    <div className="flex flex-col gap-1.5">
+                      {coverageResult.cenarios_repetitivos.map((c, i) => (
+                        <div key={i} style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: "0.5rem", padding: "0.6rem 0.75rem" }}>
+                          <p className="text-xs font-medium mb-0.5" style={{ color: "#92400e" }}>IDs: {c.ids.join(", ")}</p>
+                          <p className="text-xs" style={{ color: "#78350f" }}>{c.motivo}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Cenários Irrelevantes */}
+                {coverageResult.cenarios_irrelevantes.length > 0 && (
+                  <div>
+                    <p className="text-xs font-semibold mb-2 flex items-center gap-1" style={{ color: "#6b7280" }}>
+                      <Info className="w-3.5 h-3.5" /> Cenários Possivelmente Irrelevantes ({coverageResult.cenarios_irrelevantes.length})
+                    </p>
+                    <div className="flex flex-col gap-1.5">
+                      {coverageResult.cenarios_irrelevantes.map((c, i) => (
+                        <div key={i} style={{ background: "#f9fafb", border: "1px solid #e5e7eb", borderRadius: "0.5rem", padding: "0.6rem 0.75rem" }}>
+                          <p className="text-xs font-medium mb-0.5" style={{ color: "#374151" }}>ID: {c.id}</p>
+                          <p className="text-xs" style={{ color: "#6b7280" }}>{c.motivo}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Classificação de Risco */}
+                {coverageResult.classificacao_risco.length > 0 && (
+                  <div>
+                    <p className="text-xs font-semibold mb-2 flex items-center gap-1" style={{ color: "#374151" }}>
+                      <CheckCircle2 className="w-3.5 h-3.5 text-blue-500" /> Classificação de Risco por Cenário
+                    </p>
+                    <div className="flex flex-col gap-1">
+                      {coverageResult.classificacao_risco
+                        .sort((a, b) => { const o = { critico: 0, alto: 1, medio: 2, baixo: 3 }; return (o[a.risco] ?? 4) - (o[b.risco] ?? 4); })
+                        .map((c, i) => (
+                          <div key={i} className="flex items-start gap-2" style={{ padding: "0.4rem 0.5rem", borderRadius: "0.375rem", background: c.risco === "critico" ? "#fef2f2" : c.risco === "alto" ? "#fff7ed" : c.risco === "medio" ? "#fefce8" : "#f0fdf4" }}>
+                            <Badge className="text-xs mt-0.5 flex-shrink-0" style={{
+                              background: c.risco === "critico" ? "#dc2626" : c.risco === "alto" ? "#ea580c" : c.risco === "medio" ? "#ca8a04" : "#16a34a",
+                              color: "white", border: "none"
+                            }}>{c.risco}</Badge>
+                            <div>
+                              <p className="text-xs font-medium" style={{ color: "#0f172a" }}>{c.titulo}</p>
+                              <p className="text-xs" style={{ color: "#64748b" }}>{c.justificativa}</p>
+                            </div>
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Recomendação de Execução */}
+                {coverageResult.recomendacao_execucao && (
+                  <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: "0.5rem", padding: "0.75rem" }}>
+                    <p className="text-xs font-semibold mb-1" style={{ color: "#1d4ed8" }}>Recomendação de Execução</p>
+                    <p className="text-xs" style={{ color: "#1e40af" }}>{coverageResult.recomendacao_execucao}</p>
+                  </div>
+                )}
+
+              </CardContent>
+            </Card>
+          )}
 
           {/* Resultado da IA */}
           {result && (
