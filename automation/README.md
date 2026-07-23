@@ -148,6 +148,14 @@ os nós HTTP leiam somente as variáveis usadas pelo fluxo
 (`ORCHESTRATOR_API_URL` e `QA_AGENT_API_TOKEN`). Como workflows podem acessar
 variáveis do contêiner, restrinja a edição do n8n a administradores confiáveis.
 
+## Persistência e Dashboard
+
+O nó **Registrar Execução** envia o lote consolidado para
+`POST /api/qa/test-executions`. O endpoint usa `execution_id` como chave
+idempotente, grava a execução em `test_executions` e substitui seus cenários em
+`test_results` quando recebe um reenvio. Falhas funcionais e falhas de automação
+permanecem separadas para não distorcer os indicadores do Dashboard.
+
 ## Resultado validado do gerador DOCX
 
 O gerador produziu um relatório com dois cenários e duas screenshots incorporadas. A auditoria estrutural confirmou página Letter, margens de 1 polegada, tabelas com geometria fixa e zero achados de acessibilidade. A renderização automática por LibreOffice depende da instalação local desse aplicativo.

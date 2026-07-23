@@ -21,6 +21,7 @@ import {
   updateLocalUser,
   deleteUser,
   updateLastSignedIn,
+  getDashboardMetrics,
 } from "./db";
 import {
   getTrailProgress,
@@ -176,6 +177,15 @@ export const appRouter = router({
     delete: adminProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ input }) => { await deleteSprint(input.id); return { success: true }; }),
+  }),
+  dashboard: router({
+    metrics: protectedProcedure
+      .input(z.object({
+        clientId: z.number().optional(),
+        projectId: z.number().optional(),
+        sprintId: z.number().optional(),
+      }))
+      .query(async ({ input }) => getDashboardMetrics(input)),
   }),
   checklists: router({
     get: protectedProcedure

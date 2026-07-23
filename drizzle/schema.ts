@@ -1,4 +1,4 @@
-import { int, mysqlEnum, mysqlTable, text, timestamp, varchar } from "drizzle-orm/mysql-core";
+import { index, int, mysqlEnum, mysqlTable, text, timestamp, uniqueIndex, varchar } from "drizzle-orm/mysql-core";
 
 /**
  * Core user table backing auth flow.
@@ -103,3 +103,68 @@ export const qaPlanDocuments = mysqlTable("qa_plan_documents", {
   createdAt: timestamp("createdAt").defaultNow().notNull(),
 });
 export type QAPlanDocument = typeof qaPlanDocuments.$inferSelect;
+
+// ─── Execuções automatizadas de QA ──────────────────────────────────────────
+export const testExecutions = mysqlTable("test_executions", {
+  id: int("id").autoincrement().primaryKey(),
+  externalExecutionId: varchar("externalExecutionId", { length: 128 }).notNull(),
+  clientId: int("clientId"),
+  projectId: int("projectId"),
+  sprintId: int("sprintId"),
+  clientName: varchar("clientName", { length: 255 }),
+  projectName: varchar("projectName", { length: 255 }).notNull(),
+  sprintName: varchar("sprintName", { length: 255 }),
+  systemUrl: varchar("systemUrl", { length: 1000 }),
+  status: mysqlEnum("status", ["PASSOU", "FALHOU", "BLOQUEADO", "ERRO_AUTOMACAO"]).notNull(),
+  totalScenarios: int("totalScenarios").notNull().default(0),
+  passedScenarios: int("passedScenarios").notNull().default(0),
+  failedScenarios: int("failedScenarios").notNull().default(0),
+  blockedScenarios: int("blockedScenarios").notNull().default(0),
+  automationErrors: int("automationErrors").notNull().default(0),
+  coveragePercent: int("coveragePercent").notNull().default(0),
+  defectsFound: int("defectsFound").notNull().default(0),
+  criticalDefects: int("criticalDefects").notNull().default(0),
+  escapedDefects: int("escapedDefects").notNull().default(0),
+  evidenceDocxUrl: text("evidenceDocxUrl"),
+  regressionBundleId: varchar("regressionBundleId", { length: 64 }),
+  startedAt: timestamp("startedAt"),
+  finishedAt: timestamp("finishedAt"),
+  rawPayload: text("rawPayload"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, table => ({
+  externalExecutionUnique: uniqueIndex("test_executions_external_id_unique").on(table.externalExecutionId),
+  projectIndex: index("test_executions_project_idx").on(table.projectId),
+  sprintIndex: index("test_executions_sprint_idx").on(table.sprintId),
+  finishedAtIndex: index("test_executions_finished_at_idx").on(table.finishedAt),
+}));
+
+export type TestExecution = typeof testExecutions.$inferSelect;
+export type InsertTestExecution = typeof testExecutions.$inferInsert;
+
+export const testResults = mysqlTable("test_results", {
+  id: int("id").autoincrement().primaryKey(),
+  executionId: int("executionId").notNull(),
+  externalScenarioId: varchar("externalScenarioId", { length: 160 }).notNull(),
+  title: varchar("title", { length: 500 }).notNull(),
+  moduleName: varchar("moduleName", { length: 255 }),
+  gherkin: text("gherkin"),
+  status: mysqlEnum("status", ["PASSOU", "FALHOU", "BLOQUEADO", "ERRO_AUTOMACAO"]).notNull(),
+  risk: mysqlEnum("risk", ["BAIXO", "MEDIO", "ALTO", "CRITICO"]).default("MEDIO").notNull(),
+  summary: text("summary"),
+  realDefects: int("realDefects").notNull().default(0),
+  automationFailures: int("automationFailures").notNull().default(0),
+  durationMs: int("durationMs"),
+  evidenceJson: text("evidenceJson"),
+  failuresJson: text("failuresJson"),
+  regressionCodeUrl: text("regressionCodeUrl"),
+  executedAt: timestamp("executedAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, table => ({
+  executionIndex: index("test_results_execution_idx").on(table.executionId),
+  statusIndex: index("test_results_status_idx").on(table.status),
+  moduleIndex: index("test_results_module_idx").on(table.moduleName),
+}));
+
+export type TestResult = typeof testResults.$inferSelect;
+export type InsertTestResult = typeof testResults.$inferInsert;

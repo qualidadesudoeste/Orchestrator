@@ -216,6 +216,34 @@
       "typeVersion": 4.2,
       "position": [1510, 180],
       "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.ORCHESTRATOR_API_URL + '/api/qa/test-executions' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.QA_AGENT_API_TOKEN }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "registrar-execucao",
+      "name": "Registrar Execução",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1510, 340],
+      "onError": "continueRegularOutput"
     }
   ],
   "connections": {
@@ -244,7 +272,10 @@
       "main": [[{ "node": "Gerar Evidências DOCX", "type": "main", "index": 0 }]]
     },
     "Gerar Evidências DOCX": {
-      "main": [[{ "node": "Salvar Regressão Playwright", "type": "main", "index": 0 }]]
+      "main": [[
+        { "node": "Salvar Regressão Playwright", "type": "main", "index": 0 },
+        { "node": "Registrar Execução", "type": "main", "index": 0 }
+      ]]
     },
     "GPT-4o": {
       "ai_languageModel": [[{ "node": "Agente QA", "type": "ai_languageModel", "index": 0 }]]

@@ -1,472 +1,748 @@
-import { useState, useMemo } from "react";
+import { useState } from "react";
 import AppLayout from "@/components/AppLayout";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import {
-  AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line, Legend
+  Area,
+  AreaChart,
+  CartesianGrid,
+  Cell,
+  Legend,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
 } from "recharts";
-import { TrendingUp, TrendingDown, Minus, ChevronRight, Sparkles, Filter, X } from "lucide-react";
+import {
+  Activity,
+  Bug,
+  CheckCircle2,
+  Database,
+  ExternalLink,
+  Gauge,
+  RefreshCw,
+  ShieldCheck,
+  X,
+  XCircle,
+} from "lucide-react";
 
-// ─── Dados mockados (substituir por dados reais na integração) ───────────────
-const MOCK_KPIS = {
-  totalExecucoes: 5842,
-  passRate: 92.3,
-  failRate: 7.7,
-  defeitosEncontrados: 54,
-  defeitosCriticos: 8,
-  modulosEmRisco: 6,
-  totalExecucoesDelta: 18,
-  passRateDelta: 6.7,
-  failRateDelta: -6.7,
-  defeitosDelta: -12,
-  defeitosCriticosDelta: -20,
+const STATUS_STYLE: Record<string, { background: string; color: string; label: string }> = {
+  PASSOU: { background: "#dcfce7", color: "#15803d", label: "Passou" },
+  FALHOU: { background: "#fee2e2", color: "#b91c1c", label: "Falhou" },
+  BLOQUEADO: { background: "#fef3c7", color: "#b45309", label: "Bloqueado" },
+  ERRO_AUTOMACAO: {
+    background: "#e2e8f0",
+    color: "#475569",
+    label: "Erro de automação",
+  },
 };
 
-const MOCK_TENDENCIA = [
-  { sprint: "S16", taxa: 12.1 }, { sprint: "S17", taxa: 11.4 }, { sprint: "S18", taxa: 13.2 },
-  { sprint: "S19", taxa: 10.8 }, { sprint: "S20", taxa: 9.5 }, { sprint: "S21", taxa: 11.2 },
-  { sprint: "S22", taxa: 8.9 }, { sprint: "S23", taxa: 10.1 }, { sprint: "S24", taxa: 9.3 },
-  { sprint: "S25", taxa: 8.2 }, { sprint: "S26", taxa: 7.9 }, { sprint: "S27", taxa: 7.7 },
-];
-
-const MOCK_PARETO = [
-  { modulo: "Financeiro", falhas: 38, acumulado: 38 },
-  { modulo: "Pagamentos", falhas: 26, acumulado: 64 },
-  { modulo: "Cadastro", falhas: 15, acumulado: 79 },
-  { modulo: "Relatórios", falhas: 8, acumulado: 87 },
-  { modulo: "Login", falhas: 5, acumulado: 92 },
-  { modulo: "Outros", falhas: 8, acumulado: 100 },
-];
-
-const MOCK_CAUSAS = [
-  { name: "Bug de desenvolvimento", value: 64, color: "#6366f1" },
-  { name: "Ambiente indisponível", value: 28, color: "#22c55e" },
-  { name: "Massa de teste", value: 18, color: "#3b82f6" },
-  { name: "API externa", value: 14, color: "#f59e0b" },
-  { name: "Dados inconsistentes", value: 10, color: "#f97316" },
-  { name: "Script automatizado", value: 8, color: "#ec4899" },
-  { name: "Outros", value: 142, color: "#94a3b8" },
-];
-
-const MOCK_HEATMAP = {
-  modulos: ["Financeiro", "Pagamentos", "Cadastro", "Relatórios", "Login", "Estoque", "Outros"],
-  sprints: ["S22", "S23", "S24", "S25", "S26", "S27"],
-  data: [
-    [4, 4, 4, 3, 4, 4],
-    [3, 4, 3, 4, 3, 3],
-    [2, 3, 2, 2, 3, 2],
-    [2, 2, 2, 1, 2, 2],
-    [1, 2, 1, 1, 1, 2],
-    [2, 1, 2, 2, 1, 1],
-    [1, 1, 1, 2, 1, 1],
-  ],
+const RISK_STYLE: Record<string, { background: string; color: string; label: string }> = {
+  BAIXO: { background: "#dcfce7", color: "#15803d", label: "Baixo" },
+  MEDIO: { background: "#fef9c3", color: "#a16207", label: "Médio" },
+  ALTO: { background: "#ffedd5", color: "#c2410c", label: "Alto" },
+  CRITICO: { background: "#fee2e2", color: "#b91c1c", label: "Crítico" },
 };
 
-const MOCK_GAPS = [
-  { rank: 1, gap: "Timeout na API de Pagamentos", modulo: "Pagamentos", ocorrencias: 38, impacto: "Alto", tendencia: "up", pct: 13.4 },
-  { rank: 2, gap: "Massa de teste inconsistente", modulo: "Cadastro", ocorrencias: 24, impacto: "Médio", tendencia: "neutral", pct: 8.5 },
-  { rank: 3, gap: "Ambiente QA indisponível", modulo: "Geral", ocorrencias: 18, impacto: "Alto", tendencia: "down", pct: 6.3 },
-  { rank: 4, gap: "Erro 500 na API de Clientes", modulo: "Financeiro", ocorrencias: 15, impacto: "Alto", tendencia: "up", pct: 5.3 },
-  { rank: 5, gap: "Dados não persistem", modulo: "Cadastro", ocorrencias: 12, impacto: "Médio", tendencia: "neutral", pct: 4.2 },
-];
-
-const MOCK_RANKING = [
-  { func: "Login", passRate: 99.1, bugs: 1, cobertura: 100, risco: "baixo" },
-  { func: "Relatórios", passRate: 94.3, bugs: 3, cobertura: 92, risco: "baixo" },
-  { func: "Cadastro", passRate: 83.2, bugs: 18, cobertura: 82, risco: "medio" },
-  { func: "Pagamentos", passRate: 71.4, bugs: 28, cobertura: 71, risco: "alto" },
-  { func: "Financeiro", passRate: 67.8, bugs: 42, cobertura: 69, risco: "critico" },
-];
-
-const MOCK_EFICIENCIA = {
-  geral: 78,
-  nuncaFalham: { count: 312, pct: 18 },
-  redundantes: { count: 105, pct: 6 },
-  obsoletos: { count: 42, pct: 3 },
-  semExecucao: { count: 42, pct: 3 },
-  tempoMedio: "00:02:34",
-};
-
-const MOCK_INSIGHTS = [
-  { text: "Financeiro concentra 38% das falhas do período", highlight: "Financeiro", color: "#ef4444" },
-  { text: "Ambiente QA foi responsável por 27% dos testes bloqueados", highlight: "Ambiente QA", color: "#f97316" },
-  { text: "A taxa de aprovação aumentou 12% em relação à sprint anterior", highlight: "aumentou", color: "#22c55e" },
-  { text: "15 testes automatizados apresentaram comportamento instável", highlight: "15 testes automatizados", color: "#6366f1" },
-  { text: "Existem 42 casos de teste sem execução há mais de 90 dias", highlight: "42 casos de teste", color: "#f59e0b" },
-];
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-const heatColor = (v: number) => {
-  if (v === 4) return "#ef4444";
-  if (v === 3) return "#f97316";
-  if (v === 2) return "#f59e0b";
-  return "#22c55e";
-};
-
-const riscoBadge = (r: string) => {
-  const map: Record<string, { bg: string; text: string; label: string }> = {
-    baixo: { bg: "#dcfce7", text: "#16a34a", label: "Baixo" },
-    medio: { bg: "#fef9c3", text: "#ca8a04", label: "Médio" },
-    alto: { bg: "#ffedd5", text: "#ea580c", label: "Alto" },
-    critico: { bg: "#fee2e2", text: "#dc2626", label: "Crítico" },
+function Badge({
+  value,
+  styles,
+}: {
+  value: string;
+  styles: typeof STATUS_STYLE;
+}) {
+  const style = styles[value] ?? {
+    background: "#f1f5f9",
+    color: "#475569",
+    label: value,
   };
-  const s = map[r] ?? map.baixo;
-  return <span style={{ background: s.bg, color: s.text, padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600 }}>{s.label}</span>;
-};
+  return (
+    <span
+      style={{
+        background: style.background,
+        color: style.color,
+        padding: "3px 8px",
+        borderRadius: 999,
+        fontSize: 11,
+        fontWeight: 700,
+        whiteSpace: "nowrap",
+      }}
+    >
+      {style.label}
+    </span>
+  );
+}
 
-const impactoBadge = (i: string) => {
-  const map: Record<string, { bg: string; text: string }> = {
-    Alto: { bg: "#fee2e2", text: "#dc2626" },
-    Médio: { bg: "#fef9c3", text: "#ca8a04" },
-    Baixo: { bg: "#dcfce7", text: "#16a34a" },
-  };
-  const s = map[i] ?? map.Médio;
-  return <span style={{ background: s.bg, color: s.text, padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600 }}>{i}</span>;
-};
+function formatDate(value: string | Date) {
+  return new Intl.DateTimeFormat("pt-BR", {
+    dateStyle: "short",
+    timeStyle: "short",
+  }).format(new Date(value));
+}
 
-const TendenciaIcon = ({ t }: { t: string }) => {
-  if (t === "up") return <TrendingUp className="w-4 h-4 text-red-500" />;
-  if (t === "down") return <TrendingDown className="w-4 h-4 text-green-500" />;
-  return <Minus className="w-4 h-4 text-gray-400" />;
-};
-
-const Delta = ({ value, invert = false }: { value: number; invert?: boolean }) => {
-  const positive = invert ? value < 0 : value > 0;
-  const color = positive ? "#16a34a" : "#dc2626";
-  const sign = value > 0 ? "+" : "";
-  return <span style={{ color, fontSize: 12, fontWeight: 500 }}>{sign}{value}% vs período anterior</span>;
-};
-
-// ─── Componente principal ────────────────────────────────────────────────────
 export default function DashboardPage() {
   const { isAuthenticated } = useAuth();
-  const [activeTab, setActiveTab] = useState<"execucao" | "defeito">("execucao");
   const [filterCliente, setFilterCliente] = useState("");
   const [filterProjeto, setFilterProjeto] = useState("");
   const [filterSprint, setFilterSprint] = useState("");
 
-  const { data: clients } = trpc.clients.list.useQuery(undefined, { enabled: isAuthenticated });
-  const { data: projects } = trpc.projects.list.useQuery({ clientId: filterCliente ? Number(filterCliente) : undefined }, { enabled: isAuthenticated });
-  const { data: sprints } = trpc.sprints.list.useQuery({ projectId: filterProjeto ? Number(filterProjeto) : undefined }, { enabled: isAuthenticated });
+  const { data: clients } = trpc.clients.list.useQuery(undefined, {
+    enabled: isAuthenticated,
+  });
+  const { data: projects } = trpc.projects.list.useQuery(
+    { clientId: filterCliente ? Number(filterCliente) : undefined },
+    { enabled: isAuthenticated },
+  );
+  const { data: sprints } = trpc.sprints.list.useQuery(
+    { projectId: filterProjeto ? Number(filterProjeto) : undefined },
+    { enabled: isAuthenticated },
+  );
+  const metricsQuery = trpc.dashboard.metrics.useQuery(
+    {
+      clientId: filterCliente ? Number(filterCliente) : undefined,
+      projectId: filterProjeto ? Number(filterProjeto) : undefined,
+      sprintId: filterSprint ? Number(filterSprint) : undefined,
+    },
+    {
+      enabled: isAuthenticated,
+      refetchInterval: 30_000,
+    },
+  );
 
-  const clearFilters = () => { setFilterCliente(""); setFilterProjeto(""); setFilterSprint(""); };
-  const hasFilters = filterCliente || filterProjeto || filterSprint;
+  const metrics = metricsQuery.data;
+  const summary = metrics?.summary ?? {
+    totalExecutions: 0,
+    totalScenarios: 0,
+    coveragePercent: 0,
+    passRate: 0,
+    failRate: 0,
+    automationErrorRate: 0,
+    defectsFound: 0,
+    criticalDefects: 0,
+    dre: null,
+  };
+  const hasFilters = Boolean(
+    filterCliente || filterProjeto || filterSprint,
+  );
+  const clearFilters = () => {
+    setFilterCliente("");
+    setFilterProjeto("");
+    setFilterSprint("");
+  };
 
-  const totalCausas = MOCK_CAUSAS.reduce((s, c) => s + c.value, 0);
+  const cards = [
+    {
+      label: "Execuções",
+      value: summary.totalExecutions.toLocaleString("pt-BR"),
+      detail: `${summary.totalScenarios} cenários`,
+      icon: Activity,
+      color: "#4f46e5",
+      background: "#eef2ff",
+    },
+    {
+      label: "Cobertura executada",
+      value: `${summary.coveragePercent}%`,
+      detail: "Cenários executados / planejados",
+      icon: Gauge,
+      color: "#7c3aed",
+      background: "#f3e8ff",
+    },
+    {
+      label: "Pass Rate",
+      value: `${summary.passRate}%`,
+      detail: "Cenários aprovados",
+      icon: CheckCircle2,
+      color: "#15803d",
+      background: "#dcfce7",
+    },
+    {
+      label: "Fail Rate",
+      value: `${summary.failRate}%`,
+      detail: "Falhas funcionais",
+      icon: XCircle,
+      color: "#b91c1c",
+      background: "#fee2e2",
+    },
+    {
+      label: "Defeitos encontrados",
+      value: summary.defectsFound.toLocaleString("pt-BR"),
+      detail: `${summary.criticalDefects} críticos`,
+      icon: Bug,
+      color: "#c2410c",
+      background: "#ffedd5",
+    },
+    {
+      label: "DRE",
+      value: summary.dre === null ? "—" : `${summary.dre}%`,
+      detail:
+        summary.dre === null
+          ? "Aguardando dados de defeitos"
+          : "Defeitos removidos antes da produção",
+      icon: ShieldCheck,
+      color: "#0369a1",
+      background: "#e0f2fe",
+    },
+  ];
 
   return (
     <AppLayout>
-      <div style={{ background: "#f8f9fb", minHeight: "100vh", padding: "24px" }}>
-
-        {/* ── Filtros ── */}
-        <div style={{ background: "white", borderRadius: 12, padding: "16px 20px", marginBottom: 20, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", boxShadow: "0 1px 4px rgba(0,0,0,0.06)" }}>
-          <div style={{ display: "flex", gap: 12, flex: 1, flexWrap: "wrap" }}>
-            <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 160 }}>
-              <label style={{ fontSize: 11, fontWeight: 600, color: "#6b7280", textTransform: "uppercase" }}>Cliente</label>
-              <select value={filterCliente} onChange={e => { setFilterCliente(e.target.value); setFilterProjeto(""); setFilterSprint(""); }}
-                style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "6px 10px", fontSize: 13, color: "#374151", background: "white" }}>
-                <option value="">Selecione (opcional)</option>
-                {(clients ?? []).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 160 }}>
-              <label style={{ fontSize: 11, fontWeight: 600, color: "#6b7280", textTransform: "uppercase" }}>Projeto</label>
-              <select value={filterProjeto} onChange={e => { setFilterProjeto(e.target.value); setFilterSprint(""); }}
-                style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "6px 10px", fontSize: 13, color: "#374151", background: "white" }}>
-                <option value="">Selecione (opcional)</option>
-                {(projects ?? []).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-              </select>
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 160 }}>
-              <label style={{ fontSize: 11, fontWeight: 600, color: "#6b7280", textTransform: "uppercase" }}>Sprint</label>
-              <select value={filterSprint} onChange={e => setFilterSprint(e.target.value)}
-                style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "6px 10px", fontSize: 13, color: "#374151", background: "white" }}>
-                <option value="">Selecione (opcional)</option>
-                {(sprints ?? []).map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-              </select>
-            </div>
+      <div
+        style={{
+          background: "#f8fafc",
+          minHeight: "100vh",
+          padding: 24,
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "flex-start",
+            gap: 16,
+            marginBottom: 20,
+          }}
+        >
+          <div>
+            <h1
+              style={{
+                margin: 0,
+                color: "#0f172a",
+                fontSize: 24,
+                fontWeight: 800,
+              }}
+            >
+              Qualidade em tempo real
+            </h1>
+            <p style={{ margin: "5px 0 0", color: "#64748b", fontSize: 13 }}>
+              Métricas consolidadas das execuções do Agente QA.
+            </p>
           </div>
-          <div style={{ display: "flex", gap: 8, alignItems: "flex-end", paddingTop: 20 }}>
-            {hasFilters && (
-              <button onClick={clearFilters} style={{ display: "flex", alignItems: "center", gap: 6, border: "1px solid #e5e7eb", borderRadius: 8, padding: "6px 12px", fontSize: 13, color: "#6b7280", background: "white", cursor: "pointer" }}>
-                <X className="w-3.5 h-3.5" /> Limpar filtros
-              </button>
-            )}
-            {/* Tabs Por Execução / Por Defeito */}
-            <div style={{ display: "flex", border: "1px solid #e5e7eb", borderRadius: 10, overflow: "hidden" }}>
-              <button onClick={() => setActiveTab("execucao")}
-                style={{ padding: "6px 16px", fontSize: 12, fontWeight: 600, cursor: "pointer", border: "none", background: activeTab === "execucao" ? "#6366f1" : "white", color: activeTab === "execucao" ? "white" : "#6b7280", display: "flex", flexDirection: "column", alignItems: "center" }}>
-                <span>Por Execução</span>
-                <span style={{ fontSize: 10, fontWeight: 400, opacity: 0.8 }}>Resultados dos testes</span>
-              </button>
-              <button onClick={() => setActiveTab("defeito")}
-                style={{ padding: "6px 16px", fontSize: 12, fontWeight: 600, cursor: "pointer", border: "none", background: activeTab === "defeito" ? "#6366f1" : "white", color: activeTab === "defeito" ? "white" : "#6b7280", display: "flex", flexDirection: "column", alignItems: "center" }}>
-                <span>Por Defeito</span>
-                <span style={{ fontSize: 10, fontWeight: 400, opacity: 0.8 }}>Análise de bugs</span>
-              </button>
-            </div>
-          </div>
+          <button
+            onClick={() => metricsQuery.refetch()}
+            disabled={metricsQuery.isFetching}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 7,
+              border: "1px solid #cbd5e1",
+              borderRadius: 9,
+              background: "white",
+              color: "#475569",
+              padding: "8px 12px",
+              fontSize: 12,
+              fontWeight: 700,
+              cursor: "pointer",
+            }}
+          >
+            <RefreshCw
+              size={14}
+              className={metricsQuery.isFetching ? "animate-spin" : ""}
+            />
+            Atualizar
+          </button>
         </div>
 
-        {/* ── KPIs ── */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginBottom: 20 }}>
-        {[
-            { label: "Total de Execuções", value: MOCK_KPIS.totalExecucoes.toLocaleString("pt-BR"), delta: MOCK_KPIS.totalExecucoesDelta, iconBg: "#ede9fe", invert: false },
-            { label: "Pass Rate", value: `${MOCK_KPIS.passRate}%`, delta: MOCK_KPIS.passRateDelta, iconBg: "#dcfce7", invert: false },
-            { label: "Fail Rate", value: `${MOCK_KPIS.failRate}%`, delta: MOCK_KPIS.failRateDelta, iconBg: "#fee2e2", invert: true },
-            { label: "Defeitos Encontrados", value: MOCK_KPIS.defeitosEncontrados, delta: MOCK_KPIS.defeitosDelta, iconBg: "#ffedd5", invert: true },
-            { label: "Defeitos Críticos", value: MOCK_KPIS.defeitosCriticos, delta: MOCK_KPIS.defeitosCriticosDelta, iconBg: "#fef9c3", invert: true },
-            { label: "Módulos em Risco", value: MOCK_KPIS.modulosEmRisco, delta: null, iconBg: "#dbeafe", link: "Ver detalhes" },
-          ].map((kpi, i) => (
-            <div key={i} style={{ background: "white", borderRadius: 12, padding: "16px", boxShadow: "0 1px 4px rgba(0,0,0,0.06)" }}>
-              <div style={{ marginBottom: 10 }}>
-                <span style={{ fontSize: 14, color: "#6b7280", fontWeight: 600 }}>{kpi.label}</span>
-              </div>
-              <div style={{ fontSize: 28, fontWeight: 700, color: "#111827", marginBottom: 4 }}>{kpi.value}</div>
-              {kpi.delta !== null && kpi.delta !== undefined ? (
-                <Delta value={kpi.delta} invert={kpi.invert} />
-              ) : (
-                <span style={{ fontSize: 12, color: "#6366f1", fontWeight: 500, cursor: "pointer", display: "flex", alignItems: "center", gap: 2 }}>
-                  Ver detalhes <ChevronRight className="w-3 h-3" />
-                </span>
-              )}
-            </div>
-          ))}
-        </div>
-
-        {/* ── Insights Inteligentes ── */}
-        <div style={{ background: "white", borderRadius: 12, padding: "16px 20px", marginBottom: 20, boxShadow: "0 1px 4px rgba(0,0,0,0.06)" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <Sparkles className="w-4 h-4 text-indigo-500" />
-              <span style={{ fontWeight: 700, fontSize: 14, color: "#111827" }}>INSIGHTS INTELIGENTES</span>
-            </div>
-            <span style={{ fontSize: 12, color: "#6366f1", cursor: "pointer", display: "flex", alignItems: "center", gap: 2 }}>
-              Ver todos os insights <ChevronRight className="w-3 h-3" />
-            </span>
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 10 }}>
-            {MOCK_INSIGHTS.map((ins, i) => (
-              <div key={i} style={{ border: "1px solid #f3f4f6", borderRadius: 8, padding: "10px 12px", fontSize: 12, color: "#374151", lineHeight: 1.5 }}>
-                {ins.text.split(ins.highlight).map((part, j, arr) => (
-                  <span key={j}>{part}{j < arr.length - 1 && <strong style={{ color: ins.color }}>{ins.highlight}</strong>}</span>
+        <div
+          style={{
+            background: "white",
+            borderRadius: 12,
+            padding: 16,
+            marginBottom: 18,
+            display: "flex",
+            gap: 12,
+            alignItems: "flex-end",
+            flexWrap: "wrap",
+            boxShadow: "0 1px 3px rgba(15,23,42,0.08)",
+          }}
+        >
+          {[
+            {
+              label: "Cliente",
+              value: filterCliente,
+              options: clients ?? [],
+              onChange: (value: string) => {
+                setFilterCliente(value);
+                setFilterProjeto("");
+                setFilterSprint("");
+              },
+            },
+            {
+              label: "Projeto",
+              value: filterProjeto,
+              options: projects ?? [],
+              onChange: (value: string) => {
+                setFilterProjeto(value);
+                setFilterSprint("");
+              },
+            },
+            {
+              label: "Sprint",
+              value: filterSprint,
+              options: sprints ?? [],
+              onChange: setFilterSprint,
+            },
+          ].map(filter => (
+            <label
+              key={filter.label}
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: 5,
+                minWidth: 180,
+              }}
+            >
+              <span
+                style={{
+                  color: "#64748b",
+                  fontSize: 10,
+                  fontWeight: 800,
+                  textTransform: "uppercase",
+                  letterSpacing: ".05em",
+                }}
+              >
+                {filter.label}
+              </span>
+              <select
+                value={filter.value}
+                onChange={event => filter.onChange(event.target.value)}
+                style={{
+                  border: "1px solid #cbd5e1",
+                  borderRadius: 8,
+                  background: "white",
+                  padding: "8px 10px",
+                  color: "#334155",
+                  fontSize: 12,
+                }}
+              >
+                <option value="">Todos</option>
+                {filter.options.map(option => (
+                  <option key={option.id} value={option.id}>
+                    {option.name}
+                  </option>
                 ))}
-              </div>
-            ))}
-          </div>
+              </select>
+            </label>
+          ))}
+          {hasFilters && (
+            <button
+              onClick={clearFilters}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 5,
+                border: 0,
+                background: "transparent",
+                color: "#64748b",
+                padding: "9px 4px",
+                fontSize: 12,
+                cursor: "pointer",
+              }}
+            >
+              <X size={13} /> Limpar filtros
+            </button>
+          )}
         </div>
 
-        {/* ── Gráficos linha 1: Tendência + Pareto + Causas + Heatmap ── */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
-
-          {/* Tendência de Falhas */}
-          <div style={{ background: "white", borderRadius: 12, padding: "16px", boxShadow: "0 1px 4px rgba(0,0,0,0.06)" }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: "#374151", marginBottom: 12, textTransform: "uppercase", letterSpacing: "0.05em" }}>Tendência de Falhas</div>
-            <ResponsiveContainer width="100%" height={160}>
-              <AreaChart data={MOCK_TENDENCIA}>
-                <defs>
-                  <linearGradient id="gradFail" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#ef4444" stopOpacity={0.2} />
-                    <stop offset="95%" stopColor="#ef4444" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-                <XAxis dataKey="sprint" tick={{ fontSize: 10 }} />
-                <YAxis tick={{ fontSize: 10 }} unit="%" />
-                <Tooltip formatter={(v: any) => [`${v}%`, "Taxa de Falhas"]} />
-                <Area type="monotone" dataKey="taxa" stroke="#ef4444" fill="url(#gradFail)" strokeWidth={2}
-                  label={({ x, y, value, index }: any) => index === MOCK_TENDENCIA.length - 1 ?
-                    <text x={x} y={y - 8} fill="#ef4444" fontSize={11} fontWeight={700}>{value}%</text> : null} />
-              </AreaChart>
-            </ResponsiveContainer>
+        {metrics && !metrics.databaseAvailable && (
+          <div
+            style={{
+              display: "flex",
+              gap: 10,
+              alignItems: "center",
+              background: "#fff7ed",
+              color: "#9a3412",
+              border: "1px solid #fed7aa",
+              borderRadius: 10,
+              padding: 14,
+              marginBottom: 18,
+              fontSize: 13,
+            }}
+          >
+            <Database size={18} />
+            Configure o banco MySQL para começar a consolidar as execuções.
           </div>
+        )}
 
-          {/* Pareto de Módulos */}
-          <div style={{ background: "white", borderRadius: 12, padding: "16px", boxShadow: "0 1px 4px rgba(0,0,0,0.06)" }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: "#374151", marginBottom: 12, textTransform: "uppercase", letterSpacing: "0.05em" }}>Pareto de Módulos (Falhas)</div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {MOCK_PARETO.map((p, i) => (
-                <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11 }}>
-                  <span style={{ width: 70, color: "#374151", fontWeight: 500, flexShrink: 0 }}>{p.modulo}</span>
-                  <div style={{ flex: 1, background: "#f3f4f6", borderRadius: 4, height: 14, overflow: "hidden" }}>
-                    <div style={{ width: `${p.falhas}%`, height: "100%", background: i < 2 ? "#ef4444" : i < 4 ? "#6366f1" : "#3b82f6", borderRadius: 4 }} />
-                  </div>
-                  <span style={{ width: 30, color: "#6b7280", textAlign: "right" }}>{p.falhas}%</span>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(145px, 1fr))",
+            gap: 12,
+            marginBottom: 18,
+          }}
+        >
+          {cards.map(card => {
+            const Icon = card.icon;
+            return (
+              <div
+                key={card.label}
+                style={{
+                  background: "white",
+                  borderRadius: 12,
+                  padding: 16,
+                  boxShadow: "0 1px 3px rgba(15,23,42,0.08)",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    marginBottom: 13,
+                  }}
+                >
+                  <span
+                    style={{
+                      color: "#64748b",
+                      fontSize: 12,
+                      fontWeight: 700,
+                    }}
+                  >
+                    {card.label}
+                  </span>
+                  <span
+                    style={{
+                      display: "grid",
+                      placeItems: "center",
+                      width: 30,
+                      height: 30,
+                      borderRadius: 8,
+                      color: card.color,
+                      background: card.background,
+                    }}
+                  >
+                    <Icon size={16} />
+                  </span>
                 </div>
-              ))}
-            </div>
-          </div>
+                <div
+                  style={{
+                    color: "#0f172a",
+                    fontSize: 27,
+                    lineHeight: 1,
+                    fontWeight: 800,
+                  }}
+                >
+                  {card.value}
+                </div>
+                <div
+                  style={{ color: "#94a3b8", fontSize: 10, marginTop: 7 }}
+                >
+                  {card.detail}
+                </div>
+              </div>
+            );
+          })}
+        </div>
 
-          {/* Causas das Falhas */}
-          <div style={{ background: "white", borderRadius: 12, padding: "16px", boxShadow: "0 1px 4px rgba(0,0,0,0.06)" }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: "#374151", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.05em" }}>Causas das Falhas</div>
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <ResponsiveContainer width={120} height={120}>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "minmax(0, 2fr) minmax(280px, 1fr)",
+            gap: 14,
+            marginBottom: 14,
+          }}
+        >
+          <section
+            style={{
+              background: "white",
+              borderRadius: 12,
+              padding: 17,
+              boxShadow: "0 1px 3px rgba(15,23,42,0.08)",
+            }}
+          >
+            <h2
+              style={{
+                margin: "0 0 14px",
+                color: "#334155",
+                fontSize: 12,
+                textTransform: "uppercase",
+                letterSpacing: ".05em",
+              }}
+            >
+              Evolução por sprint
+            </h2>
+            {metrics?.trend.length ? (
+              <ResponsiveContainer width="100%" height={240}>
+                <AreaChart data={metrics.trend}>
+                  <defs>
+                    <linearGradient id="coverage" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#7c3aed" stopOpacity={0.25} />
+                      <stop offset="95%" stopColor="#7c3aed" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid stroke="#f1f5f9" strokeDasharray="3 3" />
+                  <XAxis dataKey="sprint" tick={{ fontSize: 10 }} />
+                  <YAxis domain={[0, 100]} tick={{ fontSize: 10 }} unit="%" />
+                  <Tooltip formatter={(value: number) => `${value}%`} />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                  <Area
+                    type="monotone"
+                    dataKey="coveragePercent"
+                    name="Cobertura"
+                    stroke="#7c3aed"
+                    fill="url(#coverage)"
+                    strokeWidth={2}
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="passRate"
+                    name="Pass Rate"
+                    stroke="#16a34a"
+                    fill="transparent"
+                    strokeWidth={2}
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="failRate"
+                    name="Fail Rate"
+                    stroke="#dc2626"
+                    fill="transparent"
+                    strokeWidth={2}
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            ) : (
+              <EmptyState />
+            )}
+          </section>
+
+          <section
+            style={{
+              background: "white",
+              borderRadius: 12,
+              padding: 17,
+              boxShadow: "0 1px 3px rgba(15,23,42,0.08)",
+            }}
+          >
+            <h2
+              style={{
+                margin: "0 0 14px",
+                color: "#334155",
+                fontSize: 12,
+                textTransform: "uppercase",
+                letterSpacing: ".05em",
+              }}
+            >
+              Resultados dos cenários
+            </h2>
+            {summary.totalScenarios > 0 ? (
+              <ResponsiveContainer width="100%" height={240}>
                 <PieChart>
-                  <Pie data={MOCK_CAUSAS} cx="50%" cy="50%" innerRadius={30} outerRadius={55} dataKey="value" paddingAngle={2}>
-                    {MOCK_CAUSAS.map((c, i) => <Cell key={i} fill={c.color} />)}
+                  <Pie
+                    data={metrics?.statusDistribution ?? []}
+                    dataKey="value"
+                    nameKey="status"
+                    innerRadius={58}
+                    outerRadius={87}
+                    paddingAngle={2}
+                  >
+                    {(metrics?.statusDistribution ?? []).map(item => (
+                      <Cell key={item.status} fill={item.color} />
+                    ))}
                   </Pie>
-                  <Tooltip formatter={(v: any, n: any, p: any) => [`${v} (${((v / totalCausas) * 100).toFixed(1)}%)`, p.payload.name]} />
+                  <Tooltip />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
                 </PieChart>
               </ResponsiveContainer>
-              <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 3 }}>
-                {MOCK_CAUSAS.slice(0, 6).map((c, i) => (
-                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 10 }}>
-                    <span style={{ width: 8, height: 8, borderRadius: "50%", background: c.color, flexShrink: 0 }} />
-                    <span style={{ color: "#374151", flex: 1 }}>{c.name}</span>
-                    <span style={{ color: "#6b7280" }}>{c.value}</span>
-                  </div>
-                ))}
-              </div>
+            ) : (
+              <EmptyState />
+            )}
+            <div
+              style={{
+                textAlign: "center",
+                color: "#64748b",
+                fontSize: 11,
+              }}
+            >
+              Erros de automação: {summary.automationErrorRate}%
             </div>
-            <div style={{ textAlign: "center", marginTop: 4, fontSize: 11, color: "#6b7280" }}>Total <strong>{totalCausas}</strong></div>
-          </div>
+          </section>
+        </div>
 
-          {/* Heatmap de Risco por Módulo */}
-          <div style={{ background: "white", borderRadius: 12, padding: "16px", boxShadow: "0 1px 4px rgba(0,0,0,0.06)" }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: "#374151", marginBottom: 10, textTransform: "uppercase", letterSpacing: "0.05em" }}>Heatmap de Risco por Módulo</div>
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10 }}>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1.15fr)",
+            gap: 14,
+          }}
+        >
+          <TableCard title="Risco por módulo">
+            {metrics?.modules.length ? (
+              <table style={tableStyle}>
                 <thead>
                   <tr>
-                    <th style={{ textAlign: "left", padding: "2px 4px", color: "#6b7280", fontWeight: 600 }}>Módulo</th>
-                    {MOCK_HEATMAP.sprints.map(s => <th key={s} style={{ padding: "2px 4px", color: "#6b7280", fontWeight: 600, textAlign: "center" }}>{s}</th>)}
+                    {["Módulo", "Cenários", "Pass Rate", "Falhas", "Risco"].map(
+                      heading => (
+                        <th key={heading} style={headerCellStyle}>
+                          {heading}
+                        </th>
+                      ),
+                    )}
                   </tr>
                 </thead>
                 <tbody>
-                  {MOCK_HEATMAP.modulos.map((mod, i) => (
-                    <tr key={i}>
-                      <td style={{ padding: "3px 4px", color: "#374151", fontWeight: 500, whiteSpace: "nowrap" }}>{mod}</td>
-                      {MOCK_HEATMAP.data[i].map((v, j) => (
-                        <td key={j} style={{ padding: "3px 4px", textAlign: "center" }}>
-                          <div style={{ width: 22, height: 18, borderRadius: 3, background: heatColor(v), margin: "0 auto" }} />
-                        </td>
-                      ))}
+                  {metrics.modules.map(module => (
+                    <tr key={module.moduleName}>
+                      <td style={cellStyle}>{module.moduleName}</td>
+                      <td style={cellStyle}>{module.total}</td>
+                      <td style={cellStyle}>{module.passRate}%</td>
+                      <td style={cellStyle}>{module.failed}</td>
+                      <td style={cellStyle}>
+                        <Badge value={module.risk} styles={RISK_STYLE} />
+                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-            </div>
-            <div style={{ display: "flex", gap: 8, marginTop: 8, fontSize: 10, flexWrap: "wrap" }}>
-              {[{ color: "#22c55e", label: "Baixo" }, { color: "#f59e0b", label: "Médio" }, { color: "#f97316", label: "Alto" }, { color: "#ef4444", label: "Crítico" }].map(l => (
-                <span key={l.label} style={{ display: "flex", alignItems: "center", gap: 3 }}>
-                  <span style={{ width: 10, height: 10, borderRadius: 2, background: l.color }} />
-                  <span style={{ color: "#6b7280" }}>{l.label}</span>
-                </span>
-              ))}
-            </div>
-          </div>
-        </div>
+            ) : (
+              <EmptyState />
+            )}
+          </TableCard>
 
-        {/* ── Gráficos linha 2: Gaps + Ranking + Eficiência ── */}
-        <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1.4fr 1fr", gap: 12 }}>
-
-          {/* Maiores Gaps */}
-          <div style={{ background: "white", borderRadius: 12, padding: "16px", boxShadow: "0 1px 4px rgba(0,0,0,0.06)" }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: "#374151", marginBottom: 12, textTransform: "uppercase", letterSpacing: "0.05em" }}>Maiores Gaps Identificados</div>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
-              <thead>
-                <tr style={{ borderBottom: "1px solid #f3f4f6" }}>
-                  {["Gap", "Módulo", "Ocorr.", "Impacto", "Tend.", "% Total"].map(h => (
-                    <th key={h} style={{ padding: "4px 6px", color: "#9ca3af", fontWeight: 600, textAlign: "left", fontSize: 10 }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {MOCK_GAPS.map((g, i) => (
-                  <tr key={i} style={{ borderBottom: "1px solid #f9fafb" }}>
-                    <td style={{ padding: "6px", color: "#374151" }}>
-                      <span style={{ color: "#9ca3af", marginRight: 4 }}>({g.rank})</span>{g.gap}
-                    </td>
-                    <td style={{ padding: "6px", color: "#6b7280" }}>{g.modulo}</td>
-                    <td style={{ padding: "6px", color: "#374151", fontWeight: 600 }}>{g.ocorrencias}</td>
-                    <td style={{ padding: "6px" }}>{impactoBadge(g.impacto)}</td>
-                    <td style={{ padding: "6px" }}><TendenciaIcon t={g.tendencia} /></td>
-                    <td style={{ padding: "6px", color: "#374151" }}>{g.pct}%</td>
+          <TableCard title="Execuções recentes">
+            {metrics?.recentExecutions.length ? (
+              <table style={tableStyle}>
+                <thead>
+                  <tr>
+                    {[
+                      "Execução",
+                      "Projeto / Sprint",
+                      "Status",
+                      "Cobertura",
+                      "Defeitos",
+                      "Evidência",
+                    ].map(heading => (
+                      <th key={heading} style={headerCellStyle}>
+                        {heading}
+                      </th>
+                    ))}
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          {/* Ranking de Funcionalidades */}
-          <div style={{ background: "white", borderRadius: 12, padding: "16px", boxShadow: "0 1px 4px rgba(0,0,0,0.06)" }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: "#374151", marginBottom: 12, textTransform: "uppercase", letterSpacing: "0.05em" }}>Ranking de Funcionalidades</div>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>
-              <thead>
-                <tr style={{ borderBottom: "1px solid #f3f4f6" }}>
-                  {["Funcionalidade", "Pass Rate", "Bugs", "Cobertura", "Risco"].map(h => (
-                    <th key={h} style={{ padding: "4px 6px", color: "#9ca3af", fontWeight: 600, textAlign: "left", fontSize: 10 }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {MOCK_RANKING.map((r, i) => (
-                  <tr key={i} style={{ borderBottom: "1px solid #f9fafb" }}>
-                    <td style={{ padding: "6px", color: "#374151", fontWeight: 500 }}>{r.func}</td>
-                    <td style={{ padding: "6px" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                        <div style={{ width: 50, background: "#f3f4f6", borderRadius: 4, height: 6, overflow: "hidden" }}>
-                          <div style={{ width: `${r.passRate}%`, height: "100%", background: r.passRate > 90 ? "#22c55e" : r.passRate > 75 ? "#f59e0b" : "#ef4444", borderRadius: 4 }} />
+                </thead>
+                <tbody>
+                  {metrics.recentExecutions.map(execution => (
+                    <tr key={execution.id}>
+                      <td style={cellStyle}>
+                        <strong style={{ color: "#334155", fontSize: 11 }}>
+                          {execution.externalExecutionId}
+                        </strong>
+                        <div style={{ color: "#94a3b8", fontSize: 9 }}>
+                          {formatDate(execution.finishedAt)}
                         </div>
-                        <span style={{ color: "#374151" }}>{r.passRate}%</span>
-                      </div>
-                    </td>
-                    <td style={{ padding: "6px", color: "#374151" }}>{r.bugs}</td>
-                    <td style={{ padding: "6px", color: "#374151" }}>{r.cobertura}%</td>
-                    <td style={{ padding: "6px" }}>{riscoBadge(r.risco)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          {/* Eficiência dos Testes */}
-          <div style={{ background: "white", borderRadius: 12, padding: "16px", boxShadow: "0 1px 4px rgba(0,0,0,0.06)" }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: "#374151", marginBottom: 12, textTransform: "uppercase", letterSpacing: "0.05em" }}>Eficiência dos Testes</div>
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", marginBottom: 12 }}>
-              {/* Gauge simplificado */}
-              <div style={{ position: "relative", width: 130, height: 80 }}>
-                <svg viewBox="0 0 100 60" width="130" height="75">
-                  <path d="M 10 50 A 40 40 0 0 1 90 50" fill="none" stroke="#f3f4f6" strokeWidth="10" strokeLinecap="round" />
-                  <path d="M 10 50 A 40 40 0 0 1 90 50" fill="none" stroke="#6366f1" strokeWidth="10" strokeLinecap="round"
-                    strokeDasharray={`${(MOCK_EFICIENCIA.geral / 100) * 125.6} 125.6`} />
-                  <text x="50" y="44" textAnchor="middle" fontSize="15" fontWeight="700" fill="#111827">{MOCK_EFICIENCIA.geral}%</text>
-                  <text x="50" y="55" textAnchor="middle" fontSize="7" fill="#6b7280">Eficiência Geral</text>
-                </svg>
-              </div>
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {[
-                { label: "Testes que nunca falham", count: MOCK_EFICIENCIA.nuncaFalham.count, pct: MOCK_EFICIENCIA.nuncaFalham.pct },
-                { label: "Testes redundantes", count: MOCK_EFICIENCIA.redundantes.count, pct: MOCK_EFICIENCIA.redundantes.pct },
-                { label: "Casos obsoletos", count: MOCK_EFICIENCIA.obsoletos.count, pct: MOCK_EFICIENCIA.obsoletos.pct },
-                { label: "Casos sem execução >90d", count: MOCK_EFICIENCIA.semExecucao.count, pct: MOCK_EFICIENCIA.semExecucao.pct },
-                { label: "Tempo médio por execução", count: MOCK_EFICIENCIA.tempoMedio, pct: null },
-              ].map((item, i) => (
-                <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 11 }}>
-                  <span style={{ color: "#374151" }}>{item.label}</span>
-                  <span style={{ fontWeight: 600, color: "#111827" }}>
-                    {item.count}{item.pct !== null ? ` (${item.pct}%)` : ""}
-                  </span>
-                </div>
-              ))}
-            </div>
-            <div style={{ marginTop: 12, textAlign: "center" }}>
-              <span style={{ fontSize: 12, color: "#6366f1", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 2 }}>
-                Ver oportunidades de melhoria <ChevronRight className="w-3 h-3" />
-              </span>
-            </div>
-          </div>
-        </div>
-
-        {/* ── Nota de rodapé ── */}
-        <div style={{ marginTop: 16, fontSize: 11, color: "#9ca3af", display: "flex", alignItems: "center", gap: 6 }}>
-          <span>ℹ️</span>
-          <span>Os dados apresentados são baseados nas execuções de testes realizadas no período selecionado e podem sofrer alterações conforme novas execuções forem realizadas.</span>
+                      </td>
+                      <td style={cellStyle}>
+                        {execution.projectName}
+                        <div style={{ color: "#94a3b8", fontSize: 9 }}>
+                          {execution.sprintName || "Sem sprint"}
+                        </div>
+                      </td>
+                      <td style={cellStyle}>
+                        <Badge
+                          value={execution.status}
+                          styles={STATUS_STYLE}
+                        />
+                      </td>
+                      <td style={cellStyle}>{execution.coveragePercent}%</td>
+                      <td style={cellStyle}>{execution.defectsFound}</td>
+                      <td style={cellStyle}>
+                        {execution.evidenceDocxUrl ? (
+                          <a
+                            href={execution.evidenceDocxUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            title="Baixar evidências"
+                            style={{ color: "#4f46e5" }}
+                          >
+                            <ExternalLink size={14} />
+                          </a>
+                        ) : (
+                          <span style={{ color: "#cbd5e1" }}>—</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <EmptyState />
+            )}
+          </TableCard>
         </div>
       </div>
     </AppLayout>
   );
 }
+
+function TableCard({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section
+      style={{
+        background: "white",
+        borderRadius: 12,
+        padding: 17,
+        overflowX: "auto",
+        boxShadow: "0 1px 3px rgba(15,23,42,0.08)",
+      }}
+    >
+      <h2
+        style={{
+          margin: "0 0 12px",
+          color: "#334155",
+          fontSize: 12,
+          textTransform: "uppercase",
+          letterSpacing: ".05em",
+        }}
+      >
+        {title}
+      </h2>
+      {children}
+    </section>
+  );
+}
+
+function EmptyState() {
+  return (
+    <div
+      style={{
+        minHeight: 150,
+        display: "grid",
+        placeItems: "center",
+        color: "#94a3b8",
+        fontSize: 12,
+        textAlign: "center",
+      }}
+    >
+      Nenhuma execução encontrada para os filtros selecionados.
+    </div>
+  );
+}
+
+const tableStyle: React.CSSProperties = {
+  width: "100%",
+  borderCollapse: "collapse",
+  fontSize: 11,
+};
+
+const headerCellStyle: React.CSSProperties = {
+  padding: "7px 6px",
+  color: "#94a3b8",
+  borderBottom: "1px solid #e2e8f0",
+  textAlign: "left",
+  fontSize: 9,
+  textTransform: "uppercase",
+  letterSpacing: ".04em",
+};
+
+const cellStyle: React.CSSProperties = {
+  padding: "9px 6px",
+  color: "#475569",
+  borderBottom: "1px solid #f1f5f9",
+  verticalAlign: "middle",
+};

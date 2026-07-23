@@ -1,7 +1,8 @@
-import { and, desc, eq, isNull, or } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, or } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { Checklist, InsertUser, QAPlanDocument, Sprint, TrailProgress, checklists, clients, projects, qaPlanDocuments, sprints, trailProgress, users } from "../drizzle/schema";
+import { Checklist, InsertUser, QAPlanDocument, Sprint, TrailProgress, checklists, clients, projects, qaPlanDocuments, sprints, testExecutions, testResults, trailProgress, users } from "../drizzle/schema";
 import { ENV } from "./_core/env";
+import type { NormalizedTestExecution } from "./testExecutionService";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
@@ -345,4 +346,374 @@ export async function deleteQAPlanDocument(id: number): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("DB unavailable");
   await db.delete(qaPlanDocuments).where(eq(qaPlanDocuments.id, id));
+}
+
+// ─── Execuções e resultados de QA ───────────────────────────────────────────
+export async function upsertTestExecution(
+  data: NormalizedTestExecution,
+): Promise<{ id: number; created: boolean }> {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+
+  let clientId = data.clientId;
+  let projectId = data.projectId;
+  let sprintId = data.sprintId;
+  let clientName = data.clientName;
+
+  if (!projectId) {
+    const projectRows = await db
+      .select()
+      .from(projects)
+      .where(eq(projects.name, data.projectName))
+      .limit(1);
+    const project = projectRows[0];
+    if (project) {
+      projectId = project.id;
+      clientId = clientId ?? project.clientId;
+    }
+  }
+  if (!clientName && clientId) {
+    const clientRows = await db
+      .select()
+      .from(clients)
+      .where(eq(clients.id, clientId))
+      .limit(1);
+    clientName = clientRows[0]?.name;
+  }
+  if (!sprintId && data.sprintName) {
+    const sprintCondition = projectId
+      ? and(
+          eq(sprints.name, data.sprintName),
+          eq(sprints.projectId, projectId),
+        )
+      : eq(sprints.name, data.sprintName);
+    const sprintRows = await db
+      .select()
+      .from(sprints)
+      .where(sprintCondition)
+      .limit(1);
+    sprintId = sprintRows[0]?.id;
+  }
+
+  const existingRows = await db
+    .select({ id: testExecutions.id })
+    .from(testExecutions)
+    .where(eq(testExecutions.externalExecutionId, data.externalExecutionId))
+    .limit(1);
+  const existingId = existingRows[0]?.id;
+
+  return db.transaction(async tx => {
+    const executionValues = {
+      externalExecutionId: data.externalExecutionId,
+      clientId: clientId ?? null,
+      projectId: projectId ?? null,
+      sprintId: sprintId ?? null,
+      clientName: clientName ?? null,
+      projectName: data.projectName,
+      sprintName: data.sprintName ?? null,
+      systemUrl: data.systemUrl ?? null,
+      status: data.status,
+      totalScenarios: data.totalScenarios,
+      passedScenarios: data.passedScenarios,
+      failedScenarios: data.failedScenarios,
+      blockedScenarios: data.blockedScenarios,
+      automationErrors: data.automationErrors,
+      coveragePercent: data.coveragePercent,
+      defectsFound: data.defectsFound,
+      criticalDefects: data.criticalDefects,
+      escapedDefects: data.escapedDefects,
+      evidenceDocxUrl: data.evidenceDocxUrl ?? null,
+      regressionBundleId: data.regressionBundleId ?? null,
+      startedAt: data.startedAt ?? null,
+      finishedAt: data.finishedAt ?? null,
+      rawPayload: data.rawPayload,
+    };
+
+    let executionId = existingId;
+    if (executionId) {
+      await tx
+        .update(testExecutions)
+        .set(executionValues)
+        .where(eq(testExecutions.id, executionId));
+      await tx
+        .delete(testResults)
+        .where(eq(testResults.executionId, executionId));
+    } else {
+      const [insertResult] = await tx
+        .insert(testExecutions)
+        .values(executionValues);
+      executionId = (insertResult as any).insertId as number;
+    }
+
+    if (data.results.length > 0) {
+      await tx.insert(testResults).values(
+        data.results.map(result => ({
+          executionId,
+          externalScenarioId: result.externalScenarioId,
+          title: result.title,
+          moduleName: result.moduleName ?? null,
+          gherkin: result.gherkin ?? null,
+          status: result.status,
+          risk: result.risk,
+          summary: result.summary ?? null,
+          realDefects: result.realDefects,
+          automationFailures: result.automationFailures,
+          durationMs: result.durationMs ?? null,
+          evidenceJson: result.evidenceJson,
+          failuresJson: result.failuresJson,
+          regressionCodeUrl: result.regressionCodeUrl ?? null,
+          executedAt: result.executedAt ?? null,
+        })),
+      );
+    }
+
+    return { id: executionId, created: !existingId };
+  });
+}
+
+export type DashboardMetricFilters = {
+  clientId?: number;
+  projectId?: number;
+  sprintId?: number;
+};
+
+export async function getDashboardMetrics(filters: DashboardMetricFilters) {
+  const db = await getDb();
+  if (!db) {
+    return {
+      databaseAvailable: false,
+      summary: {
+        totalExecutions: 0,
+        totalScenarios: 0,
+        coveragePercent: 0,
+        passRate: 0,
+        failRate: 0,
+        automationErrorRate: 0,
+        defectsFound: 0,
+        criticalDefects: 0,
+        dre: null as number | null,
+      },
+      statusDistribution: [],
+      trend: [],
+      modules: [],
+      recentExecutions: [],
+    };
+  }
+
+  const conditions = [];
+  if (filters.clientId) {
+    conditions.push(eq(testExecutions.clientId, filters.clientId));
+  }
+  if (filters.projectId) {
+    conditions.push(eq(testExecutions.projectId, filters.projectId));
+  }
+  if (filters.sprintId) {
+    conditions.push(eq(testExecutions.sprintId, filters.sprintId));
+  }
+  const baseQuery = db.select().from(testExecutions);
+  const executions =
+    conditions.length > 0
+      ? await baseQuery
+          .where(and(...conditions))
+          .orderBy(desc(testExecutions.finishedAt))
+          .limit(500)
+      : await baseQuery
+          .orderBy(desc(testExecutions.finishedAt))
+          .limit(500);
+
+  if (executions.length === 0) {
+    return {
+      databaseAvailable: true,
+      summary: {
+        totalExecutions: 0,
+        totalScenarios: 0,
+        coveragePercent: 0,
+        passRate: 0,
+        failRate: 0,
+        automationErrorRate: 0,
+        defectsFound: 0,
+        criticalDefects: 0,
+        dre: null as number | null,
+      },
+      statusDistribution: [
+        { status: "Passou", value: 0, color: "#22c55e" },
+        { status: "Falhou", value: 0, color: "#ef4444" },
+        { status: "Bloqueado", value: 0, color: "#f59e0b" },
+        { status: "Erro de automação", value: 0, color: "#64748b" },
+      ],
+      trend: [],
+      modules: [],
+      recentExecutions: [],
+    };
+  }
+
+  const executionIds = executions.map(execution => execution.id);
+  const results = await db
+    .select()
+    .from(testResults)
+    .where(inArray(testResults.executionId, executionIds));
+  const totalScenarios = executions.reduce(
+    (total, execution) => total + execution.totalScenarios,
+    0,
+  );
+  const passed = executions.reduce(
+    (total, execution) => total + execution.passedScenarios,
+    0,
+  );
+  const failed = executions.reduce(
+    (total, execution) => total + execution.failedScenarios,
+    0,
+  );
+  const blocked = executions.reduce(
+    (total, execution) => total + execution.blockedScenarios,
+    0,
+  );
+  const automationErrors = executions.reduce(
+    (total, execution) => total + execution.automationErrors,
+    0,
+  );
+  const defectsFound = executions.reduce(
+    (total, execution) => total + execution.defectsFound,
+    0,
+  );
+  const criticalDefects = executions.reduce(
+    (total, execution) => total + execution.criticalDefects,
+    0,
+  );
+  const escapedDefects = executions.reduce(
+    (total, execution) => total + execution.escapedDefects,
+    0,
+  );
+  const percent = (value: number, total: number) =>
+    total > 0 ? Math.round((value / total) * 1000) / 10 : 0;
+  const executedForCoverage = passed + failed;
+  const dreDenominator = defectsFound + escapedDefects;
+
+  const executionById = new Map(
+    executions.map(execution => [execution.id, execution]),
+  );
+  const moduleMap = new Map<
+    string,
+    { total: number; passed: number; failed: number; defects: number; critical: number }
+  >();
+  for (const result of results) {
+    const execution = executionById.get(result.executionId);
+    const moduleName =
+      result.moduleName || execution?.projectName || "Não informado";
+    const current = moduleMap.get(moduleName) ?? {
+      total: 0,
+      passed: 0,
+      failed: 0,
+      defects: 0,
+      critical: 0,
+    };
+    current.total += 1;
+    current.passed += result.status === "PASSOU" ? 1 : 0;
+    current.failed += result.status === "FALHOU" ? 1 : 0;
+    current.defects += result.realDefects;
+    current.critical += result.risk === "CRITICO" ? result.realDefects : 0;
+    moduleMap.set(moduleName, current);
+  }
+  const modules = Array.from(moduleMap.entries())
+    .map(([moduleName, values]) => {
+      const failRate = percent(values.failed, values.total);
+      const risk =
+        values.critical > 0 || failRate >= 40
+          ? "CRITICO"
+          : failRate >= 25
+            ? "ALTO"
+            : failRate >= 10
+              ? "MEDIO"
+              : "BAIXO";
+      return {
+        moduleName,
+        ...values,
+        passRate: percent(values.passed, values.total),
+        failRate,
+        risk,
+      };
+    })
+    .sort((left, right) => right.failRate - left.failRate)
+    .slice(0, 10);
+
+  const trendMap = new Map<
+    string,
+    { order: number; total: number; passed: number; failed: number; executed: number }
+  >();
+  for (const execution of [...executions].reverse()) {
+    const date = execution.finishedAt ?? execution.createdAt;
+    const label =
+      execution.sprintName ||
+      new Intl.DateTimeFormat("pt-BR", {
+        month: "short",
+        year: "2-digit",
+      }).format(date);
+    const current = trendMap.get(label) ?? {
+      order: date.getTime(),
+      total: 0,
+      passed: 0,
+      failed: 0,
+      executed: 0,
+    };
+    current.total += execution.totalScenarios;
+    current.passed += execution.passedScenarios;
+    current.failed += execution.failedScenarios;
+    current.executed +=
+      execution.passedScenarios + execution.failedScenarios;
+    current.order = Math.max(current.order, date.getTime());
+    trendMap.set(label, current);
+  }
+  const trend = Array.from(trendMap.entries())
+    .map(([sprint, values]) => ({
+      sprint,
+      order: values.order,
+      passRate: percent(values.passed, values.total),
+      failRate: percent(values.failed, values.total),
+      coveragePercent: percent(values.executed, values.total),
+    }))
+    .sort((left, right) => left.order - right.order)
+    .slice(-12)
+    .map(({ order: _order, ...item }) => item);
+
+  return {
+    databaseAvailable: true,
+    summary: {
+      totalExecutions: executions.length,
+      totalScenarios,
+      coveragePercent: percent(executedForCoverage, totalScenarios),
+      passRate: percent(passed, totalScenarios),
+      failRate: percent(failed, totalScenarios),
+      automationErrorRate: percent(automationErrors, totalScenarios),
+      defectsFound,
+      criticalDefects,
+      dre:
+        dreDenominator > 0
+          ? percent(defectsFound, dreDenominator)
+          : (null as number | null),
+    },
+    statusDistribution: [
+      { status: "Passou", value: passed, color: "#22c55e" },
+      { status: "Falhou", value: failed, color: "#ef4444" },
+      { status: "Bloqueado", value: blocked, color: "#f59e0b" },
+      {
+        status: "Erro de automação",
+        value: automationErrors,
+        color: "#64748b",
+      },
+    ],
+    trend,
+    modules,
+    recentExecutions: executions.slice(0, 10).map(execution => ({
+      id: execution.id,
+      externalExecutionId: execution.externalExecutionId,
+      projectName: execution.projectName,
+      sprintName: execution.sprintName,
+      status: execution.status,
+      totalScenarios: execution.totalScenarios,
+      coveragePercent: execution.coveragePercent,
+      defectsFound: execution.defectsFound,
+      finishedAt: execution.finishedAt ?? execution.createdAt,
+      evidenceDocxUrl: execution.evidenceDocxUrl,
+    })),
+  };
 }
