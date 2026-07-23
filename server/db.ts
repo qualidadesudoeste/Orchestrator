@@ -439,11 +439,14 @@ export async function upsertTestExecution(
       failedScenarios: data.failedScenarios,
       blockedScenarios: data.blockedScenarios,
       automationErrors: data.automationErrors,
+      flakyScenarios: data.flakyScenarios,
+      inconclusiveScenarios: data.inconclusiveScenarios,
       coveragePercent: data.coveragePercent,
       defectsFound: data.defectsFound,
       criticalDefects: data.criticalDefects,
       escapedDefects: data.escapedDefects,
       evidenceDocxUrl: data.evidenceDocxUrl ?? null,
+      reliabilityReportUrl: data.reliabilityReportUrl ?? null,
       regressionBundleId: data.regressionBundleId ?? null,
       startedAt: data.startedAt ?? null,
       finishedAt: data.finishedAt ?? null,
@@ -482,6 +485,12 @@ export async function upsertTestExecution(
           durationMs: result.durationMs ?? null,
           evidenceJson: result.evidenceJson,
           failuresJson: result.failuresJson,
+          reliabilityStatus: result.reliabilityStatus,
+          attempts: result.attempts,
+          passedAttempts: result.passedAttempts,
+          failedAttempts: result.failedAttempts,
+          automationErrorAttempts: result.automationErrorAttempts,
+          attemptsJson: result.attemptsJson,
           regressionCodeUrl: result.regressionCodeUrl ?? null,
           executedAt: result.executedAt ?? null,
         })),
@@ -794,6 +803,8 @@ export async function getDashboardMetrics(filters: DashboardMetricFilters) {
         coveragePercent: 0,
         passRate: 0,
         failRate: 0,
+        flakyRate: 0,
+        flakyScenarios: 0,
         automationErrorRate: 0,
         defectsFound: 0,
         criticalDefects: 0,
@@ -1019,6 +1030,8 @@ export async function getDashboardMetrics(filters: DashboardMetricFilters) {
         coveragePercent: 0,
         passRate: 0,
         failRate: 0,
+        flakyRate: 0,
+        flakyScenarios: 0,
         automationErrorRate: 0,
         defectsFound: 0,
         criticalDefects: 0,
@@ -1027,6 +1040,7 @@ export async function getDashboardMetrics(filters: DashboardMetricFilters) {
       statusDistribution: [
         { status: "Passou", value: 0, color: "#22c55e" },
         { status: "Falhou", value: 0, color: "#ef4444" },
+        { status: "Flaky", value: 0, color: "#8b5cf6" },
         { status: "Bloqueado", value: 0, color: "#f59e0b" },
         { status: "Erro de automação", value: 0, color: "#64748b" },
       ],
@@ -1063,6 +1077,10 @@ export async function getDashboardMetrics(filters: DashboardMetricFilters) {
     (total, execution) => total + execution.automationErrors,
     0,
   );
+  const flaky = executions.reduce(
+    (total, execution) => total + execution.flakyScenarios,
+    0,
+  );
   const defectsFound = executions.reduce(
     (total, execution) => total + execution.defectsFound,
     0,
@@ -1077,7 +1095,7 @@ export async function getDashboardMetrics(filters: DashboardMetricFilters) {
   );
   const percent = (value: number, total: number) =>
     total > 0 ? Math.round((value / total) * 1000) / 10 : 0;
-  const executedForCoverage = passed + failed;
+  const executedForCoverage = passed + failed + flaky;
   const dreDenominator = defectsFound + escapedDefects;
 
   const executionById = new Map(
@@ -1085,7 +1103,14 @@ export async function getDashboardMetrics(filters: DashboardMetricFilters) {
   );
   const moduleMap = new Map<
     string,
-    { total: number; passed: number; failed: number; defects: number; critical: number }
+    {
+      total: number;
+      passed: number;
+      failed: number;
+      flaky: number;
+      defects: number;
+      critical: number;
+    }
   >();
   for (const result of results) {
     const execution = executionById.get(result.executionId);
@@ -1095,12 +1120,14 @@ export async function getDashboardMetrics(filters: DashboardMetricFilters) {
       total: 0,
       passed: 0,
       failed: 0,
+      flaky: 0,
       defects: 0,
       critical: 0,
     };
     current.total += 1;
-    current.passed += result.status === "PASSOU" ? 1 : 0;
-    current.failed += result.status === "FALHOU" ? 1 : 0;
+    current.passed += result.reliabilityStatus === "ESTAVEL" ? 1 : 0;
+    current.failed += result.reliabilityStatus === "FALHA_REAL" ? 1 : 0;
+    current.flaky += result.reliabilityStatus === "FLAKY" ? 1 : 0;
     current.defects += result.realDefects;
     current.critical += result.risk === "CRITICO" ? result.realDefects : 0;
     moduleMap.set(moduleName, current);
@@ -1129,7 +1156,14 @@ export async function getDashboardMetrics(filters: DashboardMetricFilters) {
 
   const trendMap = new Map<
     string,
-    { order: number; total: number; passed: number; failed: number; executed: number }
+    {
+      order: number;
+      total: number;
+      passed: number;
+      failed: number;
+      flaky: number;
+      executed: number;
+    }
   >();
   for (const execution of [...executions].reverse()) {
     const date = execution.finishedAt ?? execution.createdAt;
@@ -1144,13 +1178,17 @@ export async function getDashboardMetrics(filters: DashboardMetricFilters) {
       total: 0,
       passed: 0,
       failed: 0,
+      flaky: 0,
       executed: 0,
     };
     current.total += execution.totalScenarios;
     current.passed += execution.passedScenarios;
     current.failed += execution.failedScenarios;
+    current.flaky += execution.flakyScenarios;
     current.executed +=
-      execution.passedScenarios + execution.failedScenarios;
+      execution.passedScenarios +
+      execution.failedScenarios +
+      execution.flakyScenarios;
     current.order = Math.max(current.order, date.getTime());
     trendMap.set(label, current);
   }
@@ -1160,6 +1198,7 @@ export async function getDashboardMetrics(filters: DashboardMetricFilters) {
       order: values.order,
       passRate: percent(values.passed, values.total),
       failRate: percent(values.failed, values.total),
+      flakyRate: percent(values.flaky, values.total),
       coveragePercent: percent(values.executed, values.total),
     }))
     .sort((left, right) => left.order - right.order)
@@ -1174,6 +1213,8 @@ export async function getDashboardMetrics(filters: DashboardMetricFilters) {
       coveragePercent: percent(executedForCoverage, totalScenarios),
       passRate: percent(passed, totalScenarios),
       failRate: percent(failed, totalScenarios),
+      flakyRate: percent(flaky, totalScenarios),
+      flakyScenarios: flaky,
       automationErrorRate: percent(automationErrors, totalScenarios),
       defectsFound,
       criticalDefects,
@@ -1185,6 +1226,7 @@ export async function getDashboardMetrics(filters: DashboardMetricFilters) {
     statusDistribution: [
       { status: "Passou", value: passed, color: "#22c55e" },
       { status: "Falhou", value: failed, color: "#ef4444" },
+      { status: "Flaky", value: flaky, color: "#8b5cf6" },
       { status: "Bloqueado", value: blocked, color: "#f59e0b" },
       {
         status: "Erro de automação",
@@ -1203,8 +1245,10 @@ export async function getDashboardMetrics(filters: DashboardMetricFilters) {
       totalScenarios: execution.totalScenarios,
       coveragePercent: execution.coveragePercent,
       defectsFound: execution.defectsFound,
+      flakyScenarios: execution.flakyScenarios,
       finishedAt: execution.finishedAt ?? execution.createdAt,
       evidenceDocxUrl: execution.evidenceDocxUrl,
+      reliabilityReportUrl: execution.reliabilityReportUrl,
     })),
     nonFunctional,
     defectCards: defectCardMetrics,

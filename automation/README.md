@@ -160,6 +160,32 @@ O painel **Cards de defeito para o SIG** mostra severidade, status, projeto,
 sprint e cenário. Use **Copiar** para levar o conteúdo direto ao SIG ou **.md**
 para baixar o arquivo.
 
+## Reteste, flaky tests e relatório de confiabilidade
+
+O agente registra a primeira tentativa de cada cenário. Quando a tentativa
+resulta em `FALHOU` ou `ERRO_AUTOMACAO`, ele restaura o estado inicial e executa
+uma única vez novamente. Cada resultado contém `resultado_teste.tentativas`,
+limitado a duas tentativas.
+
+O nó **Gerar Relatório de Confiabilidade** envia a execução para
+`POST /api/qa/reliability-reports` e classifica os cenários:
+
+- `ESTAVEL`: todas as tentativas passaram;
+- `FLAKY`: houve resultado aprovado e pelo menos uma tentativa diferente;
+- `FALHA_REAL`: todas as tentativas falharam funcionalmente;
+- `INCONCLUSIVO`: bloqueio ou erro de automação não permitiu confirmar o
+  comportamento.
+
+O relatório HTML **Extent QA — Relatório de Confiabilidade** mantém as falhas
+reais na lista principal e apresenta os testes flaky em uma seção separada.
+Somente `FALHA_REAL` entra no Fail Rate, na contagem de defeitos e na geração de
+cards Markdown. O Dashboard mostra Flaky Rate, quantidade por módulo e um link
+`HTML` nas execuções recentes.
+
+O relatório é nativo da stack Node.js/TypeScript. O projeto oficial
+[ExtentReports](https://github.com/extent-framework) mantém implementações para
+Java e .NET, sem adaptador oficial atual para Playwright/TypeScript.
+
 O Docker Compose define `N8N_BLOCK_ENV_ACCESS_IN_NODE=false` para permitir que
 os nós HTTP leiam somente as variáveis usadas pelo fluxo
 (`ORCHESTRATOR_API_URL` e `QA_AGENT_API_TOKEN`). Como workflows podem acessar

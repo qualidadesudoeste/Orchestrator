@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { classifyScenarioReliability } from "./reliabilityReportService";
 
 export type DefectSeverity = "BAIXO" | "MEDIO" | "ALTO" | "CRITICO";
 
@@ -190,7 +191,14 @@ export function generateDefectCards(payload: unknown): NormalizedDefectCard[] {
     const realFailures = array(
       observed.falhas_reais ?? result?.falhas_reais,
     );
-    if (status !== "FALHOU" || realFailures.length === 0) continue;
+    const reliability = classifyScenarioReliability(result);
+    if (
+      status !== "FALHOU" ||
+      realFailures.length === 0 ||
+      reliability.classification === "FLAKY"
+    ) {
+      continue;
+    }
 
     const scenarioId =
       text(result?.scenario_id ?? result?.id) ??

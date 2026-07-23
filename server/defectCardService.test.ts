@@ -76,6 +76,23 @@ describe("generateDefectCards", () => {
     expect(card.markdown).toContain("[REDACTED]");
   });
 
+  it("não cria defeito para cenário flaky", () => {
+    const cards = generateDefectCards({
+      execution_id: "exec-flaky",
+      resultados: [
+        {
+          scenario_id: "CT-FLAKY",
+          status: "FALHOU",
+          resultado_teste: {
+            tentativas: [{ status: "FALHOU" }, { status: "PASSOU" }],
+            falhas_reais: ["Falhou somente na primeira tentativa"],
+          },
+        },
+      ],
+    });
+    expect(cards).toHaveLength(0);
+  });
+
   it("exige execution_id", () => {
     expect(() => generateDefectCards({ resultados: [] })).toThrow(
       DefectCardValidationError,

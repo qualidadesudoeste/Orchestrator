@@ -81,7 +81,7 @@
     {
       "parameters": {
         "promptType": "define",
-        "text": "=Execute exatamente um cenário de teste usando obrigatoriamente as ferramentas do Playwright MCP.\n\nEXECUÇÃO: {{ $json.execution_id }}\nCENÁRIO: {{ $json.scenario_id }} — {{ $json.scenario_title }}\nPROJETO: {{ $json.projeto }}\nSPRINT: {{ $json.sprint }}\nSISTEMA AUTORIZADO: {{ $json.sistema_url }}\n\nGHERKIN:\n{{ $json.cenario }}\n\nEVIDÊNCIAS:\n- Capture obrigatoriamente uma screenshot ao final do cenário.\n- Em caso de falha, capture também o estado exato da falha.\n- Use caminhos absolutos: {{ $json.evidence_prefix }}-final.png e {{ $json.evidence_prefix }}-falha.png.\n- Informe somente evidências realmente geradas.\n\nCÓDIGO DE REGRESSÃO:\n- Quando a execução fornecer elementos confiáveis, gere um teste Playwright + TypeScript completo em codigo_regressao.\n- Importe test e expect de @playwright/test.\n- Use process.env.BASE_URL como URL configurável.\n- Use somente seletores semânticos: getByRole, getByLabel, getByText, getByPlaceholder, getByAltText, getByTitle ou getByTestId.\n- Nunca inclua senhas, tokens ou outros segredos.\n- Para BLOQUEADO ou ERRO_AUTOMACAO, retorne codigo_regressao como null.\n\nRetorne somente JSON válido, sem bloco Markdown, no formato: {\"status\":\"PASSOU|FALHOU|BLOQUEADO|ERRO_AUTOMACAO\",\"resumo\":\"\",\"passos\":[{\"descricao\":\"\",\"status\":\"PASSOU|FALHOU|NAO_EXECUTADO\",\"detalhe\":\"\"}],\"evidencias\":[{\"tipo\":\"screenshot\",\"caminho\":\"\",\"momento\":\"\"}],\"falhas_reais\":[],\"falhas_automacao\":[],\"codigo_regressao\":\"código TypeScript completo ou null\"}",
+        "text": "=Execute exatamente um cenário de teste usando obrigatoriamente as ferramentas do Playwright MCP.\n\nEXECUÇÃO: {{ $json.execution_id }}\nCENÁRIO: {{ $json.scenario_id }} — {{ $json.scenario_title }}\nPROJETO: {{ $json.projeto }}\nSPRINT: {{ $json.sprint }}\nSISTEMA AUTORIZADO: {{ $json.sistema_url }}\n\nGHERKIN:\n{{ $json.cenario }}\n\nRETESTE DE CONFIABILIDADE:\n- Registre a primeira execução em tentativas.\n- Se a primeira tentativa resultar em FALHOU ou ERRO_AUTOMACAO, restaure o estado inicial e execute exatamente mais uma vez.\n- Não faça uma terceira tentativa.\n- O status principal deve refletir a última tentativa.\n- Nunca transforme falha de infraestrutura, seletor ou automação em defeito funcional.\n\nEVIDÊNCIAS:\n- Capture obrigatoriamente uma screenshot ao final de cada tentativa.\n- Em caso de falha, capture também o estado exato da falha.\n- Use caminhos absolutos: {{ $json.evidence_prefix }}-tentativa-N-final.png e {{ $json.evidence_prefix }}-tentativa-N-falha.png.\n- Informe somente evidências realmente geradas.\n\nCÓDIGO DE REGRESSÃO:\n- Quando a execução fornecer elementos confiáveis, gere um teste Playwright + TypeScript completo em codigo_regressao.\n- Importe test e expect de @playwright/test.\n- Use process.env.BASE_URL como URL configurável.\n- Use somente seletores semânticos: getByRole, getByLabel, getByText, getByPlaceholder, getByAltText, getByTitle ou getByTestId.\n- Nunca inclua senhas, tokens ou outros segredos.\n- Para BLOQUEADO ou ERRO_AUTOMACAO, retorne codigo_regressao como null.\n\nRetorne somente JSON válido, sem bloco Markdown, no formato: {\"status\":\"PASSOU|FALHOU|BLOQUEADO|ERRO_AUTOMACAO\",\"resumo\":\"\",\"tentativas\":[{\"numero\":1,\"status\":\"PASSOU|FALHOU|BLOQUEADO|ERRO_AUTOMACAO\",\"resumo\":\"\",\"duration_ms\":0,\"evidencias\":[{\"tipo\":\"screenshot\",\"caminho\":\"\",\"momento\":\"\"}]}],\"passos\":[{\"descricao\":\"\",\"status\":\"PASSOU|FALHOU|NAO_EXECUTADO\",\"detalhe\":\"\"}],\"evidencias\":[{\"tipo\":\"screenshot\",\"caminho\":\"\",\"momento\":\"\"}],\"falhas_reais\":[],\"falhas_automacao\":[],\"codigo_regressao\":\"código TypeScript completo ou null\"}",
         "options": {
           "systemMessage": "Você é um agente de QA autônomo. Use seletores semânticos como role, label e texto visível. Nunca exponha credenciais. Restrinja-se ao sistema autorizado. Se uma ação falhar por instabilidade, tente somente mais uma vez e registre as duas tentativas. Não classifique falha de infraestrutura, seletor ou automação como defeito do sistema. Nunca invente evidências."
         }
@@ -143,7 +143,7 @@
     {
       "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "const origem = $('Loop Sobre Cenários').item.json;\nconst erro = $json.error;\nconst saida = $json.output;\nconst bruto = typeof saida === 'string' ? saida : JSON.stringify(saida ?? '');\nlet resultado;\n\nif (erro) {\n  resultado = {\n    status: 'ERRO_AUTOMACAO',\n    resumo: 'O agente não conseguiu executar o cenário.',\n    passos: [],\n    evidencias: [],\n    falhas_reais: [],\n    falhas_automacao: [typeof erro === 'string' ? erro : (erro.message || JSON.stringify(erro))]\n  };\n} else if (saida && typeof saida === 'object') {\n  resultado = saida;\n} else {\n  try {\n    const limpo = bruto.replace(/^```(?:json)?\\s*/i, '').replace(/\\s*```$/i, '').trim();\n    resultado = JSON.parse(limpo);\n  } catch {\n    resultado = {\n      status: 'ERRO_AUTOMACAO',\n      resumo: 'A resposta do agente não estava no formato JSON esperado.',\n      passos: [],\n      evidencias: [],\n      falhas_reais: [],\n      falhas_automacao: ['Resposta inválida do agente'],\n      resposta_original: bruto\n    };\n  }\n}\n\nconst permitidos = ['PASSOU', 'FALHOU', 'BLOQUEADO', 'ERRO_AUTOMACAO'];\nif (!permitidos.includes(resultado.status)) resultado.status = 'ERRO_AUTOMACAO';\n\nreturn {\n  json: {\n    ...origem,\n    status: resultado.status,\n    resultado_teste: resultado,\n    data_execucao: new Date().toISOString()\n  }\n};"
+        "jsCode": "const origem = $('Loop Sobre Cenários').item.json;\nconst erro = $json.error;\nconst saida = $json.output;\nconst bruto = typeof saida === 'string' ? saida : JSON.stringify(saida ?? '');\nlet resultado;\n\nif (erro) {\n  resultado = {\n    status: 'ERRO_AUTOMACAO',\n    resumo: 'O agente não conseguiu executar o cenário.',\n    passos: [],\n    evidencias: [],\n    falhas_reais: [],\n    falhas_automacao: [typeof erro === 'string' ? erro : (erro.message || JSON.stringify(erro))]\n  };\n} else if (saida && typeof saida === 'object') {\n  resultado = saida;\n} else {\n  try {\n    const limpo = bruto.replace(/^```(?:json)?\\s*/i, '').replace(/\\s*```$/i, '').trim();\n    resultado = JSON.parse(limpo);\n  } catch {\n    resultado = {\n      status: 'ERRO_AUTOMACAO',\n      resumo: 'A resposta do agente não estava no formato JSON esperado.',\n      passos: [],\n      evidencias: [],\n      falhas_reais: [],\n      falhas_automacao: ['Resposta inválida do agente'],\n      resposta_original: bruto\n    };\n  }\n}\n\nconst permitidos = ['PASSOU', 'FALHOU', 'BLOQUEADO', 'ERRO_AUTOMACAO'];\nif (!permitidos.includes(resultado.status)) resultado.status = 'ERRO_AUTOMACAO';\nif (!Array.isArray(resultado.tentativas) || resultado.tentativas.length === 0) {\n  resultado.tentativas = [{\n    numero: 1,\n    status: resultado.status,\n    resumo: resultado.resumo || '',\n    evidencias: Array.isArray(resultado.evidencias) ? resultado.evidencias : []\n  }];\n}\nresultado.tentativas = resultado.tentativas.slice(0, 2).map((tentativa, indice) => ({\n  numero: indice + 1,\n  status: permitidos.includes(tentativa?.status) ? tentativa.status : 'ERRO_AUTOMACAO',\n  resumo: tentativa?.resumo || '',\n  duration_ms: Number(tentativa?.duration_ms || 0),\n  evidencias: Array.isArray(tentativa?.evidencias) ? tentativa.evidencias : []\n}));\n\nreturn {\n  json: {\n    ...origem,\n    status: resultado.status,\n    resultado_teste: resultado,\n    data_execucao: new Date().toISOString()\n  }\n};"
       },
       "id": "formatar-resultado",
       "name": "Formatar Resultado",
@@ -242,7 +242,7 @@
       "name": "Registrar Execução",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1510, 340],
+      "position": [1760, 260],
       "onError": "continueRegularOutput"
     },
     {
@@ -270,7 +270,35 @@
       "name": "Gerar Cards Markdown",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1510, 500],
+      "position": [1760, 440],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.ORCHESTRATOR_API_URL + '/api/qa/reliability-reports' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.QA_AGENT_API_TOKEN }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "gerar-relatorio-confiabilidade",
+      "name": "Gerar Relatório de Confiabilidade",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1510, 340],
       "onError": "continueRegularOutput"
     }
   ],
@@ -302,6 +330,11 @@
     "Gerar Evidências DOCX": {
       "main": [[
         { "node": "Salvar Regressão Playwright", "type": "main", "index": 0 },
+        { "node": "Gerar Relatório de Confiabilidade", "type": "main", "index": 0 }
+      ]]
+    },
+    "Gerar Relatório de Confiabilidade": {
+      "main": [[
         { "node": "Registrar Execução", "type": "main", "index": 0 },
         { "node": "Gerar Cards Markdown", "type": "main", "index": 0 }
       ]]

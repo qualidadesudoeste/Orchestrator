@@ -1,3 +1,8 @@
+import {
+  classifyScenarioReliability,
+  type ReliabilityClassification,
+} from "./reliabilityReportService";
+
 export type ExecutionStatus =
   | "PASSOU"
   | "FALHOU"
@@ -19,6 +24,12 @@ export type NormalizedTestResult = {
   durationMs?: number;
   evidenceJson: string;
   failuresJson: string;
+  reliabilityStatus: ReliabilityClassification;
+  attempts: number;
+  passedAttempts: number;
+  failedAttempts: number;
+  automationErrorAttempts: number;
+  attemptsJson: string;
   regressionCodeUrl?: string;
   executedAt?: Date;
 };
@@ -38,11 +49,14 @@ export type NormalizedTestExecution = {
   failedScenarios: number;
   blockedScenarios: number;
   automationErrors: number;
+  flakyScenarios: number;
+  inconclusiveScenarios: number;
   coveragePercent: number;
   defectsFound: number;
   criticalDefects: number;
   escapedDefects: number;
   evidenceDocxUrl?: string;
+  reliabilityReportUrl?: string;
   regressionBundleId?: string;
   startedAt?: Date;
   finishedAt?: Date;
@@ -147,6 +161,7 @@ export function normalizeTestExecutionPayload(
       );
       const evidences = array(observed?.evidencias ?? item?.evidencias);
       const resultStatus = status(item?.status ?? observed?.status);
+      const reliability = classifyScenarioReliability(item);
       const resultRisk = risk(
         item?.risco ?? item?.risk ?? observed?.risco ?? observed?.risk,
       );
@@ -162,7 +177,10 @@ export function normalizeTestExecutionPayload(
         status: resultStatus,
         risk: resultRisk,
         summary: text(observed?.resumo ?? item?.resumo),
-        realDefects: realFailures.length,
+        realDefects:
+          reliability.classification === "FALHA_REAL"
+            ? realFailures.length
+            : 0,
         automationFailures: automationFailures.length,
         durationMs: optionalId(item?.duration_ms ?? item?.durationMs),
         evidenceJson: JSON.stringify(evidences),
@@ -170,6 +188,12 @@ export function normalizeTestExecutionPayload(
           real: realFailures,
           automation: automationFailures,
         }),
+        reliabilityStatus: reliability.classification,
+        attempts: reliability.attempts,
+        passedAttempts: reliability.passedAttempts,
+        failedAttempts: reliability.failedAttempts,
+        automationErrorAttempts: reliability.automationErrorAttempts,
+        attemptsJson: JSON.stringify(reliability.history),
         regressionCodeUrl:
           regressionUrls.get(scenarioId) ??
           text(item?.regression_code_url ?? observed?.regression_code_url),
@@ -181,15 +205,23 @@ export function normalizeTestExecutionPayload(
   );
 
   const counts = {
-    PASSOU: results.filter(item => item.status === "PASSOU").length,
-    FALHOU: results.filter(item => item.status === "FALHOU").length,
+    PASSOU: results.filter(item => item.reliabilityStatus === "ESTAVEL").length,
+    FALHOU: results.filter(
+      item => item.reliabilityStatus === "FALHA_REAL",
+    ).length,
     BLOQUEADO: results.filter(item => item.status === "BLOQUEADO").length,
     ERRO_AUTOMACAO: results.filter(
       item => item.status === "ERRO_AUTOMACAO",
     ).length,
   };
+  const flakyScenarios = results.filter(
+    item => item.reliabilityStatus === "FLAKY",
+  ).length;
+  const inconclusiveScenarios = results.filter(
+    item => item.reliabilityStatus === "INCONCLUSIVO",
+  ).length;
   const totalScenarios = results.length;
-  const executedScenarios = counts.PASSOU + counts.FALHOU;
+  const executedScenarios = counts.PASSOU + counts.FALHOU + flakyScenarios;
   const defectsFound = results.reduce(
     (total, result) => total + result.realDefects,
     0,
@@ -225,12 +257,21 @@ export function normalizeTestExecutionPayload(
       "Projeto não informado",
     sprintName: text((raw as any).sprint ?? (raw as any).sprint_name),
     systemUrl: text((raw as any).sistema_url ?? (raw as any).system_url),
-    status: status((raw as any).status_geral),
+    status:
+      counts.FALHOU > 0
+        ? "FALHOU"
+        : counts.BLOQUEADO > 0
+          ? "BLOQUEADO"
+          : counts.ERRO_AUTOMACAO > 0 || inconclusiveScenarios > 0
+            ? "ERRO_AUTOMACAO"
+            : "PASSOU",
     totalScenarios,
     passedScenarios: counts.PASSOU,
     failedScenarios: counts.FALHOU,
     blockedScenarios: counts.BLOQUEADO,
     automationErrors: counts.ERRO_AUTOMACAO,
+    flakyScenarios,
+    inconclusiveScenarios,
     coveragePercent:
       rawCoverage === undefined
         ? clampPercent((executedScenarios / totalScenarios) * 100)
@@ -240,6 +281,9 @@ export function normalizeTestExecutionPayload(
       integer((raw as any).critical_defects, criticalDefects),
     escapedDefects: integer((raw as any).escaped_defects),
     evidenceDocxUrl: text((raw as any).evidence_docx?.download_url),
+    reliabilityReportUrl: text(
+      (raw as any).reliability_report?.download_url,
+    ),
     regressionBundleId: text((raw as any).regression_code?.bundle_id),
     startedAt: optionalDate(
       (raw as any).inicio_processamento ?? (raw as any).started_at,

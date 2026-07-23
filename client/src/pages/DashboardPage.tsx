@@ -24,7 +24,6 @@ import {
   ClipboardCopy,
   Database,
   Download,
-  ExternalLink,
   FileWarning,
   Gauge,
   RefreshCw,
@@ -135,6 +134,8 @@ export default function DashboardPage() {
     coveragePercent: 0,
     passRate: 0,
     failRate: 0,
+    flakyRate: 0,
+    flakyScenarios: 0,
     automationErrorRate: 0,
     defectsFound: 0,
     criticalDefects: 0,
@@ -212,7 +213,7 @@ export default function DashboardPage() {
     {
       label: "Pass Rate",
       value: `${summary.passRate}%`,
-      detail: "Cenários aprovados",
+      detail: "Cenários estáveis",
       icon: CheckCircle2,
       color: "#15803d",
       background: "#dcfce7",
@@ -220,10 +221,18 @@ export default function DashboardPage() {
     {
       label: "Fail Rate",
       value: `${summary.failRate}%`,
-      detail: "Falhas funcionais",
+      detail: "Falhas reais confirmadas",
       icon: XCircle,
       color: "#b91c1c",
       background: "#fee2e2",
+    },
+    {
+      label: "Flaky Rate",
+      value: `${summary.flakyRate}%`,
+      detail: `${summary.flakyScenarios} cenários instáveis`,
+      icon: RefreshCw,
+      color: "#7c3aed",
+      background: "#ede9fe",
     },
     {
       label: "Defeitos encontrados",
@@ -601,6 +610,14 @@ export default function DashboardPage() {
                     fill="transparent"
                     strokeWidth={2}
                   />
+                  <Area
+                    type="monotone"
+                    dataKey="flakyRate"
+                    name="Flaky Rate"
+                    stroke="#8b5cf6"
+                    fill="transparent"
+                    strokeWidth={2}
+                  />
                 </AreaChart>
               </ResponsiveContainer>
             ) : (
@@ -674,7 +691,14 @@ export default function DashboardPage() {
               <table style={tableStyle}>
                 <thead>
                   <tr>
-                    {["Módulo", "Cenários", "Pass Rate", "Falhas", "Risco"].map(
+                    {[
+                      "Módulo",
+                      "Cenários",
+                      "Pass Rate",
+                      "Flaky",
+                      "Falhas",
+                      "Risco",
+                    ].map(
                       heading => (
                         <th key={heading} style={headerCellStyle}>
                           {heading}
@@ -689,6 +713,7 @@ export default function DashboardPage() {
                       <td style={cellStyle}>{module.moduleName}</td>
                       <td style={cellStyle}>{module.total}</td>
                       <td style={cellStyle}>{module.passRate}%</td>
+                      <td style={cellStyle}>{module.flaky}</td>
                       <td style={cellStyle}>{module.failed}</td>
                       <td style={cellStyle}>
                         <Badge value={module.risk} styles={RISK_STYLE} />
@@ -712,8 +737,9 @@ export default function DashboardPage() {
                       "Projeto / Sprint",
                       "Status",
                       "Cobertura",
+                      "Flaky",
                       "Defeitos",
-                      "Evidência",
+                      "Relatórios",
                     ].map(heading => (
                       <th key={heading} style={headerCellStyle}>
                         {heading}
@@ -745,18 +771,35 @@ export default function DashboardPage() {
                         />
                       </td>
                       <td style={cellStyle}>{execution.coveragePercent}%</td>
+                      <td style={cellStyle}>{execution.flakyScenarios}</td>
                       <td style={cellStyle}>{execution.defectsFound}</td>
                       <td style={cellStyle}>
-                        {execution.evidenceDocxUrl ? (
-                          <a
-                            href={execution.evidenceDocxUrl}
-                            target="_blank"
-                            rel="noreferrer"
-                            title="Baixar evidências"
-                            style={{ color: "#4f46e5" }}
-                          >
-                            <ExternalLink size={14} />
-                          </a>
+                        {execution.evidenceDocxUrl ||
+                        execution.reliabilityReportUrl ? (
+                          <div style={{ display: "flex", gap: 8 }}>
+                            {execution.evidenceDocxUrl && (
+                              <a
+                                href={execution.evidenceDocxUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                title="Baixar evidências DOCX"
+                                style={{ color: "#4f46e5", fontSize: 10 }}
+                              >
+                                DOCX
+                              </a>
+                            )}
+                            {execution.reliabilityReportUrl && (
+                              <a
+                                href={execution.reliabilityReportUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                title="Abrir relatório de confiabilidade"
+                                style={{ color: "#7c3aed", fontSize: 10 }}
+                              >
+                                HTML
+                              </a>
+                            )}
+                          </div>
                         ) : (
                           <span style={{ color: "#cbd5e1" }}>—</span>
                         )}

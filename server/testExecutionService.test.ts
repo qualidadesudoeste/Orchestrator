@@ -54,4 +54,33 @@ describe("normalizeTestExecutionPayload", () => {
       }),
     ).toThrowError(TestExecutionValidationError);
   });
+
+  it("retira flaky do total de falhas confiáveis", () => {
+    const execution = normalizeTestExecutionPayload({
+      execution_id: "exec-flaky",
+      resultados: [
+        {
+          scenario_id: "CT-001",
+          status: "PASSOU",
+          resultado_teste: {
+            tentativas: [{ status: "FALHOU" }, { status: "PASSOU" }],
+            falhas_reais: ["Falha transitória"],
+          },
+        },
+      ],
+    });
+    expect(execution).toMatchObject({
+      status: "PASSOU",
+      failedScenarios: 0,
+      flakyScenarios: 1,
+      defectsFound: 0,
+    });
+    expect(execution.results[0]).toMatchObject({
+      reliabilityStatus: "FLAKY",
+      attempts: 2,
+      failedAttempts: 1,
+      passedAttempts: 1,
+      realDefects: 0,
+    });
+  });
 });
