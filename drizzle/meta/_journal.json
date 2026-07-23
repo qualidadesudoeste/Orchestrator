@@ -43,6 +43,13 @@
       "when": 1784834545815,
       "tag": "0005_fancy_microchip",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "5",
+      "when": 1784835881751,
+      "tag": "0006_outgoing_tinkerer",
+      "breakpoints": true
     }
   ]
 }

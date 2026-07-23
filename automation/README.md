@@ -160,6 +160,22 @@ O painel **Cards de defeito para o SIG** mostra severidade, status, projeto,
 sprint e cenário. Use **Copiar** para levar o conteúdo direto ao SIG ou **.md**
 para baixar o arquivo.
 
+### Ciclo de vida dos cards
+
+Cada card possui um histórico permanente com data, responsável, origem e motivo
+da alteração. Os estados operacionais são:
+
+- `ABERTO`: defeito novo criado automaticamente pelo agente;
+- `COPIADO`: Markdown copiado pelo Dashboard para envio ao SIG;
+- `RESOLVIDO`: correção confirmada pela equipe;
+- `REABERTO`: problema voltou a ocorrer ou o reteste falhou;
+- `DESCARTADO`: card inválido, duplicado ou fora do escopo.
+
+O Dashboard oferece as ações **Resolver**, **Reabrir**, **Descartar** e
+**Histórico**. A aplicação valida as transições permitidas e impede alterações
+incoerentes, como mudar diretamente um card resolvido para aberto. Quando uma
+execução é reenviada pelo n8n, o estado operacional já registrado é preservado.
+
 ## Reteste, flaky tests e relatório de confiabilidade
 
 O agente registra a primeira tentativa de cada cenário. Quando a tentativa

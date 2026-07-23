@@ -91,3 +91,4 @@ workflow n8n estão documentados em
 - Cards Markdown de defeitos reais, com cópia e download pelo Dashboard: concluídos.
 - Reteste, classificação de flaky tests e relatório HTML de confiabilidade: concluídos.
 - Memória especialista persistente por projeto, sistema e sprint: concluída.
+- Ciclo de vida dos cards de defeito, com histórico e rastreabilidade: concluído.

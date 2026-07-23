@@ -22,6 +22,8 @@ import {
   deleteUser,
   updateLastSignedIn,
   getDashboardMetrics,
+  getDefectCardHistory,
+  updateDefectCardStatus,
 } from "./db";
 import {
   getTrailProgress,
@@ -36,6 +38,10 @@ import {
 } from "./db";
 import { invokeLLM } from "./_core/llm";
 import { storagePut } from "./storage";
+import {
+  DEFECT_CARD_STATUSES,
+  DefectCardTransitionError,
+} from "./defectCardLifecycleService";
 
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
   if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Acesso restrito ao Administrador." });
@@ -186,6 +192,46 @@ export const appRouter = router({
         sprintId: z.number().optional(),
       }))
       .query(async ({ input }) => getDashboardMetrics(input)),
+  }),
+  defectCards: router({
+    history: protectedProcedure
+      .input(z.object({ externalCardId: z.string().min(1).max(64) }))
+      .query(async ({ input }) =>
+        getDefectCardHistory(input.externalCardId.toUpperCase()),
+      ),
+    updateStatus: protectedProcedure
+      .input(z.object({
+        externalCardId: z.string().min(1).max(64),
+        status: z.enum(DEFECT_CARD_STATUSES),
+        reason: z.string().trim().max(1000).optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        try {
+          const card = await updateDefectCardStatus({
+            externalCardId: input.externalCardId.toUpperCase(),
+            status: input.status,
+            reason: input.reason,
+            changedById: ctx.user.id,
+            changedByName: ctx.user.name ?? ctx.user.username ?? "Usuário",
+            source: "USUARIO",
+          });
+          if (!card) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "Card de defeito não encontrado.",
+            });
+          }
+          return card;
+        } catch (error) {
+          if (error instanceof DefectCardTransitionError) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: error.message,
+            });
+          }
+          throw error;
+        }
+      }),
   }),
   checklists: router({
     get: protectedProcedure

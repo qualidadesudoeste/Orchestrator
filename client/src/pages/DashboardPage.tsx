@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import AppLayout from "@/components/AppLayout";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
@@ -27,10 +27,13 @@ import {
   Download,
   FileWarning,
   Gauge,
+  History,
   RefreshCw,
+  RotateCcw,
   ShieldAlert,
   ShieldCheck,
   Timer,
+  Trash2,
   X,
   XCircle,
 } from "lucide-react";
@@ -54,6 +57,8 @@ const STATUS_STYLE: Record<string, { background: string; color: string; label: s
   ABERTO: { background: "#fee2e2", color: "#b91c1c", label: "Aberto" },
   COPIADO: { background: "#e0f2fe", color: "#0369a1", label: "Copiado" },
   RESOLVIDO: { background: "#dcfce7", color: "#15803d", label: "Resolvido" },
+  REABERTO: { background: "#ffedd5", color: "#c2410c", label: "Reaberto" },
+  DESCARTADO: { background: "#f1f5f9", color: "#64748b", label: "Descartado" },
 };
 
 const RISK_STYLE: Record<string, { background: string; color: string; label: string }> = {
@@ -122,9 +127,11 @@ function formatDate(value: string | Date) {
 
 export default function DashboardPage() {
   const { isAuthenticated } = useAuth();
+  const utils = trpc.useUtils();
   const [filterCliente, setFilterCliente] = useState("");
   const [filterProjeto, setFilterProjeto] = useState("");
   const [filterSprint, setFilterSprint] = useState("");
+  const [historyCardId, setHistoryCardId] = useState("");
 
   const { data: clients } = trpc.clients.list.useQuery(undefined, {
     enabled: isAuthenticated,
@@ -148,6 +155,21 @@ export default function DashboardPage() {
       refetchInterval: 30_000,
     },
   );
+  const historyQuery = trpc.defectCards.history.useQuery(
+    { externalCardId: historyCardId },
+    { enabled: isAuthenticated && Boolean(historyCardId) },
+  );
+  const statusMutation = trpc.defectCards.updateStatus.useMutation({
+    onSuccess: async result => {
+      await Promise.all([
+        utils.dashboard.metrics.invalidate(),
+        utils.defectCards.history.invalidate({
+          externalCardId: result.externalCardId,
+        }),
+      ]);
+    },
+    onError: error => toast.error(error.message),
+  });
 
   const metrics = metricsQuery.data;
   const summary = metrics?.summary ?? {
@@ -184,6 +206,10 @@ export default function DashboardPage() {
       totalCards: 0,
       openCards: 0,
       criticalOpenCards: 0,
+      copiedCards: 0,
+      resolvedCards: 0,
+      reopenedCards: 0,
+      discardedCards: 0,
     },
     recentCards: [],
   };
@@ -205,13 +231,51 @@ export default function DashboardPage() {
     setFilterProjeto("");
     setFilterSprint("");
   };
-  const copyDefectCard = async (markdown: string) => {
+  const copyDefectCard = async (card: {
+    externalCardId: string;
+    markdown: string;
+    status: string;
+  }) => {
     try {
-      await navigator.clipboard.writeText(markdown);
+      await navigator.clipboard.writeText(card.markdown);
       toast.success("Card copiado para a área de transferência.");
     } catch {
       toast.error("Não foi possível copiar o card.");
+      return;
     }
+    if (card.status === "ABERTO" || card.status === "REABERTO") {
+      try {
+        await statusMutation.mutateAsync({
+          externalCardId: card.externalCardId,
+          status: "COPIADO",
+          reason: "Markdown copiado para envio ao SIG.",
+        });
+      } catch {
+        // O erro da atualização é exibido pelo callback da mutation.
+      }
+    }
+  };
+  const changeDefectCardStatus = (
+    externalCardId: string,
+    status: "RESOLVIDO" | "REABERTO" | "DESCARTADO",
+  ) => {
+    const action =
+      status === "RESOLVIDO"
+        ? "resolver"
+        : status === "REABERTO"
+          ? "reabrir"
+          : "descartar";
+    if (!window.confirm(`Deseja ${action} o card ${externalCardId}?`)) return;
+    statusMutation.mutate(
+      {
+        externalCardId,
+        status,
+        reason: `Card ${action === "resolver" ? "resolvido" : action === "reabrir" ? "reaberto" : "descartado"} pelo Dashboard.`,
+      },
+      {
+        onSuccess: () => toast.success(`Card atualizado para ${status.toLowerCase()}.`),
+      },
+    );
   };
   const downloadDefectCard = (cardId: string, markdown: string) => {
     const blob = new Blob([markdown], {
@@ -1220,8 +1284,9 @@ export default function DashboardPage() {
                   Cards de defeito para o SIG
                 </h2>
                 <div style={{ color: "#94a3b8", fontSize: 10, marginTop: 3 }}>
-                  {generatedDefectCards.summary.openCards} abertos ·{" "}
-                  {generatedDefectCards.summary.criticalOpenCards} críticos
+                  {generatedDefectCards.summary.openCards} ativos ·{" "}
+                  {generatedDefectCards.summary.resolvedCards} resolvidos ·{" "}
+                  {generatedDefectCards.summary.discardedCards} descartados
                 </div>
               </div>
             </div>
@@ -1251,7 +1316,8 @@ export default function DashboardPage() {
                 </thead>
                 <tbody>
                   {generatedDefectCards.recentCards.map(card => (
-                    <tr key={card.id}>
+                    <Fragment key={card.id}>
+                    <tr>
                       <td style={cellStyle}>
                         <strong style={{ color: "#334155", fontSize: 10 }}>
                           {card.externalCardId}
@@ -1276,17 +1342,72 @@ export default function DashboardPage() {
                         <Badge value={card.status} styles={STATUS_STYLE} />
                       </td>
                       <td style={cellStyle}>
-                        <div style={{ display: "flex", gap: 6 }}>
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                           <button
                             type="button"
-                            onClick={() => copyDefectCard(card.markdown)}
+                            onClick={() => copyDefectCard(card)}
                             title="Copiar Markdown para o SIG"
                             aria-label={`Copiar ${card.externalCardId}`}
                             style={actionButtonStyle}
+                            disabled={statusMutation.isPending}
                           >
                             <ClipboardCopy size={14} />
                             Copiar
                           </button>
+                          {["ABERTO", "COPIADO", "REABERTO"].includes(card.status) && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  changeDefectCardStatus(
+                                    card.externalCardId,
+                                    "RESOLVIDO",
+                                  )
+                                }
+                                title="Marcar card como resolvido"
+                                aria-label={`Resolver ${card.externalCardId}`}
+                                style={actionButtonStyle}
+                                disabled={statusMutation.isPending}
+                              >
+                                <CheckCircle2 size={14} />
+                                Resolver
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  changeDefectCardStatus(
+                                    card.externalCardId,
+                                    "DESCARTADO",
+                                  )
+                                }
+                                title="Descartar card"
+                                aria-label={`Descartar ${card.externalCardId}`}
+                                style={actionButtonStyle}
+                                disabled={statusMutation.isPending}
+                              >
+                                <Trash2 size={14} />
+                                Descartar
+                              </button>
+                            </>
+                          )}
+                          {["RESOLVIDO", "DESCARTADO"].includes(card.status) && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                changeDefectCardStatus(
+                                  card.externalCardId,
+                                  "REABERTO",
+                                )
+                              }
+                              title="Reabrir card"
+                              aria-label={`Reabrir ${card.externalCardId}`}
+                              style={actionButtonStyle}
+                              disabled={statusMutation.isPending}
+                            >
+                              <RotateCcw size={14} />
+                              Reabrir
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() =>
@@ -1302,9 +1423,83 @@ export default function DashboardPage() {
                             <Download size={14} />
                             .md
                           </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setHistoryCardId(current =>
+                                current === card.externalCardId
+                                  ? ""
+                                  : card.externalCardId,
+                              )
+                            }
+                            title="Ver histórico do card"
+                            aria-label={`Histórico ${card.externalCardId}`}
+                            style={actionButtonStyle}
+                          >
+                            <History size={14} />
+                            Histórico
+                          </button>
                         </div>
                       </td>
                     </tr>
+                    {historyCardId === card.externalCardId && (
+                      <tr>
+                        <td
+                          colSpan={6}
+                          style={{
+                            ...cellStyle,
+                            background: "#f8fafc",
+                            padding: "12px 16px",
+                          }}
+                        >
+                          <strong style={{ color: "#334155", fontSize: 11 }}>
+                            Histórico do card
+                          </strong>
+                          {historyQuery.isLoading ? (
+                            <div style={{ color: "#64748b", fontSize: 10, marginTop: 8 }}>
+                              Carregando histórico...
+                            </div>
+                          ) : historyQuery.data?.length ? (
+                            <div
+                              style={{
+                                display: "grid",
+                                gap: 7,
+                                marginTop: 8,
+                              }}
+                            >
+                              {historyQuery.data.map(event => (
+                                <div
+                                  key={event.id}
+                                  style={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: 8,
+                                    flexWrap: "wrap",
+                                    color: "#64748b",
+                                    fontSize: 10,
+                                  }}
+                                >
+                                  <Badge value={event.toStatus} styles={STATUS_STYLE} />
+                                  <span>{formatDate(event.createdAt)}</span>
+                                  <span>
+                                    {event.changedByName ||
+                                      (event.source === "AGENTE"
+                                        ? "Agente QA"
+                                        : "Sistema")}
+                                  </span>
+                                  {event.reason && <span>— {event.reason}</span>}
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div style={{ color: "#64748b", fontSize: 10, marginTop: 8 }}>
+                              Nenhum evento registrado.
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                    </Fragment>
                   ))}
                 </tbody>
               </table>

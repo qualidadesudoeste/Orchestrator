@@ -10,6 +10,7 @@ import {
   TrailProgress,
   checklists,
   clients,
+  defectCardHistory,
   defectCards,
   nonFunctionalFindings,
   nonFunctionalRuns,
@@ -25,6 +26,10 @@ import {
 import { ENV } from "./_core/env";
 import type { AgentMemoryLearning } from "./agentMemoryService";
 import type { NormalizedDefectCard } from "./defectCardService";
+import {
+  assertDefectCardTransition,
+  type DefectCardStatus,
+} from "./defectCardLifecycleService";
 import type { NormalizedNonFunctionalRun } from "./nonFunctionalService";
 import type { NormalizedTestExecution } from "./testExecutionService";
 
@@ -699,6 +704,20 @@ export async function replaceDefectCards(
     if (resolvedCards.length > 0) {
       await tx.insert(defectCards).values(resolvedCards);
     }
+    const newCards = resolvedCards.filter(
+      card => !statusByExternalId.has(card.externalCardId),
+    );
+    if (newCards.length > 0) {
+      await tx.insert(defectCardHistory).values(
+        newCards.map(card => ({
+          externalCardId: card.externalCardId,
+          fromStatus: null,
+          toStatus: "ABERTO" as const,
+          source: "AGENTE" as const,
+          reason: "Card criado automaticamente após falha funcional real.",
+        })),
+      );
+    }
   });
 
   if (cards.length === 0) return [];
@@ -720,6 +739,60 @@ export async function getDefectCardByExternalId(externalCardId: string) {
     .where(eq(defectCards.externalCardId, externalCardId))
     .limit(1);
   return rows[0] ?? null;
+}
+
+export async function updateDefectCardStatus(input: {
+  externalCardId: string;
+  status: DefectCardStatus;
+  reason?: string;
+  changedById?: number;
+  changedByName?: string;
+  source?: "AGENTE" | "USUARIO" | "SISTEMA";
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+
+  return db.transaction(async tx => {
+    const rows = await tx
+      .select()
+      .from(defectCards)
+      .where(eq(defectCards.externalCardId, input.externalCardId))
+      .limit(1);
+    const card = rows[0];
+    if (!card) return null;
+
+    const currentStatus = card.status as DefectCardStatus;
+    assertDefectCardTransition(currentStatus, input.status);
+    if (currentStatus === input.status) {
+      return { ...card, changed: false };
+    }
+
+    await tx
+      .update(defectCards)
+      .set({ status: input.status })
+      .where(eq(defectCards.id, card.id));
+    await tx.insert(defectCardHistory).values({
+      externalCardId: card.externalCardId,
+      fromStatus: currentStatus,
+      toStatus: input.status,
+      source: input.source ?? "USUARIO",
+      reason: input.reason?.trim().slice(0, 1000) || null,
+      changedById: input.changedById ?? null,
+      changedByName: input.changedByName?.trim().slice(0, 255) || null,
+    });
+
+    return { ...card, status: input.status, changed: true };
+  });
+}
+
+export async function getDefectCardHistory(externalCardId: string) {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  return db
+    .select()
+    .from(defectCardHistory)
+    .where(eq(defectCardHistory.externalCardId, externalCardId))
+    .orderBy(desc(defectCardHistory.createdAt), desc(defectCardHistory.id));
 }
 
 export async function getAgentMemories(scopeKey: string, limit = 30) {
@@ -917,6 +990,10 @@ function emptyDefectCardMetrics() {
       totalCards: 0,
       openCards: 0,
       criticalOpenCards: 0,
+      copiedCards: 0,
+      resolvedCards: 0,
+      reopenedCards: 0,
+      discardedCards: 0,
     },
     recentCards: [] as Array<{
       id: number;
@@ -928,7 +1005,12 @@ function emptyDefectCardMetrics() {
       scenarioTitle: string;
       title: string;
       severity: "BAIXO" | "MEDIO" | "ALTO" | "CRITICO";
-      status: "ABERTO" | "COPIADO" | "RESOLVIDO";
+      status:
+        | "ABERTO"
+        | "COPIADO"
+        | "RESOLVIDO"
+        | "REABERTO"
+        | "DESCARTADO";
       markdown: string;
       createdAt: Date;
     }>,
@@ -1174,10 +1256,18 @@ export async function getDashboardMetrics(filters: DashboardMetricFilters) {
   const defectCardMetrics = {
     summary: {
       totalCards: defectCardRows.length,
-      openCards: defectCardRows.filter(card => card.status === "ABERTO").length,
-      criticalOpenCards: defectCardRows.filter(
-        card => card.status === "ABERTO" && card.severity === "CRITICO",
+      openCards: defectCardRows.filter(card =>
+        ["ABERTO", "COPIADO", "REABERTO"].includes(card.status),
       ).length,
+      criticalOpenCards: defectCardRows.filter(
+        card =>
+          ["ABERTO", "COPIADO", "REABERTO"].includes(card.status) &&
+          card.severity === "CRITICO",
+      ).length,
+      copiedCards: defectCardRows.filter(card => card.status === "COPIADO").length,
+      resolvedCards: defectCardRows.filter(card => card.status === "RESOLVIDO").length,
+      reopenedCards: defectCardRows.filter(card => card.status === "REABERTO").length,
+      discardedCards: defectCardRows.filter(card => card.status === "DESCARTADO").length,
     },
     recentCards: defectCardRows.slice(0, 20).map(card => ({
       id: card.id,

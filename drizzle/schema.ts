@@ -262,7 +262,13 @@ export const defectCards = mysqlTable("defect_cards", {
   scenarioTitle: varchar("scenarioTitle", { length: 500 }).notNull(),
   title: varchar("title", { length: 500 }).notNull(),
   severity: mysqlEnum("severity", ["BAIXO", "MEDIO", "ALTO", "CRITICO"]).notNull(),
-  status: mysqlEnum("status", ["ABERTO", "COPIADO", "RESOLVIDO"]).default("ABERTO").notNull(),
+  status: mysqlEnum("status", [
+    "ABERTO",
+    "COPIADO",
+    "RESOLVIDO",
+    "REABERTO",
+    "DESCARTADO",
+  ]).default("ABERTO").notNull(),
   summary: text("summary").notNull(),
   expectedResult: text("expectedResult"),
   actualResult: text("actualResult").notNull(),
@@ -283,6 +289,37 @@ export const defectCards = mysqlTable("defect_cards", {
 
 export type DefectCard = typeof defectCards.$inferSelect;
 export type InsertDefectCard = typeof defectCards.$inferInsert;
+
+export const defectCardHistory = mysqlTable("defect_card_history", {
+  id: int("id").autoincrement().primaryKey(),
+  externalCardId: varchar("externalCardId", { length: 64 }).notNull(),
+  fromStatus: mysqlEnum("fromStatus", [
+    "ABERTO",
+    "COPIADO",
+    "RESOLVIDO",
+    "REABERTO",
+    "DESCARTADO",
+  ]),
+  toStatus: mysqlEnum("toStatus", [
+    "ABERTO",
+    "COPIADO",
+    "RESOLVIDO",
+    "REABERTO",
+    "DESCARTADO",
+  ]).notNull(),
+  source: mysqlEnum("source", ["AGENTE", "USUARIO", "SISTEMA"]).notNull(),
+  reason: varchar("reason", { length: 1000 }),
+  changedById: int("changedById"),
+  changedByName: varchar("changedByName", { length: 255 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, table => ({
+  cardIndex: index("defect_card_history_card_idx").on(table.externalCardId),
+  statusIndex: index("defect_card_history_status_idx").on(table.toStatus),
+  createdAtIndex: index("defect_card_history_created_idx").on(table.createdAt),
+}));
+
+export type DefectCardHistory = typeof defectCardHistory.$inferSelect;
+export type InsertDefectCardHistory = typeof defectCardHistory.$inferInsert;
 
 // ─── Memória persistente do Agente QA ───────────────────────────────────────
 export const qaAgentMemories = mysqlTable("qa_agent_memories", {
