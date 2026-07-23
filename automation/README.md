@@ -128,6 +128,21 @@ Em 22/07/2026, o workflow de diagnóstico foi executado com sucesso no n8n 2.31.
 
 Em 22/07/2026, o workflow principal separou dois cenários Gherkin, processou ambos sequencialmente e consolidou os dois resultados. Como a API OpenAI estava sem quota, cada item foi corretamente classificado como `ERRO_AUTOMACAO` e o lote continuou até o fim. No diagnóstico sem IA, os dois cenários chamaram o Playwright MCP e foram aprovados com dois snapshots independentes.
 
+## Código de regressão Playwright
+
+Depois de gerar o DOCX, o workflow envia os códigos TypeScript produzidos pelo
+agente para `POST /api/qa/regression-code`. O Orchestrator:
+
+- aceita arquivos `.spec.ts` e `.test.ts`;
+- exige importação de `@playwright/test`;
+- bloqueia `page.locator`, XPath e outros seletores frágeis;
+- limita quantidade e tamanho dos arquivos;
+- salva o código sem executá-lo;
+- devolve links assinados válidos por sete dias.
+
+Se nenhum código confiável for gerado — por exemplo, em bloqueio de quota — o
+nó registra o erro e preserva o relatório DOCX já criado.
+
 ## Resultado validado do gerador DOCX
 
 O gerador produziu um relatório com dois cenários e duas screenshots incorporadas. A auditoria estrutural confirmou página Letter, margens de 1 polegada, tabelas com geometria fixa e zero achados de acessibilidade. A renderização automática por LibreOffice depende da instalação local desse aplicativo.

@@ -10,6 +10,7 @@ import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import { storagePut } from "../storage";
 import { registerEvidenceDocxRoutes } from "../evidenceDocxRoutes";
+import { registerRegressionCodeRoutes } from "../regressionCodeRoutes";
 import { sdk } from "./sdk";
 import { COOKIE_NAME } from "@shared/const";
 import cookie from "cookie";
@@ -88,6 +89,7 @@ async function startServer() {
   registerStorageProxy(app);
   registerOAuthRoutes(app);
   registerEvidenceDocxRoutes(app);
+  registerRegressionCodeRoutes(app);
 
   // ── Upload de imagens para evidências de teste ──────────────────────────────
   app.post("/api/qa-upload", async (req, res) => {

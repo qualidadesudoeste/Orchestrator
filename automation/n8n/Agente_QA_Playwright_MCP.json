@@ -81,7 +81,7 @@
     {
       "parameters": {
         "promptType": "define",
-        "text": "=Execute exatamente um cenário de teste usando obrigatoriamente as ferramentas do Playwright MCP.\n\nEXECUÇÃO: {{ $json.execution_id }}\nCENÁRIO: {{ $json.scenario_id }} — {{ $json.scenario_title }}\nPROJETO: {{ $json.projeto }}\nSPRINT: {{ $json.sprint }}\nSISTEMA AUTORIZADO: {{ $json.sistema_url }}\n\nGHERKIN:\n{{ $json.cenario }}\n\nEVIDÊNCIAS:\n- Capture obrigatoriamente uma screenshot ao final do cenário.\n- Em caso de falha, capture também o estado exato da falha.\n- Use caminhos absolutos: {{ $json.evidence_prefix }}-final.png e {{ $json.evidence_prefix }}-falha.png.\n- Informe somente evidências realmente geradas.\n\nRetorne somente JSON válido, sem bloco Markdown, no formato: {\"status\":\"PASSOU|FALHOU|BLOQUEADO|ERRO_AUTOMACAO\",\"resumo\":\"\",\"passos\":[{\"descricao\":\"\",\"status\":\"PASSOU|FALHOU|NAO_EXECUTADO\",\"detalhe\":\"\"}],\"evidencias\":[{\"tipo\":\"screenshot\",\"caminho\":\"\",\"momento\":\"\"}],\"falhas_reais\":[],\"falhas_automacao\":[]}",
+        "text": "=Execute exatamente um cenário de teste usando obrigatoriamente as ferramentas do Playwright MCP.\n\nEXECUÇÃO: {{ $json.execution_id }}\nCENÁRIO: {{ $json.scenario_id }} — {{ $json.scenario_title }}\nPROJETO: {{ $json.projeto }}\nSPRINT: {{ $json.sprint }}\nSISTEMA AUTORIZADO: {{ $json.sistema_url }}\n\nGHERKIN:\n{{ $json.cenario }}\n\nEVIDÊNCIAS:\n- Capture obrigatoriamente uma screenshot ao final do cenário.\n- Em caso de falha, capture também o estado exato da falha.\n- Use caminhos absolutos: {{ $json.evidence_prefix }}-final.png e {{ $json.evidence_prefix }}-falha.png.\n- Informe somente evidências realmente geradas.\n\nCÓDIGO DE REGRESSÃO:\n- Quando a execução fornecer elementos confiáveis, gere um teste Playwright + TypeScript completo em codigo_regressao.\n- Importe test e expect de @playwright/test.\n- Use process.env.BASE_URL como URL configurável.\n- Use somente seletores semânticos: getByRole, getByLabel, getByText, getByPlaceholder, getByAltText, getByTitle ou getByTestId.\n- Nunca inclua senhas, tokens ou outros segredos.\n- Para BLOQUEADO ou ERRO_AUTOMACAO, retorne codigo_regressao como null.\n\nRetorne somente JSON válido, sem bloco Markdown, no formato: {\"status\":\"PASSOU|FALHOU|BLOQUEADO|ERRO_AUTOMACAO\",\"resumo\":\"\",\"passos\":[{\"descricao\":\"\",\"status\":\"PASSOU|FALHOU|NAO_EXECUTADO\",\"detalhe\":\"\"}],\"evidencias\":[{\"tipo\":\"screenshot\",\"caminho\":\"\",\"momento\":\"\"}],\"falhas_reais\":[],\"falhas_automacao\":[],\"codigo_regressao\":\"código TypeScript completo ou null\"}",
         "options": {
           "systemMessage": "Você é um agente de QA autônomo. Use seletores semânticos como role, label e texto visível. Nunca exponha credenciais. Restrinja-se ao sistema autorizado. Se uma ação falhar por instabilidade, tente somente mais uma vez e registre as duas tentativas. Não classifique falha de infraestrutura, seletor ou automação como defeito do sistema. Nunca invente evidências."
         }
@@ -188,6 +188,34 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [1270, 180]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.ORCHESTRATOR_API_URL + '/api/qa/regression-code' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.QA_AGENT_API_TOKEN }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "salvar-regressao-playwright",
+      "name": "Salvar Regressão Playwright",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1510, 180],
+      "onError": "continueRegularOutput"
     }
   ],
   "connections": {
@@ -214,6 +242,9 @@
     },
     "Consolidar Execução": {
       "main": [[{ "node": "Gerar Evidências DOCX", "type": "main", "index": 0 }]]
+    },
+    "Gerar Evidências DOCX": {
+      "main": [[{ "node": "Salvar Regressão Playwright", "type": "main", "index": 0 }]]
     },
     "GPT-4o": {
       "ai_languageModel": [[{ "node": "Agente QA", "type": "ai_languageModel", "index": 0 }]]
