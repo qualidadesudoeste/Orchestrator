@@ -45,6 +45,22 @@ Configure o monitor para consultar `/readyz` a cada minuto e alertar após três
 falhas consecutivas. Colete stdout/stderr do container em uma ferramenta com
 retenção e acesso restrito.
 
+## Preflight de liberação
+
+Execute antes de cada publicação:
+
+```powershell
+node .\automation\production\release-preflight.cjs `
+  --base-url https://qa.seudominio.com.br `
+  --env-file .env.production `
+  --image orchestrator-platform:VERSAO
+```
+
+O comando grava um relatório JSON em `artifacts/release`. Somente o resultado
+`GO` autoriza a publicação. `ATENCAO` indica verificações puladas e `NO_GO`
+indica falha. Complete também o
+[`RELEASE_CHECKLIST.md`](RELEASE_CHECKLIST.md).
+
 ## Backup
 
 Execute diariamente e copie o `.zip` e o `.sha256` para armazenamento externo:

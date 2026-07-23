@@ -16,7 +16,8 @@
     "db:migrate": "drizzle-kit migrate",
     "db:push": "npm run db:generate && npm run db:migrate",
     "migrate:prod": "node dist/migrate.js",
-    "security:audit": "npm audit --omit=dev --audit-level=high"
+    "security:audit": "npm audit --omit=dev --audit-level=high",
+    "release:preflight": "node automation/production/release-preflight.cjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.693.0",

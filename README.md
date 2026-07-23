@@ -111,3 +111,4 @@ também constrói a imagem Docker.
 - Memória especialista persistente por projeto, sistema e sprint: concluída.
 - Ciclo de vida dos cards de defeito, com histórico e rastreabilidade: concluído.
 - Preparação de produção, segurança HTTP, health checks, CI e backups: concluída.
+- Preflight GO/NO-GO e runtime mínimo de homologação: concluídos.
