@@ -186,6 +186,35 @@ O relatório é nativo da stack Node.js/TypeScript. O projeto oficial
 [ExtentReports](https://github.com/extent-framework) mantém implementações para
 Java e .NET, sem adaptador oficial atual para Playwright/TypeScript.
 
+## Memória especialista persistente
+
+Antes de cada cenário, o nó **Carregar Memória Especialista** consulta
+`POST /api/qa/agent-memory/context`. O escopo usa projeto e host do sistema,
+permitindo reaproveitar conhecimento entre sprints sem misturar aplicações.
+Depois do cenário, **Salvar Aprendizado** envia o resultado para
+`POST /api/qa/agent-memory/learn`.
+
+O agente pode registrar:
+
+- regras de negócio;
+- seletores semânticos confiáveis;
+- riscos conhecidos;
+- observações reutilizáveis;
+- defeitos confirmados de forma consistente.
+
+Aprendizados repetidos são reforçados em vez de duplicados. O Orchestrator
+registra quantidade de ocorrências, confiança, sprint de origem e última
+utilização. Falhas flaky, mensagens transitórias de infraestrutura e erros de
+quota não viram conhecimento permanente.
+
+Senhas, tokens, cabeçalhos de autorização, HTML e caracteres de controle são
+removidos antes da persistência. A memória é enviada ao modelo como dado de
+referência não confiável: comandos eventualmente contidos nela não devem ser
+executados. O comportamento observado na interface atual sempre prevalece.
+
+O Dashboard apresenta a seção **Memória especialista do agente**, com projeto,
+sistema, categoria, confiança, ocorrências e sprint de origem.
+
 O Docker Compose define `N8N_BLOCK_ENV_ACCESS_IN_NODE=false` para permitir que
 os nós HTTP leiam somente as variáveis usadas pelo fluxo
 (`ORCHESTRATOR_API_URL` e `QA_AGENT_API_TOKEN`). Como workflows podem acessar

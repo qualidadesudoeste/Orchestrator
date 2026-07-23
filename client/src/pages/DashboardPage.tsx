@@ -19,6 +19,7 @@ import {
 import {
   Activity,
   Accessibility,
+  Brain,
   Bug,
   CheckCircle2,
   ClipboardCopy,
@@ -60,6 +61,27 @@ const RISK_STYLE: Record<string, { background: string; color: string; label: str
   MEDIO: { background: "#fef9c3", color: "#a16207", label: "Médio" },
   ALTO: { background: "#ffedd5", color: "#c2410c", label: "Alto" },
   CRITICO: { background: "#fee2e2", color: "#b91c1c", label: "Crítico" },
+};
+
+const MEMORY_STYLE: Record<string, { background: string; color: string; label: string }> = {
+  REGRA_NEGOCIO: {
+    background: "#ede9fe",
+    color: "#6d28d9",
+    label: "Regra de negócio",
+  },
+  SELETOR: { background: "#dbeafe", color: "#1d4ed8", label: "Seletor" },
+  RISCO: { background: "#fef3c7", color: "#b45309", label: "Risco" },
+  DEFEITO: { background: "#fee2e2", color: "#b91c1c", label: "Defeito" },
+  AUTOMACAO: {
+    background: "#e2e8f0",
+    color: "#475569",
+    label: "Automação",
+  },
+  OBSERVACAO: {
+    background: "#dcfce7",
+    color: "#15803d",
+    label: "Observação",
+  },
 };
 
 function Badge({
@@ -164,6 +186,16 @@ export default function DashboardPage() {
       criticalOpenCards: 0,
     },
     recentCards: [],
+  };
+  const agentMemory = metrics?.agentMemory ?? {
+    summary: {
+      activeMemories: 0,
+      systems: 0,
+      reinforcedMemories: 0,
+      businessRules: 0,
+      selectors: 0,
+    },
+    recentMemories: [],
   };
   const hasFilters = Boolean(
     filterCliente || filterProjeto || filterSprint,
@@ -1024,6 +1056,125 @@ export default function DashboardPage() {
             )}
           </TableCard>
         </div>
+
+        <section
+          style={{
+            background: "white",
+            borderRadius: 12,
+            padding: 17,
+            marginBottom: 20,
+            boxShadow: "0 1px 3px rgba(15,23,42,0.08)",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 12,
+              marginBottom: 12,
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+              <span
+                style={{
+                  display: "grid",
+                  placeItems: "center",
+                  width: 32,
+                  height: 32,
+                  borderRadius: 8,
+                  color: "#6d28d9",
+                  background: "#ede9fe",
+                }}
+              >
+                <Brain size={17} />
+              </span>
+              <div>
+                <h2
+                  style={{
+                    margin: 0,
+                    color: "#334155",
+                    fontSize: 12,
+                    textTransform: "uppercase",
+                    letterSpacing: ".05em",
+                  }}
+                >
+                  Memória especialista do agente
+                </h2>
+                <div style={{ color: "#94a3b8", fontSize: 10, marginTop: 3 }}>
+                  {agentMemory.summary.systems} sistemas ·{" "}
+                  {agentMemory.summary.reinforcedMemories} aprendizados
+                  reforçados
+                </div>
+              </div>
+            </div>
+            <span style={{ color: "#64748b", fontSize: 11 }}>
+              {agentMemory.summary.activeMemories} conhecimentos ativos
+            </span>
+          </div>
+
+          {agentMemory.recentMemories.length ? (
+            <div style={{ overflowX: "auto" }}>
+              <table style={tableStyle}>
+                <thead>
+                  <tr>
+                    {[
+                      "Projeto / Sistema",
+                      "Categoria",
+                      "Conhecimento",
+                      "Confiança",
+                      "Ocorrências",
+                      "Origem",
+                    ].map(heading => (
+                      <th key={heading} style={headerCellStyle}>
+                        {heading}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {agentMemory.recentMemories.map(memory => (
+                    <tr key={memory.id}>
+                      <td style={cellStyle}>
+                        {memory.projectName}
+                        <div style={{ color: "#94a3b8", fontSize: 9 }}>
+                          {memory.systemHost}
+                        </div>
+                      </td>
+                      <td style={cellStyle}>
+                        <Badge value={memory.category} styles={MEMORY_STYLE} />
+                      </td>
+                      <td style={{ ...cellStyle, maxWidth: 440 }}>
+                        <strong style={{ color: "#334155", fontSize: 10 }}>
+                          {memory.title}
+                        </strong>
+                        <div
+                          style={{
+                            color: "#64748b",
+                            fontSize: 9,
+                            marginTop: 3,
+                          }}
+                        >
+                          {memory.content}
+                        </div>
+                      </td>
+                      <td style={cellStyle}>{memory.confidence}%</td>
+                      <td style={cellStyle}>{memory.occurrences}</td>
+                      <td style={cellStyle}>
+                        {memory.sourceSprintName || "Sem sprint"}
+                        <div style={{ color: "#94a3b8", fontSize: 9 }}>
+                          {formatDate(memory.lastSeenAt)}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <EmptyState message="O agente ainda não registrou aprendizados persistentes." />
+          )}
+        </section>
 
         <section
           style={{

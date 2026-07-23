@@ -1,7 +1,8 @@
-import { and, desc, eq, inArray, isNull, or } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   Checklist,
+  InsertQAAgentMemory,
   InsertDefectCard,
   InsertUser,
   QAPlanDocument,
@@ -13,6 +14,7 @@ import {
   nonFunctionalFindings,
   nonFunctionalRuns,
   projects,
+  qaAgentMemories,
   qaPlanDocuments,
   sprints,
   testExecutions,
@@ -21,6 +23,7 @@ import {
   users,
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
+import type { AgentMemoryLearning } from "./agentMemoryService";
 import type { NormalizedDefectCard } from "./defectCardService";
 import type { NormalizedNonFunctionalRun } from "./nonFunctionalService";
 import type { NormalizedTestExecution } from "./testExecutionService";
@@ -719,6 +722,146 @@ export async function getDefectCardByExternalId(externalCardId: string) {
   return rows[0] ?? null;
 }
 
+export async function getAgentMemories(scopeKey: string, limit = 30) {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  return db
+    .select()
+    .from(qaAgentMemories)
+    .where(
+      and(
+        eq(qaAgentMemories.scopeKey, scopeKey),
+        eq(qaAgentMemories.status, "ATIVA"),
+      ),
+    )
+    .orderBy(
+      desc(qaAgentMemories.confidence),
+      desc(qaAgentMemories.occurrences),
+      desc(qaAgentMemories.lastSeenAt),
+    )
+    .limit(Math.min(50, Math.max(1, limit)));
+}
+
+export async function upsertAgentMemories(
+  learnings: AgentMemoryLearning[],
+): Promise<{ received: number; inserted: number; updated: number }> {
+  if (learnings.length === 0) {
+    return { received: 0, inserted: 0, updated: 0 };
+  }
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+
+  const first = learnings[0];
+  let clientId = first.clientId;
+  let projectId = first.projectId;
+  let sprintId = first.sprintId;
+  let clientName = first.clientName;
+  if (!projectId) {
+    const projectRows = await db
+      .select()
+      .from(projects)
+      .where(eq(projects.name, first.projectName))
+      .limit(1);
+    const project = projectRows[0];
+    if (project) {
+      projectId = project.id;
+      clientId = clientId ?? project.clientId;
+    }
+  }
+  if (!clientName && clientId) {
+    const clientRows = await db
+      .select()
+      .from(clients)
+      .where(eq(clients.id, clientId))
+      .limit(1);
+    clientName = clientRows[0]?.name;
+  }
+  if (!sprintId && first.sprintName) {
+    const sprintCondition = projectId
+      ? and(
+          eq(sprints.name, first.sprintName),
+          eq(sprints.projectId, projectId),
+        )
+      : eq(sprints.name, first.sprintName);
+    const sprintRows = await db
+      .select()
+      .from(sprints)
+      .where(sprintCondition)
+      .limit(1);
+    sprintId = sprintRows[0]?.id;
+  }
+
+  const fingerprints = learnings.map(learning => learning.fingerprint);
+  const existingRows = await db
+    .select({ fingerprint: qaAgentMemories.fingerprint })
+    .from(qaAgentMemories)
+    .where(
+      and(
+        eq(qaAgentMemories.scopeKey, first.scopeKey),
+        inArray(qaAgentMemories.fingerprint, fingerprints),
+      ),
+    );
+  const existing = new Set(existingRows.map(row => row.fingerprint));
+  const now = new Date();
+
+  await db.transaction(async tx => {
+    for (const learning of learnings) {
+      const values: InsertQAAgentMemory = {
+        scopeKey: learning.scopeKey,
+        fingerprint: learning.fingerprint,
+        clientId: learning.clientId ?? clientId ?? null,
+        projectId: learning.projectId ?? projectId ?? null,
+        clientName: learning.clientName ?? clientName ?? null,
+        projectName: learning.projectName,
+        systemHost: learning.systemHost,
+        systemUrl: learning.systemUrl ?? null,
+        sourceSprintId: learning.sprintId ?? sprintId ?? null,
+        sourceSprintName: learning.sprintName ?? null,
+        externalExecutionId: learning.externalExecutionId ?? null,
+        externalScenarioId: learning.externalScenarioId ?? null,
+        category: learning.category,
+        title: learning.title,
+        content: learning.content,
+        confidence: learning.confidence,
+        occurrences: 1,
+        status: "ATIVA",
+        firstSeenAt: now,
+        lastSeenAt: now,
+      };
+      await tx
+        .insert(qaAgentMemories)
+        .values(values)
+        .onDuplicateKeyUpdate({
+          set: {
+            clientId: values.clientId,
+            projectId: values.projectId,
+            clientName: values.clientName,
+            systemUrl: values.systemUrl,
+            sourceSprintId: values.sourceSprintId,
+            sourceSprintName: values.sourceSprintName,
+            externalExecutionId: values.externalExecutionId,
+            externalScenarioId: values.externalScenarioId,
+            title: values.title,
+            content: values.content,
+            confidence: sql`GREATEST(${qaAgentMemories.confidence}, ${learning.confidence})`,
+            occurrences: sql`${qaAgentMemories.occurrences} + 1`,
+            status: "ATIVA",
+            lastSeenAt: now,
+          },
+        });
+    }
+  });
+
+  const updated = learnings.filter(learning =>
+    existing.has(learning.fingerprint),
+  ).length;
+  return {
+    received: learnings.length,
+    inserted: learnings.length - updated,
+    updated,
+  };
+}
+
 export type DashboardMetricFilters = {
   clientId?: number;
   projectId?: number;
@@ -792,6 +935,36 @@ function emptyDefectCardMetrics() {
   };
 }
 
+function emptyAgentMemoryMetrics() {
+  return {
+    summary: {
+      activeMemories: 0,
+      systems: 0,
+      reinforcedMemories: 0,
+      businessRules: 0,
+      selectors: 0,
+    },
+    recentMemories: [] as Array<{
+      id: number;
+      projectName: string;
+      systemHost: string;
+      sourceSprintName: string | null;
+      category:
+        | "REGRA_NEGOCIO"
+        | "SELETOR"
+        | "RISCO"
+        | "DEFEITO"
+        | "AUTOMACAO"
+        | "OBSERVACAO";
+      title: string;
+      content: string;
+      confidence: number;
+      occurrences: number;
+      lastSeenAt: Date;
+    }>,
+  };
+}
+
 export async function getDashboardMetrics(filters: DashboardMetricFilters) {
   const db = await getDb();
   if (!db) {
@@ -816,6 +989,7 @@ export async function getDashboardMetrics(filters: DashboardMetricFilters) {
       recentExecutions: [],
       nonFunctional: emptyNonFunctionalMetrics(),
       defectCards: emptyDefectCardMetrics(),
+      agentMemory: emptyAgentMemoryMetrics(),
     };
   }
 
@@ -1021,6 +1195,56 @@ export async function getDashboardMetrics(filters: DashboardMetricFilters) {
     })),
   };
 
+  const agentMemoryConditions = [eq(qaAgentMemories.status, "ATIVA")];
+  if (filters.clientId) {
+    agentMemoryConditions.push(
+      eq(qaAgentMemories.clientId, filters.clientId),
+    );
+  }
+  if (filters.projectId) {
+    agentMemoryConditions.push(
+      eq(qaAgentMemories.projectId, filters.projectId),
+    );
+  }
+  if (filters.sprintId) {
+    agentMemoryConditions.push(
+      eq(qaAgentMemories.sourceSprintId, filters.sprintId),
+    );
+  }
+  const agentMemoryRows = await db
+    .select()
+    .from(qaAgentMemories)
+    .where(and(...agentMemoryConditions))
+    .orderBy(desc(qaAgentMemories.lastSeenAt))
+    .limit(500);
+  const agentMemoryMetrics = {
+    summary: {
+      activeMemories: agentMemoryRows.length,
+      systems: new Set(agentMemoryRows.map(memory => memory.scopeKey)).size,
+      reinforcedMemories: agentMemoryRows.filter(
+        memory => memory.occurrences > 1,
+      ).length,
+      businessRules: agentMemoryRows.filter(
+        memory => memory.category === "REGRA_NEGOCIO",
+      ).length,
+      selectors: agentMemoryRows.filter(
+        memory => memory.category === "SELETOR",
+      ).length,
+    },
+    recentMemories: agentMemoryRows.slice(0, 20).map(memory => ({
+      id: memory.id,
+      projectName: memory.projectName,
+      systemHost: memory.systemHost,
+      sourceSprintName: memory.sourceSprintName,
+      category: memory.category,
+      title: memory.title,
+      content: memory.content,
+      confidence: memory.confidence,
+      occurrences: memory.occurrences,
+      lastSeenAt: memory.lastSeenAt,
+    })),
+  };
+
   if (executions.length === 0) {
     return {
       databaseAvailable: true,
@@ -1049,6 +1273,7 @@ export async function getDashboardMetrics(filters: DashboardMetricFilters) {
       recentExecutions: [],
       nonFunctional,
       defectCards: defectCardMetrics,
+      agentMemory: agentMemoryMetrics,
     };
   }
 
@@ -1252,5 +1477,6 @@ export async function getDashboardMetrics(filters: DashboardMetricFilters) {
     })),
     nonFunctional,
     defectCards: defectCardMetrics,
+    agentMemory: agentMemoryMetrics,
   };
 }

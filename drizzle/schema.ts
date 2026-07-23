@@ -283,3 +283,51 @@ export const defectCards = mysqlTable("defect_cards", {
 
 export type DefectCard = typeof defectCards.$inferSelect;
 export type InsertDefectCard = typeof defectCards.$inferInsert;
+
+// ─── Memória persistente do Agente QA ───────────────────────────────────────
+export const qaAgentMemories = mysqlTable("qa_agent_memories", {
+  id: int("id").autoincrement().primaryKey(),
+  scopeKey: varchar("scopeKey", { length: 64 }).notNull(),
+  fingerprint: varchar("fingerprint", { length: 64 }).notNull(),
+  clientId: int("clientId"),
+  projectId: int("projectId"),
+  clientName: varchar("clientName", { length: 255 }),
+  projectName: varchar("projectName", { length: 255 }).notNull(),
+  systemHost: varchar("systemHost", { length: 255 }).notNull(),
+  systemUrl: varchar("systemUrl", { length: 1000 }),
+  sourceSprintId: int("sourceSprintId"),
+  sourceSprintName: varchar("sourceSprintName", { length: 255 }),
+  externalExecutionId: varchar("externalExecutionId", { length: 128 }),
+  externalScenarioId: varchar("externalScenarioId", { length: 160 }),
+  category: mysqlEnum("category", [
+    "REGRA_NEGOCIO",
+    "SELETOR",
+    "RISCO",
+    "DEFEITO",
+    "AUTOMACAO",
+    "OBSERVACAO",
+  ]).notNull(),
+  title: varchar("title", { length: 255 }).notNull(),
+  content: text("content").notNull(),
+  confidence: int("confidence").notNull().default(70),
+  occurrences: int("occurrences").notNull().default(1),
+  status: mysqlEnum("status", ["ATIVA", "ARQUIVADA"]).default("ATIVA").notNull(),
+  firstSeenAt: timestamp("firstSeenAt").defaultNow().notNull(),
+  lastSeenAt: timestamp("lastSeenAt").defaultNow().notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, table => ({
+  scopeFingerprintUnique: uniqueIndex("qa_agent_memory_scope_fingerprint_unique").on(
+    table.scopeKey,
+    table.fingerprint,
+  ),
+  scopeIndex: index("qa_agent_memory_scope_idx").on(table.scopeKey),
+  projectIndex: index("qa_agent_memory_project_idx").on(table.projectId),
+  sprintIndex: index("qa_agent_memory_sprint_idx").on(table.sourceSprintId),
+  categoryIndex: index("qa_agent_memory_category_idx").on(table.category),
+  statusIndex: index("qa_agent_memory_status_idx").on(table.status),
+  lastSeenIndex: index("qa_agent_memory_last_seen_idx").on(table.lastSeenAt),
+}));
+
+export type QAAgentMemory = typeof qaAgentMemories.$inferSelect;
+export type InsertQAAgentMemory = typeof qaAgentMemories.$inferInsert;

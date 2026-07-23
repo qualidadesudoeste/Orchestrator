@@ -90,3 +90,4 @@ workflow n8n estão documentados em
 - k6, OWASP ZAP, axe-core e dashboard não funcional: concluídos.
 - Cards Markdown de defeitos reais, com cópia e download pelo Dashboard: concluídos.
 - Reteste, classificação de flaky tests e relatório HTML de confiabilidade: concluídos.
+- Memória especialista persistente por projeto, sistema e sprint: concluída.
