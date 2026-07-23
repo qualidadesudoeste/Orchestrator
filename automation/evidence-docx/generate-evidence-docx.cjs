@@ -685,15 +685,28 @@ async function main() {
   const inputPath = path.resolve(args.input);
   const outputPath = path.resolve(args.output);
   const raw = JSON.parse(fs.readFileSync(inputPath, "utf8"));
-  const data = normalizeInput(raw);
-  const document = createDocument(data, path.dirname(inputPath));
-  const buffer = await Packer.toBuffer(document);
+  const { buffer, data } = await generateEvidenceDocxBuffer(raw, path.dirname(inputPath));
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
   fs.writeFileSync(outputPath, buffer);
   console.log(JSON.stringify({ output: outputPath, bytes: buffer.length, scenarios: data.resultados.length, status: data.status_geral }));
 }
 
-main().catch((error) => {
-  console.error(`Falha ao gerar DOCX: ${error.message}`);
-  process.exitCode = 1;
-});
+async function generateEvidenceDocxBuffer(raw, inputDirectory = process.cwd()) {
+  const data = normalizeInput(raw);
+  const document = createDocument(data, inputDirectory);
+  const buffer = await Packer.toBuffer(document);
+  return { buffer, data };
+}
+
+module.exports = {
+  createDocument,
+  generateEvidenceDocxBuffer,
+  normalizeInput,
+};
+
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(`Falha ao gerar DOCX: ${error.message}`);
+    process.exitCode = 1;
+  });
+}

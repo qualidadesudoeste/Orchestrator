@@ -161,6 +161,33 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [1030, 180]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.ORCHESTRATOR_API_URL + '/api/qa/evidence-docx' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.QA_AGENT_API_TOKEN }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "gerar-evidencias-docx",
+      "name": "Gerar Evidências DOCX",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1270, 180]
     }
   ],
   "connections": {
@@ -184,6 +211,9 @@
     },
     "Formatar Resultado": {
       "main": [[{ "node": "Loop Sobre Cenários", "type": "main", "index": 0 }]]
+    },
+    "Consolidar Execução": {
+      "main": [[{ "node": "Gerar Evidências DOCX", "type": "main", "index": 0 }]]
     },
     "GPT-4o": {
       "ai_languageModel": [[{ "node": "Agente QA", "type": "ai_languageModel", "index": 0 }]]
