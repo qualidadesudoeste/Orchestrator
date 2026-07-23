@@ -143,6 +143,11 @@ agente para `POST /api/qa/regression-code`. O Orchestrator:
 Se nenhum código confiável for gerado — por exemplo, em bloqueio de quota — o
 nó registra o erro e preserva o relatório DOCX já criado.
 
+O Docker Compose define `N8N_BLOCK_ENV_ACCESS_IN_NODE=false` para permitir que
+os nós HTTP leiam somente as variáveis usadas pelo fluxo
+(`ORCHESTRATOR_API_URL` e `QA_AGENT_API_TOKEN`). Como workflows podem acessar
+variáveis do contêiner, restrinja a edição do n8n a administradores confiáveis.
+
 ## Resultado validado do gerador DOCX
 
 O gerador produziu um relatório com dois cenários e duas screenshots incorporadas. A auditoria estrutural confirmou página Letter, margens de 1 polegada, tabelas com geometria fixa e zero achados de acessibilidade. A renderização automática por LibreOffice depende da instalação local desse aplicativo.
