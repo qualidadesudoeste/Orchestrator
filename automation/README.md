@@ -143,6 +143,23 @@ agente para `POST /api/qa/regression-code`. O Orchestrator:
 Se nenhum código confiável for gerado — por exemplo, em bloqueio de quota — o
 nó registra o erro e preserva o relatório DOCX já criado.
 
+## Cards Markdown para o SIG
+
+Depois de gerar o DOCX, o nó **Gerar Cards Markdown** envia o resultado
+consolidado para `POST /api/qa/defect-cards`. O Orchestrator:
+
+- cria um card somente quando o cenário está como `FALHOU` e possui uma falha
+  funcional real;
+- não transforma `ERRO_AUTOMACAO`, bloqueios ou testes aprovados em defeitos;
+- remove senhas, tokens e cabeçalhos de autorização do conteúdo;
+- mantém o identificador do card estável quando a mesma execução é reenviada;
+- disponibiliza o Markdown para copiar ou baixar no Dashboard;
+- fornece um link assinado de download, válido por sete dias, para cada `.md`.
+
+O painel **Cards de defeito para o SIG** mostra severidade, status, projeto,
+sprint e cenário. Use **Copiar** para levar o conteúdo direto ao SIG ou **.md**
+para baixar o arquivo.
+
 O Docker Compose define `N8N_BLOCK_ENV_ACCESS_IN_NODE=false` para permitir que
 os nós HTTP leiam somente as variáveis usadas pelo fluxo
 (`ORCHESTRATOR_API_URL` e `QA_AGENT_API_TOKEN`). Como workflows podem acessar

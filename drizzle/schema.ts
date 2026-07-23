@@ -230,3 +230,41 @@ export const nonFunctionalFindings = mysqlTable("non_functional_findings", {
 
 export type NonFunctionalFinding = typeof nonFunctionalFindings.$inferSelect;
 export type InsertNonFunctionalFinding = typeof nonFunctionalFindings.$inferInsert;
+
+// ─── Cards de defeito em Markdown ───────────────────────────────────────────
+export const defectCards = mysqlTable("defect_cards", {
+  id: int("id").autoincrement().primaryKey(),
+  externalCardId: varchar("externalCardId", { length: 64 }).notNull(),
+  externalExecutionId: varchar("externalExecutionId", { length: 128 }).notNull(),
+  externalScenarioId: varchar("externalScenarioId", { length: 160 }).notNull(),
+  clientId: int("clientId"),
+  projectId: int("projectId"),
+  sprintId: int("sprintId"),
+  clientName: varchar("clientName", { length: 255 }),
+  projectName: varchar("projectName", { length: 255 }).notNull(),
+  sprintName: varchar("sprintName", { length: 255 }),
+  systemUrl: varchar("systemUrl", { length: 1000 }),
+  scenarioTitle: varchar("scenarioTitle", { length: 500 }).notNull(),
+  title: varchar("title", { length: 500 }).notNull(),
+  severity: mysqlEnum("severity", ["BAIXO", "MEDIO", "ALTO", "CRITICO"]).notNull(),
+  status: mysqlEnum("status", ["ABERTO", "COPIADO", "RESOLVIDO"]).default("ABERTO").notNull(),
+  summary: text("summary").notNull(),
+  expectedResult: text("expectedResult"),
+  actualResult: text("actualResult").notNull(),
+  reproductionSteps: text("reproductionSteps").notNull(),
+  evidenceJson: text("evidenceJson"),
+  markdown: text("markdown").notNull(),
+  rawPayload: text("rawPayload"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, table => ({
+  externalCardUnique: uniqueIndex("defect_cards_external_id_unique").on(table.externalCardId),
+  executionIndex: index("defect_cards_execution_idx").on(table.externalExecutionId),
+  projectIndex: index("defect_cards_project_idx").on(table.projectId),
+  sprintIndex: index("defect_cards_sprint_idx").on(table.sprintId),
+  severityIndex: index("defect_cards_severity_idx").on(table.severity),
+  statusIndex: index("defect_cards_status_idx").on(table.status),
+}));
+
+export type DefectCard = typeof defectCards.$inferSelect;
+export type InsertDefectCard = typeof defectCards.$inferInsert;

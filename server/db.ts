@@ -2,12 +2,14 @@ import { and, desc, eq, inArray, isNull, or } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   Checklist,
+  InsertDefectCard,
   InsertUser,
   QAPlanDocument,
   Sprint,
   TrailProgress,
   checklists,
   clients,
+  defectCards,
   nonFunctionalFindings,
   nonFunctionalRuns,
   projects,
@@ -19,6 +21,7 @@ import {
   users,
 } from "../drizzle/schema";
 import { ENV } from "./_core/env";
+import type { NormalizedDefectCard } from "./defectCardService";
 import type { NormalizedNonFunctionalRun } from "./nonFunctionalService";
 import type { NormalizedTestExecution } from "./testExecutionService";
 
@@ -606,6 +609,107 @@ export async function upsertNonFunctionalRun(
   });
 }
 
+export async function replaceDefectCards(
+  externalExecutionId: string,
+  cards: NormalizedDefectCard[],
+): Promise<Array<{ id: number; externalCardId: string }>> {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+
+  const existingRows = await db
+    .select({
+      externalCardId: defectCards.externalCardId,
+      status: defectCards.status,
+    })
+    .from(defectCards)
+    .where(eq(defectCards.externalExecutionId, externalExecutionId));
+  const statusByExternalId = new Map(
+    existingRows.map(card => [card.externalCardId, card.status]),
+  );
+
+  const resolvedCards: InsertDefectCard[] = [];
+  for (const card of cards) {
+    let clientId = card.clientId;
+    let projectId = card.projectId;
+    let sprintId = card.sprintId;
+    let clientName = card.clientName;
+    if (!projectId) {
+      const projectRows = await db
+        .select()
+        .from(projects)
+        .where(eq(projects.name, card.projectName))
+        .limit(1);
+      const project = projectRows[0];
+      if (project) {
+        projectId = project.id;
+        clientId = clientId ?? project.clientId;
+      }
+    }
+    if (!clientName && clientId) {
+      const clientRows = await db
+        .select()
+        .from(clients)
+        .where(eq(clients.id, clientId))
+        .limit(1);
+      clientName = clientRows[0]?.name;
+    }
+    if (!sprintId && card.sprintName) {
+      const sprintCondition = projectId
+        ? and(
+            eq(sprints.name, card.sprintName),
+            eq(sprints.projectId, projectId),
+          )
+        : eq(sprints.name, card.sprintName);
+      const sprintRows = await db
+        .select()
+        .from(sprints)
+        .where(sprintCondition)
+        .limit(1);
+      sprintId = sprintRows[0]?.id;
+    }
+    resolvedCards.push({
+      ...card,
+      clientId: clientId ?? null,
+      projectId: projectId ?? null,
+      sprintId: sprintId ?? null,
+      clientName: clientName ?? null,
+      systemUrl: card.systemUrl ?? null,
+      sprintName: card.sprintName ?? null,
+      expectedResult: card.expectedResult ?? null,
+      status: statusByExternalId.get(card.externalCardId) ?? "ABERTO",
+    });
+  }
+
+  await db.transaction(async tx => {
+    await tx
+      .delete(defectCards)
+      .where(eq(defectCards.externalExecutionId, externalExecutionId));
+    if (resolvedCards.length > 0) {
+      await tx.insert(defectCards).values(resolvedCards);
+    }
+  });
+
+  if (cards.length === 0) return [];
+  return db
+    .select({
+      id: defectCards.id,
+      externalCardId: defectCards.externalCardId,
+    })
+    .from(defectCards)
+    .where(eq(defectCards.externalExecutionId, externalExecutionId));
+}
+
+export async function getDefectCardByExternalId(externalCardId: string) {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  const rows = await db
+    .select()
+    .from(defectCards)
+    .where(eq(defectCards.externalCardId, externalCardId))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
 export type DashboardMetricFilters = {
   clientId?: number;
   projectId?: number;
@@ -655,6 +759,30 @@ function emptyNonFunctionalMetrics() {
   };
 }
 
+function emptyDefectCardMetrics() {
+  return {
+    summary: {
+      totalCards: 0,
+      openCards: 0,
+      criticalOpenCards: 0,
+    },
+    recentCards: [] as Array<{
+      id: number;
+      externalCardId: string;
+      externalExecutionId: string;
+      externalScenarioId: string;
+      projectName: string;
+      sprintName: string | null;
+      scenarioTitle: string;
+      title: string;
+      severity: "BAIXO" | "MEDIO" | "ALTO" | "CRITICO";
+      status: "ABERTO" | "COPIADO" | "RESOLVIDO";
+      markdown: string;
+      createdAt: Date;
+    }>,
+  };
+}
+
 export async function getDashboardMetrics(filters: DashboardMetricFilters) {
   const db = await getDb();
   if (!db) {
@@ -676,6 +804,7 @@ export async function getDashboardMetrics(filters: DashboardMetricFilters) {
       modules: [],
       recentExecutions: [],
       nonFunctional: emptyNonFunctionalMetrics(),
+      defectCards: emptyDefectCardMetrics(),
     };
   }
 
@@ -837,6 +966,50 @@ export async function getDashboardMetrics(filters: DashboardMetricFilters) {
       })),
   };
 
+  const defectCardConditions = [];
+  if (filters.clientId) {
+    defectCardConditions.push(eq(defectCards.clientId, filters.clientId));
+  }
+  if (filters.projectId) {
+    defectCardConditions.push(eq(defectCards.projectId, filters.projectId));
+  }
+  if (filters.sprintId) {
+    defectCardConditions.push(eq(defectCards.sprintId, filters.sprintId));
+  }
+  const defectCardBaseQuery = db.select().from(defectCards);
+  const defectCardRows =
+    defectCardConditions.length > 0
+      ? await defectCardBaseQuery
+          .where(and(...defectCardConditions))
+          .orderBy(desc(defectCards.createdAt))
+          .limit(200)
+      : await defectCardBaseQuery
+          .orderBy(desc(defectCards.createdAt))
+          .limit(200);
+  const defectCardMetrics = {
+    summary: {
+      totalCards: defectCardRows.length,
+      openCards: defectCardRows.filter(card => card.status === "ABERTO").length,
+      criticalOpenCards: defectCardRows.filter(
+        card => card.status === "ABERTO" && card.severity === "CRITICO",
+      ).length,
+    },
+    recentCards: defectCardRows.slice(0, 20).map(card => ({
+      id: card.id,
+      externalCardId: card.externalCardId,
+      externalExecutionId: card.externalExecutionId,
+      externalScenarioId: card.externalScenarioId,
+      projectName: card.projectName,
+      sprintName: card.sprintName,
+      scenarioTitle: card.scenarioTitle,
+      title: card.title,
+      severity: card.severity,
+      status: card.status,
+      markdown: card.markdown,
+      createdAt: card.createdAt,
+    })),
+  };
+
   if (executions.length === 0) {
     return {
       databaseAvailable: true,
@@ -861,6 +1034,7 @@ export async function getDashboardMetrics(filters: DashboardMetricFilters) {
       modules: [],
       recentExecutions: [],
       nonFunctional,
+      defectCards: defectCardMetrics,
     };
   }
 
@@ -1033,5 +1207,6 @@ export async function getDashboardMetrics(filters: DashboardMetricFilters) {
       evidenceDocxUrl: execution.evidenceDocxUrl,
     })),
     nonFunctional,
+    defectCards: defectCardMetrics,
   };
 }

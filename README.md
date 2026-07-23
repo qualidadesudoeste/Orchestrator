@@ -88,4 +88,4 @@ workflow n8n estão documentados em
 - Gerador Node.js de evidências DOCX com screenshots: concluído.
 - Persistência de execuções e dashboard operacional: concluídos.
 - k6, OWASP ZAP, axe-core e dashboard não funcional: concluídos.
-- Cards Markdown de defeitos: planejados.
+- Cards Markdown de defeitos reais, com cópia e download pelo Dashboard: concluídos.

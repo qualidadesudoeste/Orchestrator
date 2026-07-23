@@ -2,6 +2,7 @@ import { useState } from "react";
 import AppLayout from "@/components/AppLayout";
 import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
+import { toast } from "sonner";
 import {
   Area,
   AreaChart,
@@ -20,8 +21,11 @@ import {
   Accessibility,
   Bug,
   CheckCircle2,
+  ClipboardCopy,
   Database,
+  Download,
   ExternalLink,
+  FileWarning,
   Gauge,
   RefreshCw,
   ShieldAlert,
@@ -47,6 +51,9 @@ const STATUS_STYLE: Record<string, { background: string; color: string; label: s
     color: "#64748b",
     label: "Não executado",
   },
+  ABERTO: { background: "#fee2e2", color: "#b91c1c", label: "Aberto" },
+  COPIADO: { background: "#e0f2fe", color: "#0369a1", label: "Copiado" },
+  RESOLVIDO: { background: "#dcfce7", color: "#15803d", label: "Resolvido" },
 };
 
 const RISK_STYLE: Record<string, { background: string; color: string; label: string }> = {
@@ -149,6 +156,14 @@ export default function DashboardPage() {
     recentRuns: [],
     topFindings: [],
   };
+  const generatedDefectCards = metrics?.defectCards ?? {
+    summary: {
+      totalCards: 0,
+      openCards: 0,
+      criticalOpenCards: 0,
+    },
+    recentCards: [],
+  };
   const hasFilters = Boolean(
     filterCliente || filterProjeto || filterSprint,
   );
@@ -156,6 +171,25 @@ export default function DashboardPage() {
     setFilterCliente("");
     setFilterProjeto("");
     setFilterSprint("");
+  };
+  const copyDefectCard = async (markdown: string) => {
+    try {
+      await navigator.clipboard.writeText(markdown);
+      toast.success("Card copiado para a área de transferência.");
+    } catch {
+      toast.error("Não foi possível copiar o card.");
+    }
+  };
+  const downloadDefectCard = (cardId: string, markdown: string) => {
+    const blob = new Blob([markdown], {
+      type: "text/markdown;charset=utf-8",
+    });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${cardId}.md`;
+    anchor.click();
+    URL.revokeObjectURL(url);
   };
 
   const cards = [
@@ -847,6 +881,7 @@ export default function DashboardPage() {
             display: "grid",
             gridTemplateColumns: "minmax(0, 1.2fr) minmax(0, 1fr)",
             gap: 14,
+            marginBottom: 20,
           }}
         >
           <TableCard title="Execuções não funcionais">
@@ -946,6 +981,144 @@ export default function DashboardPage() {
             )}
           </TableCard>
         </div>
+
+        <section
+          style={{
+            background: "white",
+            borderRadius: 12,
+            padding: 17,
+            boxShadow: "0 1px 3px rgba(15,23,42,0.08)",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 12,
+              marginBottom: 12,
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+              <span
+                style={{
+                  display: "grid",
+                  placeItems: "center",
+                  width: 32,
+                  height: 32,
+                  borderRadius: 8,
+                  color: "#b91c1c",
+                  background: "#fee2e2",
+                }}
+              >
+                <FileWarning size={17} />
+              </span>
+              <div>
+                <h2
+                  style={{
+                    margin: 0,
+                    color: "#334155",
+                    fontSize: 12,
+                    textTransform: "uppercase",
+                    letterSpacing: ".05em",
+                  }}
+                >
+                  Cards de defeito para o SIG
+                </h2>
+                <div style={{ color: "#94a3b8", fontSize: 10, marginTop: 3 }}>
+                  {generatedDefectCards.summary.openCards} abertos ·{" "}
+                  {generatedDefectCards.summary.criticalOpenCards} críticos
+                </div>
+              </div>
+            </div>
+            <span style={{ color: "#64748b", fontSize: 11 }}>
+              {generatedDefectCards.summary.totalCards} cards gerados
+            </span>
+          </div>
+
+          {generatedDefectCards.recentCards.length ? (
+            <div style={{ overflowX: "auto" }}>
+              <table style={tableStyle}>
+                <thead>
+                  <tr>
+                    {[
+                      "Card",
+                      "Projeto / Sprint",
+                      "Título",
+                      "Severidade",
+                      "Status",
+                      "Ações",
+                    ].map(heading => (
+                      <th key={heading} style={headerCellStyle}>
+                        {heading}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {generatedDefectCards.recentCards.map(card => (
+                    <tr key={card.id}>
+                      <td style={cellStyle}>
+                        <strong style={{ color: "#334155", fontSize: 10 }}>
+                          {card.externalCardId}
+                        </strong>
+                        <div style={{ color: "#94a3b8", fontSize: 9 }}>
+                          {card.externalScenarioId}
+                        </div>
+                      </td>
+                      <td style={cellStyle}>
+                        {card.projectName}
+                        <div style={{ color: "#94a3b8", fontSize: 9 }}>
+                          {card.sprintName || "Sem sprint"}
+                        </div>
+                      </td>
+                      <td style={{ ...cellStyle, maxWidth: 360 }}>
+                        {card.title}
+                      </td>
+                      <td style={cellStyle}>
+                        <Badge value={card.severity} styles={RISK_STYLE} />
+                      </td>
+                      <td style={cellStyle}>
+                        <Badge value={card.status} styles={STATUS_STYLE} />
+                      </td>
+                      <td style={cellStyle}>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          <button
+                            type="button"
+                            onClick={() => copyDefectCard(card.markdown)}
+                            title="Copiar Markdown para o SIG"
+                            aria-label={`Copiar ${card.externalCardId}`}
+                            style={actionButtonStyle}
+                          >
+                            <ClipboardCopy size={14} />
+                            Copiar
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              downloadDefectCard(
+                                card.externalCardId,
+                                card.markdown,
+                              )
+                            }
+                            title="Baixar arquivo Markdown"
+                            aria-label={`Baixar ${card.externalCardId}`}
+                            style={actionButtonStyle}
+                          >
+                            <Download size={14} />
+                            .md
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <EmptyState message="Nenhum defeito funcional real gerou card." />
+          )}
+        </section>
       </div>
     </AppLayout>
   );
@@ -1026,4 +1199,19 @@ const cellStyle: React.CSSProperties = {
   color: "#475569",
   borderBottom: "1px solid #f1f5f9",
   verticalAlign: "middle",
+};
+
+const actionButtonStyle: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 5,
+  border: "1px solid #cbd5e1",
+  borderRadius: 7,
+  background: "white",
+  color: "#475569",
+  padding: "6px 8px",
+  fontSize: 10,
+  fontWeight: 700,
+  cursor: "pointer",
+  whiteSpace: "nowrap",
 };
