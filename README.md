@@ -70,9 +70,27 @@ acessibilidade com axe-core. O executor autenticado, os limites padrão e o
 workflow n8n estão documentados em
 [`automation/non-functional/README.md`](automation/non-functional/README.md).
 
+## Produção
+
+A implantação com Docker, validação de segredos, migrations, health checks,
+backup, restauração e procedimento de atualização está documentada em
+[`automation/production/README.md`](automation/production/README.md).
+
+Endpoints operacionais:
+
+- `GET /healthz`: processo da aplicação ativo;
+- `GET /readyz`: aplicação pronta e banco acessível/migrado.
+
+Antes de publicar uma versão, execute `npm run security:audit`, `npm run check`,
+`npm test` e `npm run build`. O workflow de CI executa essas verificações e
+também constrói a imagem Docker.
+
 ## Segurança
 
 - Nunca versionar `.env`, tokens, senhas ou evidências com dados pessoais.
+- Use segredos diferentes para JWT, banco e integração do agente.
+- Exponha somente o proxy HTTPS; MySQL, n8n e Playwright MCP devem permanecer
+  em rede privada.
 - Produção deve ser somente leitura para o agente.
 - Scans ativos e testes de carga exigem ambiente e autorização específicos.
 - Screenshots, relatórios e logs são gravados em `artifacts/`, que não é versionado.
@@ -92,3 +110,4 @@ workflow n8n estão documentados em
 - Reteste, classificação de flaky tests e relatório HTML de confiabilidade: concluídos.
 - Memória especialista persistente por projeto, sistema e sprint: concluída.
 - Ciclo de vida dos cards de defeito, com histórico e rastreabilidade: concluído.
+- Preparação de produção, segurança HTTP, health checks, CI e backups: concluída.

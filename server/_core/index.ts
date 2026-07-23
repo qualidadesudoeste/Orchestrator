@@ -16,7 +16,17 @@ import { registerNonFunctionalRoutes } from "../nonFunctionalRoutes";
 import { registerDefectCardRoutes } from "../defectCardRoutes";
 import { registerReliabilityReportRoutes } from "../reliabilityReportRoutes";
 import { registerAgentMemoryRoutes } from "../agentMemoryRoutes";
+import { checkDatabaseHealth } from "../db";
 import { sdk } from "./sdk";
+import { ENV } from "./env";
+import {
+  assertProductionEnvironment,
+  parseTrustProxy,
+} from "./envValidation";
+import {
+  registerSecurityMiddleware,
+  requestLogMiddleware,
+} from "./security";
 import { COOKIE_NAME } from "@shared/const";
 import cookie from "cookie";
 import { createRequire } from "module";
@@ -86,11 +96,44 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 }
 
 async function startServer() {
+  const environmentValidation = assertProductionEnvironment();
+  for (const warning of environmentValidation.warnings) {
+    console.warn(JSON.stringify({
+      timestamp: new Date().toISOString(),
+      level: "warn",
+      event: "configuration_warning",
+      message: warning,
+    }));
+  }
+
   const app = express();
   const server = createServer(app);
+  let shuttingDown = false;
+  app.set("trust proxy", parseTrustProxy(ENV.trustProxy));
+  app.use(requestLogMiddleware);
+  registerSecurityMiddleware(app);
+
+  app.get("/healthz", (_req, res) => {
+    res.status(shuttingDown ? 503 : 200).json({
+      ok: !shuttingDown,
+      status: shuttingDown ? "shutting_down" : "alive",
+      timestamp: new Date().toISOString(),
+    });
+  });
+  app.get("/readyz", async (_req, res) => {
+    const database = await checkDatabaseHealth();
+    const ready = !shuttingDown && database.ok;
+    res.status(ready ? 200 : 503).json({
+      ok: ready,
+      status: shuttingDown ? "shutting_down" : ready ? "ready" : "not_ready",
+      database,
+      timestamp: new Date().toISOString(),
+    });
+  });
+
   // Configure body parser with larger size limit for file uploads
-  app.use(express.json({ limit: "50mb" }));
-  app.use(express.urlencoded({ limit: "50mb", extended: true }));
+  app.use(express.json({ limit: ENV.jsonBodyLimit }));
+  app.use(express.urlencoded({ limit: ENV.jsonBodyLimit, extended: true }));
   registerStorageProxy(app);
   registerOAuthRoutes(app);
   registerEvidenceDocxRoutes(app);
@@ -185,16 +228,68 @@ async function startServer() {
     serveStatic(app);
   }
 
-  const preferredPort = parseInt(process.env.PORT || "3000");
-  const port = await findAvailablePort(preferredPort);
+  const preferredPort = ENV.port;
+  const port = ENV.isProduction
+    ? preferredPort
+    : await findAvailablePort(preferredPort);
 
   if (port !== preferredPort) {
     console.log(`Port ${preferredPort} is busy, using port ${port} instead`);
   }
 
-  server.listen(port, () => {
-    console.log(`Server running on http://localhost:${port}/`);
+  server.listen(port, ENV.host, () => {
+    console.log(JSON.stringify({
+      timestamp: new Date().toISOString(),
+      level: "info",
+      event: "server_started",
+      host: ENV.host,
+      port,
+    }));
   });
+
+  const shutdown = (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(JSON.stringify({
+      timestamp: new Date().toISOString(),
+      level: "info",
+      event: "shutdown_started",
+      signal,
+    }));
+    const timeout = setTimeout(() => {
+      server.closeAllConnections();
+      process.exit(1);
+    }, ENV.shutdownTimeoutMs);
+    timeout.unref();
+    server.close(error => {
+      clearTimeout(timeout);
+      if (error) {
+        console.error(JSON.stringify({
+          timestamp: new Date().toISOString(),
+          level: "error",
+          event: "shutdown_failed",
+          message: error.message,
+        }));
+        process.exit(1);
+      }
+      console.log(JSON.stringify({
+        timestamp: new Date().toISOString(),
+        level: "info",
+        event: "shutdown_complete",
+      }));
+      process.exit(0);
+    });
+  };
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
 }
 
-startServer().catch(console.error);
+startServer().catch(error => {
+  console.error(JSON.stringify({
+    timestamp: new Date().toISOString(),
+    level: "error",
+    event: "startup_failed",
+    message: error instanceof Error ? error.message : String(error),
+  }));
+  process.exitCode = 1;
+});

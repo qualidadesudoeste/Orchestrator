@@ -42,6 +42,28 @@ export async function getDb() {
   return _db;
 }
 
+export async function checkDatabaseHealth() {
+  const startedAt = performance.now();
+  const db = await getDb();
+  if (!db) {
+    return { ok: false, latencyMs: null, reason: "database_not_configured" };
+  }
+  try {
+    await db.execute(sql`SELECT 1 FROM users LIMIT 1`);
+    return {
+      ok: true,
+      latencyMs: Math.round((performance.now() - startedAt) * 10) / 10,
+      reason: null,
+    };
+  } catch {
+    return {
+      ok: false,
+      latencyMs: Math.round((performance.now() - startedAt) * 10) / 10,
+      reason: "database_unavailable_or_not_migrated",
+    };
+  }
+}
+
 // ─── Auth helpers ─────────────────────────────────────────────────────────────
 
 export async function getUserByUsername(username: string) {

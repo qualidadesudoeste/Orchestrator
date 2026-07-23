@@ -1,0 +1,12 @@
+.git
+.github
+.env
+.env.*
+!.env.example
+!.env.production.example
+.npm-cache
+artifacts
+dist
+node_modules
+*.log
+smoke-*.png

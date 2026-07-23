@@ -1,0 +1,26 @@
+name: Qualidade e segurança
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run security:audit
+      - run: npm run check
+      - run: npm test
+      - run: npm run build
+      - run: docker build --tag orchestrator-platform:ci .
