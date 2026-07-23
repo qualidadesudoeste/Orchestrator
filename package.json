@@ -11,6 +11,7 @@
     "format": "prettier --write .",
     "test": "vitest run",
     "evidence:docx": "node automation/evidence-docx/generate-evidence-docx.cjs",
+    "nonfunctional:runner": "node automation/non-functional/non-functional-runner.cjs",
     "db:push": "drizzle-kit generate && drizzle-kit migrate"
   },
   "dependencies": {
@@ -96,9 +97,11 @@
     "@vitejs/plugin-react": "^5.0.4",
     "add": "^2.0.6",
     "autoprefixer": "^10.4.20",
+    "axe-core": "^4.12.1",
     "cross-env": "^10.1.0",
     "drizzle-kit": "^0.31.4",
     "esbuild": "^0.25.0",
+    "playwright-core": "^1.61.1",
     "postcss": "^8.4.47",
     "prettier": "^3.6.2",
     "tailwindcss": "^4.1.14",

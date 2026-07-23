@@ -156,6 +156,21 @@ idempotente, grava a execução em `test_executions` e substitui seus cenários 
 `test_results` quando recebe um reenvio. Falhas funcionais e falhas de automação
 permanecem separadas para não distorcer os indicadores do Dashboard.
 
+## Testes não funcionais
+
+O workflow `Testes_Nao_Funcionais.json` aciona um executor local autenticado e
+consolida k6, OWASP ZAP Baseline e axe-core. Inicie o executor com:
+
+```powershell
+npm run nonfunctional:runner
+```
+
+O resultado é enviado para `POST /api/qa/non-functional-runs`, usando `run_id`
+como chave idempotente. As métricas e os achados prioritários aparecem no
+Dashboard. Consulte
+[`non-functional/README.md`](non-functional/README.md) para limites, segurança e
+configuração.
+
 ## Resultado validado do gerador DOCX
 
 O gerador produziu um relatório com dois cenários e duas screenshots incorporadas. A auditoria estrutural confirmou página Letter, margens de 1 polegada, tabelas com geometria fixa e zero achados de acessibilidade. A renderização automática por LibreOffice depende da instalação local desse aplicativo.

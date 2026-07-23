@@ -20,6 +20,8 @@ services:
       N8N_PERSONALIZATION_ENABLED: "false"
       QA_AGENT_API_TOKEN: ${QA_AGENT_API_TOKEN}
       ORCHESTRATOR_API_URL: ${ORCHESTRATOR_API_URL}
+      NON_FUNCTIONAL_RUNNER_URL: ${NON_FUNCTIONAL_RUNNER_URL:-http://host.docker.internal:8940}
+      NON_FUNCTIONAL_RUNNER_TOKEN: ${QA_AGENT_API_TOKEN}
       GENERIC_TIMEZONE: America/Sao_Paulo
       TZ: America/Sao_Paulo
     extra_hosts:

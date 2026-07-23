@@ -63,6 +63,13 @@ Consulte [`automation/README.md`](automation/README.md) para iniciar o MCP, impo
 http://host.docker.internal:8931/mcp
 ```
 
+## Testes não funcionais
+
+O Orchestrator consolida performance com k6, segurança passiva com OWASP ZAP e
+acessibilidade com axe-core. O executor autenticado, os limites padrão e o
+workflow n8n estão documentados em
+[`automation/non-functional/README.md`](automation/non-functional/README.md).
+
 ## Segurança
 
 - Nunca versionar `.env`, tokens, senhas ou evidências com dados pessoais.
@@ -79,4 +86,6 @@ http://host.docker.internal:8931/mcp
 - Captura rastreável de screenshots pelo agente: configurada; teste funcional aguarda crédito na API OpenAI.
 - Execução completa pelo agente GPT-4o: tecnicamente configurada; aguarda crédito disponível na conta da API OpenAI.
 - Gerador Node.js de evidências DOCX com screenshots: concluído.
-- Persistência de execuções, cards Markdown e dashboard: planejados.
+- Persistência de execuções e dashboard operacional: concluídos.
+- k6, OWASP ZAP, axe-core e dashboard não funcional: concluídos.
+- Cards Markdown de defeitos: planejados.

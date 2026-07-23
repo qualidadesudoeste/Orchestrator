@@ -1,0 +1,179 @@
+{
+  "id": "QANonFuncPhase7",
+  "name": "QA — Testes Não Funcionais",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "manual-trigger",
+      "name": "Iniciar Testes",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [180, 300]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "run-id",
+              "name": "run_id",
+              "value": "={{ 'nf-' + $execution.id }}",
+              "type": "string"
+            },
+            {
+              "id": "projeto",
+              "name": "projeto",
+              "value": "Projeto Exemplo",
+              "type": "string"
+            },
+            {
+              "id": "sprint",
+              "name": "sprint",
+              "value": "Sprint 1",
+              "type": "string"
+            },
+            {
+              "id": "target-url",
+              "name": "target_url",
+              "value": "https://example.com",
+              "type": "string"
+            },
+            {
+              "id": "tools",
+              "name": "tools",
+              "value": "={{ { k6: true, zap: true, axe: true } }}",
+              "type": "object"
+            },
+            {
+              "id": "k6",
+              "name": "k6",
+              "value": "={{ { vus: 3, duration: '10s', p95_ms: 2000, max_failure_rate: 0.05 } }}",
+              "type": "object"
+            },
+            {
+              "id": "zap",
+              "name": "zap",
+              "value": "={{ { spider_minutes: 1, fail_on_medium: false } }}",
+              "type": "object"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "configurar",
+      "name": "Configurar Execução",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [400, 300],
+      "notes": "Use somente URLs de ambientes autorizados. Os limites podem ser ajustados por sprint."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.NON_FUNCTIONAL_RUNNER_URL + '/run' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.NON_FUNCTIONAL_RUNNER_TOKEN }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 900000
+        }
+      },
+      "id": "executar",
+      "name": "Executar k6 ZAP e axe",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [650, 300],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.ORCHESTRATOR_API_URL + '/api/qa/non-functional-runs' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $env.QA_AGENT_API_TOKEN }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "registrar",
+      "name": "Registrar no Orchestrator",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [910, 300],
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Iniciar Testes": {
+      "main": [
+        [
+          {
+            "node": "Configurar Execução",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Configurar Execução": {
+      "main": [
+        [
+          {
+            "node": "Executar k6 ZAP e axe",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Executar k6 ZAP e axe": {
+      "main": [
+        [
+          {
+            "node": "Registrar no Orchestrator",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

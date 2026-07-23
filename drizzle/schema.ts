@@ -168,3 +168,65 @@ export const testResults = mysqlTable("test_results", {
 
 export type TestResult = typeof testResults.$inferSelect;
 export type InsertTestResult = typeof testResults.$inferInsert;
+
+// ─── Testes não funcionais (k6, OWASP ZAP e axe-core) ───────────────────────
+export const nonFunctionalRuns = mysqlTable("non_functional_runs", {
+  id: int("id").autoincrement().primaryKey(),
+  externalRunId: varchar("externalRunId", { length: 128 }).notNull(),
+  clientId: int("clientId"),
+  projectId: int("projectId"),
+  sprintId: int("sprintId"),
+  clientName: varchar("clientName", { length: 255 }),
+  projectName: varchar("projectName", { length: 255 }).notNull(),
+  sprintName: varchar("sprintName", { length: 255 }),
+  targetUrl: varchar("targetUrl", { length: 1000 }).notNull(),
+  status: mysqlEnum("status", ["PASSOU", "FALHOU", "PARCIAL", "ERRO"]).notNull(),
+  k6Status: mysqlEnum("k6Status", ["PASSOU", "FALHOU", "NAO_EXECUTADO", "ERRO"]).notNull(),
+  k6P95Ms: int("k6P95Ms"),
+  k6FailureRateBasisPoints: int("k6FailureRateBasisPoints"),
+  k6Requests: int("k6Requests").notNull().default(0),
+  zapStatus: mysqlEnum("zapStatus", ["PASSOU", "FALHOU", "NAO_EXECUTADO", "ERRO"]).notNull(),
+  zapHigh: int("zapHigh").notNull().default(0),
+  zapMedium: int("zapMedium").notNull().default(0),
+  zapLow: int("zapLow").notNull().default(0),
+  axeStatus: mysqlEnum("axeStatus", ["PASSOU", "FALHOU", "NAO_EXECUTADO", "ERRO"]).notNull(),
+  axeCritical: int("axeCritical").notNull().default(0),
+  axeSerious: int("axeSerious").notNull().default(0),
+  axeModerate: int("axeModerate").notNull().default(0),
+  axeMinor: int("axeMinor").notNull().default(0),
+  reportDirectory: text("reportDirectory"),
+  startedAt: timestamp("startedAt"),
+  finishedAt: timestamp("finishedAt"),
+  rawPayload: text("rawPayload"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, table => ({
+  externalRunUnique: uniqueIndex("non_functional_runs_external_id_unique").on(table.externalRunId),
+  projectIndex: index("non_functional_runs_project_idx").on(table.projectId),
+  sprintIndex: index("non_functional_runs_sprint_idx").on(table.sprintId),
+  finishedAtIndex: index("non_functional_runs_finished_at_idx").on(table.finishedAt),
+}));
+
+export type NonFunctionalRun = typeof nonFunctionalRuns.$inferSelect;
+export type InsertNonFunctionalRun = typeof nonFunctionalRuns.$inferInsert;
+
+export const nonFunctionalFindings = mysqlTable("non_functional_findings", {
+  id: int("id").autoincrement().primaryKey(),
+  runId: int("runId").notNull(),
+  tool: mysqlEnum("tool", ["K6", "ZAP", "AXE"]).notNull(),
+  severity: mysqlEnum("severity", ["INFO", "BAIXO", "MEDIO", "ALTO", "CRITICO"]).notNull(),
+  ruleId: varchar("ruleId", { length: 255 }),
+  title: varchar("title", { length: 500 }).notNull(),
+  description: text("description"),
+  helpUrl: text("helpUrl"),
+  occurrences: int("occurrences").notNull().default(1),
+  rawPayload: text("rawPayload"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+}, table => ({
+  runIndex: index("non_functional_findings_run_idx").on(table.runId),
+  toolIndex: index("non_functional_findings_tool_idx").on(table.tool),
+  severityIndex: index("non_functional_findings_severity_idx").on(table.severity),
+}));
+
+export type NonFunctionalFinding = typeof nonFunctionalFindings.$inferSelect;
+export type InsertNonFunctionalFinding = typeof nonFunctionalFindings.$inferInsert;

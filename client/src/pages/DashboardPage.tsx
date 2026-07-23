@@ -17,13 +17,16 @@ import {
 } from "recharts";
 import {
   Activity,
+  Accessibility,
   Bug,
   CheckCircle2,
   Database,
   ExternalLink,
   Gauge,
   RefreshCw,
+  ShieldAlert,
   ShieldCheck,
+  Timer,
   X,
   XCircle,
 } from "lucide-react";
@@ -36,6 +39,13 @@ const STATUS_STYLE: Record<string, { background: string; color: string; label: s
     background: "#e2e8f0",
     color: "#475569",
     label: "Erro de automação",
+  },
+  PARCIAL: { background: "#fef3c7", color: "#b45309", label: "Parcial" },
+  ERRO: { background: "#e2e8f0", color: "#475569", label: "Erro" },
+  NAO_EXECUTADO: {
+    background: "#f1f5f9",
+    color: "#64748b",
+    label: "Não executado",
   },
 };
 
@@ -123,6 +133,22 @@ export default function DashboardPage() {
     criticalDefects: 0,
     dre: null,
   };
+  const nonFunctional = metrics?.nonFunctional ?? {
+    summary: {
+      totalRuns: 0,
+      passedRuns: 0,
+      failedRuns: 0,
+      passRate: 0,
+      latestP95Ms: null,
+      latestFailureRatePercent: null,
+      zapHigh: 0,
+      zapMedium: 0,
+      axeCritical: 0,
+      axeSerious: 0,
+    },
+    recentRuns: [],
+    topFindings: [],
+  };
   const hasFilters = Boolean(
     filterCliente || filterProjeto || filterSprint,
   );
@@ -183,6 +209,46 @@ export default function DashboardPage() {
       icon: ShieldCheck,
       color: "#0369a1",
       background: "#e0f2fe",
+    },
+  ];
+  const nonFunctionalCards = [
+    {
+      label: "Performance p95",
+      value:
+        nonFunctional.summary.latestP95Ms === null
+          ? "—"
+          : `${nonFunctional.summary.latestP95Ms} ms`,
+      detail: "Última execução k6",
+      icon: Timer,
+      color: "#7c3aed",
+      background: "#f3e8ff",
+    },
+    {
+      label: "Taxa de erro HTTP",
+      value:
+        nonFunctional.summary.latestFailureRatePercent === null
+          ? "—"
+          : `${nonFunctional.summary.latestFailureRatePercent}%`,
+      detail: `${nonFunctional.summary.totalRuns} execuções não funcionais`,
+      icon: Activity,
+      color: "#0369a1",
+      background: "#e0f2fe",
+    },
+    {
+      label: "Riscos ZAP",
+      value: nonFunctional.summary.zapHigh.toLocaleString("pt-BR"),
+      detail: `${nonFunctional.summary.zapMedium} alertas médios`,
+      icon: ShieldAlert,
+      color: "#b91c1c",
+      background: "#fee2e2",
+    },
+    {
+      label: "Violações axe",
+      value: nonFunctional.summary.axeCritical.toLocaleString("pt-BR"),
+      detail: `${nonFunctional.summary.axeSerious} violações sérias`,
+      icon: Accessibility,
+      color: "#c2410c",
+      background: "#ffedd5",
     },
   ];
 
@@ -566,6 +632,7 @@ export default function DashboardPage() {
             display: "grid",
             gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1.15fr)",
             gap: 14,
+            marginBottom: 20,
           }}
         >
           <TableCard title="Risco por módulo">
@@ -669,6 +736,216 @@ export default function DashboardPage() {
             )}
           </TableCard>
         </div>
+
+        <section style={{ marginBottom: 14 }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "baseline",
+              justifyContent: "space-between",
+              gap: 12,
+              marginBottom: 10,
+            }}
+          >
+            <div>
+              <h2
+                style={{
+                  margin: 0,
+                  color: "#0f172a",
+                  fontSize: 17,
+                  fontWeight: 800,
+                }}
+              >
+                Qualidade não funcional
+              </h2>
+              <p
+                style={{
+                  margin: "3px 0 0",
+                  color: "#64748b",
+                  fontSize: 11,
+                }}
+              >
+                Performance, segurança e acessibilidade consolidadas.
+              </p>
+            </div>
+            <span style={{ color: "#64748b", fontSize: 11 }}>
+              Pass Rate: {nonFunctional.summary.passRate}%
+            </span>
+          </div>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))",
+              gap: 12,
+            }}
+          >
+            {nonFunctionalCards.map(card => {
+              const Icon = card.icon;
+              return (
+                <div
+                  key={card.label}
+                  style={{
+                    background: "white",
+                    borderRadius: 12,
+                    padding: 15,
+                    boxShadow: "0 1px 3px rgba(15,23,42,0.08)",
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      marginBottom: 10,
+                    }}
+                  >
+                    <span
+                      style={{
+                        color: "#64748b",
+                        fontSize: 11,
+                        fontWeight: 700,
+                      }}
+                    >
+                      {card.label}
+                    </span>
+                    <span
+                      style={{
+                        display: "grid",
+                        placeItems: "center",
+                        width: 29,
+                        height: 29,
+                        borderRadius: 8,
+                        color: card.color,
+                        background: card.background,
+                      }}
+                    >
+                      <Icon size={16} />
+                    </span>
+                  </div>
+                  <div
+                    style={{
+                      color: "#0f172a",
+                      fontSize: 24,
+                      fontWeight: 800,
+                    }}
+                  >
+                    {card.value}
+                  </div>
+                  <div
+                    style={{ color: "#94a3b8", fontSize: 10, marginTop: 4 }}
+                  >
+                    {card.detail}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "minmax(0, 1.2fr) minmax(0, 1fr)",
+            gap: 14,
+          }}
+        >
+          <TableCard title="Execuções não funcionais">
+            {nonFunctional.recentRuns.length ? (
+              <table style={tableStyle}>
+                <thead>
+                  <tr>
+                    {["Execução", "Projeto", "Status", "k6 p95", "ZAP", "axe"].map(
+                      heading => (
+                        <th key={heading} style={headerCellStyle}>
+                          {heading}
+                        </th>
+                      ),
+                    )}
+                  </tr>
+                </thead>
+                <tbody>
+                  {nonFunctional.recentRuns.map(run => (
+                    <tr key={run.id}>
+                      <td style={cellStyle}>
+                        <strong style={{ color: "#334155", fontSize: 11 }}>
+                          {run.externalRunId}
+                        </strong>
+                        <div style={{ color: "#94a3b8", fontSize: 9 }}>
+                          {formatDate(run.finishedAt)}
+                        </div>
+                      </td>
+                      <td style={cellStyle}>
+                        {run.projectName}
+                        <div style={{ color: "#94a3b8", fontSize: 9 }}>
+                          {run.sprintName || "Sem sprint"}
+                        </div>
+                      </td>
+                      <td style={cellStyle}>
+                        <Badge value={run.status} styles={STATUS_STYLE} />
+                      </td>
+                      <td style={cellStyle}>
+                        {run.k6P95Ms === null ? "—" : `${run.k6P95Ms} ms`}
+                      </td>
+                      <td style={cellStyle}>
+                        <Badge value={run.zapStatus} styles={STATUS_STYLE} />
+                      </td>
+                      <td style={cellStyle}>
+                        <Badge value={run.axeStatus} styles={STATUS_STYLE} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <EmptyState message="Nenhuma execução não funcional encontrada." />
+            )}
+          </TableCard>
+
+          <TableCard title="Achados prioritários">
+            {nonFunctional.topFindings.length ? (
+              <table style={tableStyle}>
+                <thead>
+                  <tr>
+                    {["Ferramenta", "Severidade", "Achado", "Qtd."].map(
+                      heading => (
+                        <th key={heading} style={headerCellStyle}>
+                          {heading}
+                        </th>
+                      ),
+                    )}
+                  </tr>
+                </thead>
+                <tbody>
+                  {nonFunctional.topFindings.map(finding => (
+                    <tr key={finding.id}>
+                      <td style={cellStyle}>{finding.tool}</td>
+                      <td style={cellStyle}>
+                        <Badge value={finding.severity} styles={RISK_STYLE} />
+                      </td>
+                      <td style={cellStyle}>
+                        {finding.helpUrl ? (
+                          <a
+                            href={finding.helpUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            style={{ color: "#4f46e5" }}
+                          >
+                            {finding.title}
+                          </a>
+                        ) : (
+                          finding.title
+                        )}
+                      </td>
+                      <td style={cellStyle}>{finding.occurrences}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <EmptyState message="Nenhum achado não funcional registrado." />
+            )}
+          </TableCard>
+        </div>
       </div>
     </AppLayout>
   );
@@ -707,7 +984,11 @@ function TableCard({
   );
 }
 
-function EmptyState() {
+function EmptyState({
+  message = "Nenhuma execução encontrada para os filtros selecionados.",
+}: {
+  message?: string;
+}) {
   return (
     <div
       style={{
@@ -719,7 +1000,7 @@ function EmptyState() {
         textAlign: "center",
       }}
     >
-      Nenhuma execução encontrada para os filtros selecionados.
+      {message}
     </div>
   );
 }

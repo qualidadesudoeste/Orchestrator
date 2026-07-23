@@ -1,7 +1,25 @@
 import { and, desc, eq, inArray, isNull, or } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
-import { Checklist, InsertUser, QAPlanDocument, Sprint, TrailProgress, checklists, clients, projects, qaPlanDocuments, sprints, testExecutions, testResults, trailProgress, users } from "../drizzle/schema";
+import {
+  Checklist,
+  InsertUser,
+  QAPlanDocument,
+  Sprint,
+  TrailProgress,
+  checklists,
+  clients,
+  nonFunctionalFindings,
+  nonFunctionalRuns,
+  projects,
+  qaPlanDocuments,
+  sprints,
+  testExecutions,
+  testResults,
+  trailProgress,
+  users,
+} from "../drizzle/schema";
 import { ENV } from "./_core/env";
+import type { NormalizedNonFunctionalRun } from "./nonFunctionalService";
 import type { NormalizedTestExecution } from "./testExecutionService";
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -471,11 +489,171 @@ export async function upsertTestExecution(
   });
 }
 
+export async function upsertNonFunctionalRun(
+  data: NormalizedNonFunctionalRun,
+): Promise<{ id: number; created: boolean }> {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+
+  let clientId = data.clientId;
+  let projectId = data.projectId;
+  let sprintId = data.sprintId;
+  let clientName = data.clientName;
+
+  if (!projectId) {
+    const projectRows = await db
+      .select()
+      .from(projects)
+      .where(eq(projects.name, data.projectName))
+      .limit(1);
+    const project = projectRows[0];
+    if (project) {
+      projectId = project.id;
+      clientId = clientId ?? project.clientId;
+    }
+  }
+  if (!clientName && clientId) {
+    const clientRows = await db
+      .select()
+      .from(clients)
+      .where(eq(clients.id, clientId))
+      .limit(1);
+    clientName = clientRows[0]?.name;
+  }
+  if (!sprintId && data.sprintName) {
+    const sprintCondition = projectId
+      ? and(
+          eq(sprints.name, data.sprintName),
+          eq(sprints.projectId, projectId),
+        )
+      : eq(sprints.name, data.sprintName);
+    const sprintRows = await db
+      .select()
+      .from(sprints)
+      .where(sprintCondition)
+      .limit(1);
+    sprintId = sprintRows[0]?.id;
+  }
+
+  const existingRows = await db
+    .select({ id: nonFunctionalRuns.id })
+    .from(nonFunctionalRuns)
+    .where(eq(nonFunctionalRuns.externalRunId, data.externalRunId))
+    .limit(1);
+  const existingId = existingRows[0]?.id;
+
+  return db.transaction(async tx => {
+    const values = {
+      externalRunId: data.externalRunId,
+      clientId: clientId ?? null,
+      projectId: projectId ?? null,
+      sprintId: sprintId ?? null,
+      clientName: clientName ?? null,
+      projectName: data.projectName,
+      sprintName: data.sprintName ?? null,
+      targetUrl: data.targetUrl,
+      status: data.status,
+      k6Status: data.k6Status,
+      k6P95Ms: data.k6P95Ms ?? null,
+      k6FailureRateBasisPoints: data.k6FailureRateBasisPoints ?? null,
+      k6Requests: data.k6Requests,
+      zapStatus: data.zapStatus,
+      zapHigh: data.zapHigh,
+      zapMedium: data.zapMedium,
+      zapLow: data.zapLow,
+      axeStatus: data.axeStatus,
+      axeCritical: data.axeCritical,
+      axeSerious: data.axeSerious,
+      axeModerate: data.axeModerate,
+      axeMinor: data.axeMinor,
+      reportDirectory: data.reportDirectory ?? null,
+      startedAt: data.startedAt ?? null,
+      finishedAt: data.finishedAt,
+      rawPayload: data.rawPayload,
+    };
+
+    let runId = existingId;
+    if (runId) {
+      await tx
+        .update(nonFunctionalRuns)
+        .set(values)
+        .where(eq(nonFunctionalRuns.id, runId));
+      await tx
+        .delete(nonFunctionalFindings)
+        .where(eq(nonFunctionalFindings.runId, runId));
+    } else {
+      const [insertResult] = await tx.insert(nonFunctionalRuns).values(values);
+      runId = (insertResult as any).insertId as number;
+    }
+
+    if (data.findings.length > 0) {
+      await tx.insert(nonFunctionalFindings).values(
+        data.findings.map(finding => ({
+          runId,
+          tool: finding.tool,
+          severity: finding.severity,
+          ruleId: finding.ruleId ?? null,
+          title: finding.title,
+          description: finding.description ?? null,
+          helpUrl: finding.helpUrl ?? null,
+          occurrences: finding.occurrences,
+          rawPayload: finding.rawPayload,
+        })),
+      );
+    }
+
+    return { id: runId, created: !existingId };
+  });
+}
+
 export type DashboardMetricFilters = {
   clientId?: number;
   projectId?: number;
   sprintId?: number;
 };
+
+function emptyNonFunctionalMetrics() {
+  return {
+    summary: {
+      totalRuns: 0,
+      passedRuns: 0,
+      failedRuns: 0,
+      passRate: 0,
+      latestP95Ms: null as number | null,
+      latestFailureRatePercent: null as number | null,
+      zapHigh: 0,
+      zapMedium: 0,
+      axeCritical: 0,
+      axeSerious: 0,
+    },
+    recentRuns: [] as Array<{
+      id: number;
+      externalRunId: string;
+      projectName: string;
+      sprintName: string | null;
+      targetUrl: string;
+      status: "PASSOU" | "FALHOU" | "PARCIAL" | "ERRO";
+      k6Status: "PASSOU" | "FALHOU" | "NAO_EXECUTADO" | "ERRO";
+      k6P95Ms: number | null;
+      zapStatus: "PASSOU" | "FALHOU" | "NAO_EXECUTADO" | "ERRO";
+      zapHigh: number;
+      zapMedium: number;
+      axeStatus: "PASSOU" | "FALHOU" | "NAO_EXECUTADO" | "ERRO";
+      axeCritical: number;
+      axeSerious: number;
+      reportDirectory: string | null;
+      finishedAt: Date;
+    }>,
+    topFindings: [] as Array<{
+      id: number;
+      tool: "K6" | "ZAP" | "AXE";
+      severity: "INFO" | "BAIXO" | "MEDIO" | "ALTO" | "CRITICO";
+      title: string;
+      occurrences: number;
+      helpUrl: string | null;
+    }>,
+  };
+}
 
 export async function getDashboardMetrics(filters: DashboardMetricFilters) {
   const db = await getDb();
@@ -497,6 +675,7 @@ export async function getDashboardMetrics(filters: DashboardMetricFilters) {
       trend: [],
       modules: [],
       recentExecutions: [],
+      nonFunctional: emptyNonFunctionalMetrics(),
     };
   }
 
@@ -521,6 +700,143 @@ export async function getDashboardMetrics(filters: DashboardMetricFilters) {
           .orderBy(desc(testExecutions.finishedAt))
           .limit(500);
 
+  const nonFunctionalConditions = [];
+  if (filters.clientId) {
+    nonFunctionalConditions.push(
+      eq(nonFunctionalRuns.clientId, filters.clientId),
+    );
+  }
+  if (filters.projectId) {
+    nonFunctionalConditions.push(
+      eq(nonFunctionalRuns.projectId, filters.projectId),
+    );
+  }
+  if (filters.sprintId) {
+    nonFunctionalConditions.push(
+      eq(nonFunctionalRuns.sprintId, filters.sprintId),
+    );
+  }
+  const nonFunctionalBaseQuery = db.select().from(nonFunctionalRuns);
+  const nonFunctionalRunRows =
+    nonFunctionalConditions.length > 0
+      ? await nonFunctionalBaseQuery
+          .where(and(...nonFunctionalConditions))
+          .orderBy(desc(nonFunctionalRuns.finishedAt))
+          .limit(200)
+      : await nonFunctionalBaseQuery
+          .orderBy(desc(nonFunctionalRuns.finishedAt))
+          .limit(200);
+  const nonFunctionalRunIds = nonFunctionalRunRows.map(run => run.id);
+  const nonFunctionalFindingRows =
+    nonFunctionalRunIds.length > 0
+      ? await db
+          .select()
+          .from(nonFunctionalFindings)
+          .where(inArray(nonFunctionalFindings.runId, nonFunctionalRunIds))
+      : [];
+  const nonFunctionalPassed = nonFunctionalRunRows.filter(
+    run => run.status === "PASSOU",
+  ).length;
+  const nonFunctionalFailed = nonFunctionalRunRows.filter(
+    run => run.status === "FALHOU",
+  ).length;
+  const latestNonFunctional = nonFunctionalRunRows[0];
+  const severityOrder = {
+    CRITICO: 5,
+    ALTO: 4,
+    MEDIO: 3,
+    BAIXO: 2,
+    INFO: 1,
+  };
+  const consolidatedFindingMap = new Map<
+    string,
+    (typeof nonFunctionalFindingRows)[number]
+  >();
+  for (const finding of nonFunctionalFindingRows) {
+    const key = `${finding.tool}:${finding.ruleId || finding.title}`;
+    const existing = consolidatedFindingMap.get(key);
+    if (!existing) {
+      consolidatedFindingMap.set(key, { ...finding });
+      continue;
+    }
+    existing.occurrences += finding.occurrences;
+    if (severityOrder[finding.severity] > severityOrder[existing.severity]) {
+      existing.severity = finding.severity;
+    }
+    if (!existing.helpUrl && finding.helpUrl) {
+      existing.helpUrl = finding.helpUrl;
+    }
+  }
+  const nonFunctional = {
+    summary: {
+      totalRuns: nonFunctionalRunRows.length,
+      passedRuns: nonFunctionalPassed,
+      failedRuns: nonFunctionalFailed,
+      passRate:
+        nonFunctionalRunRows.length > 0
+          ? Math.round(
+              (nonFunctionalPassed / nonFunctionalRunRows.length) * 1000,
+            ) / 10
+          : 0,
+      latestP95Ms: latestNonFunctional?.k6P95Ms ?? null,
+      latestFailureRatePercent:
+        latestNonFunctional?.k6FailureRateBasisPoints == null
+          ? null
+          : Math.round(
+              (latestNonFunctional.k6FailureRateBasisPoints / 100) * 100,
+            ) / 100,
+      zapHigh: nonFunctionalRunRows.reduce(
+        (total, run) => total + run.zapHigh,
+        0,
+      ),
+      zapMedium: nonFunctionalRunRows.reduce(
+        (total, run) => total + run.zapMedium,
+        0,
+      ),
+      axeCritical: nonFunctionalRunRows.reduce(
+        (total, run) => total + run.axeCritical,
+        0,
+      ),
+      axeSerious: nonFunctionalRunRows.reduce(
+        (total, run) => total + run.axeSerious,
+        0,
+      ),
+    },
+    recentRuns: nonFunctionalRunRows.slice(0, 10).map(run => ({
+      id: run.id,
+      externalRunId: run.externalRunId,
+      projectName: run.projectName,
+      sprintName: run.sprintName,
+      targetUrl: run.targetUrl,
+      status: run.status,
+      k6Status: run.k6Status,
+      k6P95Ms: run.k6P95Ms,
+      zapStatus: run.zapStatus,
+      zapHigh: run.zapHigh,
+      zapMedium: run.zapMedium,
+      axeStatus: run.axeStatus,
+      axeCritical: run.axeCritical,
+      axeSerious: run.axeSerious,
+      reportDirectory: run.reportDirectory,
+      finishedAt: run.finishedAt ?? run.createdAt,
+    })),
+    topFindings: Array.from(consolidatedFindingMap.values())
+      .sort(
+        (left, right) =>
+          severityOrder[right.severity] - severityOrder[left.severity] ||
+          right.occurrences - left.occurrences,
+      )
+      .slice(0, 10)
+      .map(finding => ({
+        id: finding.id,
+        tool: finding.tool,
+        severity: finding.severity,
+        title: finding.title,
+        occurrences: finding.occurrences,
+        helpUrl: finding.helpUrl,
+      })),
+  };
+
   if (executions.length === 0) {
     return {
       databaseAvailable: true,
@@ -544,6 +860,7 @@ export async function getDashboardMetrics(filters: DashboardMetricFilters) {
       trend: [],
       modules: [],
       recentExecutions: [],
+      nonFunctional,
     };
   }
 
@@ -715,5 +1032,6 @@ export async function getDashboardMetrics(filters: DashboardMetricFilters) {
       finishedAt: execution.finishedAt ?? execution.createdAt,
       evidenceDocxUrl: execution.evidenceDocxUrl,
     })),
+    nonFunctional,
   };
 }

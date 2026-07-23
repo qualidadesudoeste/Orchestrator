@@ -12,6 +12,7 @@ import { storagePut } from "../storage";
 import { registerEvidenceDocxRoutes } from "../evidenceDocxRoutes";
 import { registerRegressionCodeRoutes } from "../regressionCodeRoutes";
 import { registerTestExecutionRoutes } from "../testExecutionRoutes";
+import { registerNonFunctionalRoutes } from "../nonFunctionalRoutes";
 import { sdk } from "./sdk";
 import { COOKIE_NAME } from "@shared/const";
 import cookie from "cookie";
@@ -92,6 +93,7 @@ async function startServer() {
   registerEvidenceDocxRoutes(app);
   registerRegressionCodeRoutes(app);
   registerTestExecutionRoutes(app);
+  registerNonFunctionalRoutes(app);
 
   // ── Upload de imagens para evidências de teste ──────────────────────────────
   app.post("/api/qa-upload", async (req, res) => {
