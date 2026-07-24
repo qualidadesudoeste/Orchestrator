@@ -12,6 +12,20 @@
 1. Copie `.env.production.example` para `.env.production`.
 2. Gere valores aleatórios independentes para banco, JWT e agente.
 3. Configure `ORCHESTRATOR_PUBLIC_URL` com o endereço HTTPS final.
+
+Como alternativa aos três passos acima, gere o arquivo sem expor os segredos
+no terminal:
+
+```powershell
+npm run production:prepare-env -- `
+  --public-url https://qa.seudominio.com.br `
+  --version 1.0.0
+```
+
+O gerador se recusa a sobrescrever um arquivo existente e cria senhas
+independentes para MySQL, JWT e integração do agente. A chave da OpenAI
+permanece vazia para ser incluída posteriormente por um meio seguro.
+
 4. Valide a configuração sem iniciar os serviços:
 
 ```powershell
@@ -26,6 +40,29 @@ docker compose --env-file .env.production -f docker-compose.production.yml up -d
 
 O serviço `migrate` aplica somente migrations versionadas antes de liberar o
 container da aplicação. Não execute `db:generate` no servidor.
+
+## Primeiro administrador
+
+Em um banco novo, crie o primeiro administrador uma única vez. O comando se
+recusa a criar outra conta assim que existir qualquer usuário:
+
+```bash
+read -rp "Usuário administrador: " ADMIN_USERNAME
+read -rp "Nome completo: " ADMIN_NAME
+read -rsp "Senha (mínimo de 12 caracteres): " ADMIN_PASSWORD
+echo
+export ADMIN_USERNAME ADMIN_NAME ADMIN_PASSWORD
+
+docker compose --env-file .env.production -f docker-compose.production.yml \
+  run --rm -e ADMIN_USERNAME -e ADMIN_NAME -e ADMIN_PASSWORD \
+  app node dist/bootstrap-admin.js
+
+unset ADMIN_PASSWORD ADMIN_USERNAME ADMIN_NAME
+```
+
+A senha não deve ser colocada na linha de comando, no Git ou no arquivo de
+produção. Depois do primeiro login, os demais usuários são criados pela página
+administrativa da plataforma.
 
 ## Imagem versionada no GitHub
 

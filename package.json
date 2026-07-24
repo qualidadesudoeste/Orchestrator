@@ -5,7 +5,7 @@
   "license": "MIT",
   "scripts": {
     "dev": "cross-env NODE_ENV=development tsx watch server/_core/index.ts",
-    "build": "vite build && esbuild server/_core/index.ts --platform=node --packages=external --bundle --format=esm --outfile=dist/index.js && esbuild server/migrate.ts --platform=node --packages=external --bundle --format=esm --outfile=dist/migrate.js",
+    "build": "vite build && esbuild server/_core/index.ts --platform=node --packages=external --bundle --format=esm --outfile=dist/index.js && esbuild server/migrate.ts --platform=node --packages=external --bundle --format=esm --outfile=dist/migrate.js && esbuild server/bootstrapAdmin.ts --platform=node --packages=external --bundle --format=esm --outfile=dist/bootstrap-admin.js",
     "start": "cross-env NODE_ENV=production node dist/index.js",
     "check": "tsc --noEmit",
     "format": "prettier --write .",
@@ -16,7 +16,9 @@
     "db:migrate": "drizzle-kit migrate",
     "db:push": "npm run db:generate && npm run db:migrate",
     "migrate:prod": "node dist/migrate.js",
+    "bootstrap:admin": "node dist/bootstrap-admin.js",
     "security:audit": "npm audit --omit=dev --audit-level=high",
+    "production:prepare-env": "node automation/production/prepare-env.cjs",
     "release:preflight": "node automation/production/release-preflight.cjs"
   },
   "dependencies": {
