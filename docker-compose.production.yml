@@ -24,10 +24,7 @@ services:
       - internal
 
   migrate:
-    build:
-      context: .
-      target: runtime
-    image: orchestrator-platform:${APP_VERSION:-local}
+    image: ${ORCHESTRATOR_IMAGE:-orchestrator-platform}:${APP_VERSION:-local}
     command: ["node", "dist/migrate.js"]
     env_file:
       - ${PRODUCTION_ENV_FILE:-.env.production}
@@ -39,7 +36,10 @@ services:
       - internal
 
   app:
-    image: orchestrator-platform:${APP_VERSION:-local}
+    build:
+      context: .
+      target: runtime
+    image: ${ORCHESTRATOR_IMAGE:-orchestrator-platform}:${APP_VERSION:-local}
     restart: unless-stopped
     env_file:
       - ${PRODUCTION_ENV_FILE:-.env.production}

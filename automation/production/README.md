@@ -27,12 +27,51 @@ docker compose --env-file .env.production -f docker-compose.production.yml up -d
 O serviço `migrate` aplica somente migrations versionadas antes de liberar o
 container da aplicação. Não execute `db:generate` no servidor.
 
+## Imagem versionada no GitHub
+
+Uma tag Git no formato `vX.Y.Z` publica automaticamente a imagem:
+
+```text
+ghcr.io/qualidadesudoeste/orchestrator:X.Y.Z
+```
+
+O pipeline também publica as tags `X.Y`, `latest` e `sha-...`, além de gerar
+proveniência e SBOM. Uma execução manual publica `homolog`, sem substituir
+`latest`.
+
+No servidor, defina em `.env.production`:
+
+```dotenv
+ORCHESTRATOR_IMAGE=ghcr.io/qualidadesudoeste/orchestrator
+APP_VERSION=1.0.0
+```
+
+Para atualizar usando a imagem pronta:
+
+```bash
+chmod +x automation/production/deploy-server.sh
+./automation/production/deploy-server.sh /opt/orchestrator
+```
+
+O script valida o Compose, baixa as imagens, executa a migration declarada,
+inicia os serviços e aguarda a confirmação de `/readyz`. Caso o pacote do
+GitHub esteja privado, autentique o servidor antes com um token somente de
+leitura:
+
+```bash
+echo "$GHCR_TOKEN" | docker login ghcr.io -u USUARIO --password-stdin
+```
+
 ## Proxy e HTTPS
 
 O container publica por padrão apenas em `127.0.0.1:3000`. Use Nginx, Caddy ou
 o proxy corporativo para TLS, encaminhando `Host`, `X-Forwarded-For` e
 `X-Forwarded-Proto`. Configure `TRUST_PROXY=1` somente quando houver exatamente
 um proxy confiável. Não exponha MySQL, n8n ou Playwright MCP à internet.
+
+O arquivo `Caddyfile.example` contém a configuração mínima para HTTPS
+automático. Copie-o para `/etc/caddy/Caddyfile`, substitua o domínio e recarregue
+o Caddy somente depois de o DNS apontar para o servidor.
 
 ## Saúde e observabilidade
 
