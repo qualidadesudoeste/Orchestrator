@@ -14,6 +14,7 @@ import TrailPage from "./pages/TrailPage";
 import LoginPage from "./pages/LoginPage";
 import QAPlannerPage from "./pages/QAPlannerPage";
 import DashboardPage from "./pages/DashboardPage";
+import ProjectsPage from "./pages/ProjectsPage";
 
 function Router() {
   return (
@@ -23,6 +24,7 @@ function Router() {
       <Route path="/painel" component={Home} />
       <Route path="/dashboard" component={DashboardPage} />
       <Route path="/workspace" component={WorkspacePage} />
+      <Route path="/projects" component={ProjectsPage} />
       <Route path="/history" component={HistoryPage} />
       <Route path="/coordinator" component={CoordinatorPage} />
       <Route path="/users" component={UsersPage} />

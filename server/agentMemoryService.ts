@@ -196,9 +196,12 @@ function createLearning(
   if (!content || content === "[REDACTED]") return undefined;
   const title =
     redact(text(input.title)) ?? content.replace(/\s+/g, " ").slice(0, 160);
+  const stableIdentity = ["SELETOR", "AUTOMACAO", "OBSERVACAO", "RISCO"].includes(input.category)
+    ? normalizedKey(title)
+    : normalizedKey(content);
   const fingerprint = crypto
     .createHash("sha256")
-    .update(`${scope.scopeKey}|${input.category}|${normalizedKey(content)}`)
+    .update(`${scope.scopeKey}|${input.category}|${stableIdentity}`)
     .digest("hex");
   return {
     ...scope,
@@ -222,6 +225,13 @@ export function extractAgentMemoryLearnings(
       raw.aprendizados ??
       raw.learnings,
   );
+  const interfaceMap = array(
+    observed.mapa_interface ?? observed.interface_map ?? raw.mapa_interface,
+  );
+  const observedStatus = normalizedKey(
+    text(observed.status ?? raw.status),
+  ).toUpperCase();
+  const functionalResultObserved = ["PASSOU", "FALHOU"].includes(observedStatus);
   const candidates: Array<{
     category: AgentMemoryCategory;
     title?: string;
@@ -246,14 +256,49 @@ export function extractAgentMemoryLearnings(
         learning.description,
     );
     if (!content) continue;
+    const learningCategory = category(learning.categoria ?? learning.category ?? learning.tipo);
+    const normalizedContent = normalizedKey(content);
+    if (
+      learningCategory === "REGRA_NEGOCIO" &&
+      (!functionalResultObserved || /nao (foi|pode|execut)|requer validar|nao exercitad/.test(normalizedContent))
+    ) continue;
     candidates.push({
-      category: category(learning.categoria ?? learning.category ?? learning.tipo),
+      category: learningCategory,
       title: text(learning.titulo ?? learning.title),
       content,
       confidence: confidence(
         learning.confianca ?? learning.confidence,
         70,
       ),
+    });
+  }
+
+  for (const item of interfaceMap.slice(0, 20)) {
+    const map = object(item);
+    const screen = text(map.tela ?? map.screen ?? map.nome ?? map.name);
+    if (!screen) continue;
+    const environment = text(map.ambiente ?? map.environment);
+    const systemUrl = text(map.sistema_url ?? map.system_url ?? map.base_url);
+    const route = text(map.rota ?? map.route ?? map.url);
+    const access = text(map.acesso ?? map.access ?? map.caminho ?? map.path);
+    const elements = array(map.elementos ?? map.elements)
+      .map(value => redact(text(value)))
+      .filter(Boolean)
+      .slice(0, 12)
+      .join(", ");
+    const details = [
+      `Tela confirmada: ${screen}.`,
+      environment ? `Ambiente: ${environment}.` : "",
+      systemUrl ? `URL base observada: ${systemUrl}.` : "",
+      route ? `Rota observada: ${route}.` : "",
+      access ? `Caminho de navegação: ${access}.` : "",
+      elements ? `Elementos semânticos: ${elements}.` : "",
+    ].filter(Boolean).join(" ");
+    candidates.push({
+      category: "SELETOR",
+      title: `Mapa da tela: ${screen}`,
+      content: details,
+      confidence: confidence(map.confianca ?? map.confidence, 90),
     });
   }
 

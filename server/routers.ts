@@ -1,4 +1,5 @@
 import bcrypt from "bcryptjs";
+import { randomUUID } from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { COOKIE_NAME } from "@shared/const";
@@ -22,8 +23,16 @@ import {
   deleteUser,
   updateLastSignedIn,
   getDashboardMetrics,
+  listTestExecutionHistory,
   getDefectCardHistory,
   updateDefectCardStatus,
+  createPendingTestExecution,
+  markTestExecutionStartFailure,
+  listProjectTestEnvironments,
+  getProjectTestEnvironment,
+  createProjectTestEnvironment,
+  updateProjectTestEnvironment,
+  deleteProjectTestEnvironment,
 } from "./db";
 import {
   getTrailProgress,
@@ -42,10 +51,41 @@ import {
   DEFECT_CARD_STATUSES,
   DefectCardTransitionError,
 } from "./defectCardLifecycleService";
+import { ENV } from "./_core/env";
+import {
+  analyzeCoverageWithQaRules,
+  buildRuleBasedPlan,
+  enhancePlanWithQaRules,
+} from "./qaScenarioRules";
+import { indexProjectSource } from "./sourceCodeService";
+import { decryptCredential, encryptCredential } from "./credentialCrypto";
+import { assertCompatibleVpnRequirements, ensureVpnConnection, type VpnRequirement } from "./vpnService";
 
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
   if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Acesso restrito ao Administrador." });
   return next({ ctx });
+});
+
+const qaGeneratedCasesSchema = z.object({
+  resumo: z.string().default(""),
+  cobertura: z.object({
+    funcional: z.array(z.string()).default([]),
+    naoFuncional: z.array(z.string()).default([]),
+    heuristicas: z.array(z.string()).default([]),
+  }).default({ funcional: [], naoFuncional: [], heuristicas: [] }),
+  cards: z.array(z.object({
+    categoria: z.string().default("Casos de teste"),
+    casos: z.array(z.object({
+      id: z.string().default(""),
+      titulo: z.string().default("Caso de teste"),
+      prioridade: z.string().default("média"),
+      dado: z.string().default(""),
+      quando: z.string().default(""),
+      entao: z.string().default(""),
+      resultado_esperado: z.string().default(""),
+      tipo: z.string().default("funcional"),
+    })).default([]),
+  })).default([]),
 });
 
 export const appRouter = router({
@@ -164,11 +204,120 @@ export const appRouter = router({
       .input(z.object({ name: z.string().min(1), description: z.string().optional(), clientId: z.number() }))
       .mutation(async ({ ctx, input }) => { await createProject({ ...input, createdById: ctx.user.id }); return { success: true }; }),
     update: adminProcedure
-      .input(z.object({ id: z.number(), name: z.string().min(1).optional(), description: z.string().optional() }))
+      .input(z.object({
+        id: z.number(),
+        name: z.string().min(1).optional(),
+        description: z.string().optional(),
+        sourceCodePath: z.string().trim().max(1000).nullable().optional(),
+      }))
       .mutation(async ({ input }) => { const { id, ...data } = input; await updateProject(id, data); return { success: true }; }),
+    indexSource: adminProcedure
+      .input(z.object({
+        id: z.number().int().positive(),
+        sourceCodePath: z.string().trim().min(1).max(1000),
+      }))
+      .mutation(async ({ input }) => {
+        const project = (await getProjects()).find(item => item.id === input.id);
+        if (!project) throw new TRPCError({ code: "NOT_FOUND", message: "Projeto não encontrado." });
+        try {
+          const index = await indexProjectSource(input.sourceCodePath);
+          await updateProject(input.id, {
+            sourceCodePath: index.absolutePath,
+            sourceCodeSummary: index.summary,
+            sourceCodeFileCount: index.fileCount,
+            sourceCodeIndexedAt: index.indexedAt,
+          });
+          return {
+            success: true as const,
+            sourceCodePath: index.absolutePath,
+            fileCount: index.fileCount,
+            analyzedFileCount: index.analyzedFileCount,
+            indexedAt: index.indexedAt,
+          };
+        } catch (error) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: error instanceof Error ? error.message : "Não foi possível analisar o código-fonte.",
+          });
+        }
+      }),
     delete: adminProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ input }) => { await deleteProject(input.id); return { success: true }; }),
+  }),
+  testEnvironments: router({
+    list: protectedProcedure
+      .input(z.object({ projectId: z.number().int().positive() }))
+      .query(({ input }) => listProjectTestEnvironments(input.projectId)),
+    create: adminProcedure
+      .input(z.object({
+        projectId: z.number().int().positive(),
+        name: z.string().trim().min(1).max(120),
+        type: z.enum(["PORTAL", "RETAGUARDA", "SITE", "API", "OUTRO"]),
+        loginUrl: z.string().trim().url().max(1000),
+        username: z.string().trim().max(320).optional(),
+        password: z.string().max(512).optional(),
+        vpnProvider: z.enum(["NONE", "COGEL", "SEFAZ", "OUTRA"]).default("NONE"),
+        vpnProfileName: z.string().trim().max(160).optional(),
+        vpnUsername: z.string().trim().max(320).optional(),
+        vpnPassword: z.string().max(512).optional(),
+        vpnAutoConnect: z.boolean().default(true),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const { password, vpnPassword, vpnAutoConnect, ...data } = input;
+        if (data.vpnProvider !== "NONE" && !data.vpnProfileName) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Informe o nome do perfil configurado no FortiClient." });
+        }
+        const id = await createProjectTestEnvironment({
+          ...data,
+          username: data.username || null,
+          passwordEncrypted: password ? encryptCredential(password) : null,
+          vpnProfileName: data.vpnProvider === "NONE" ? null : data.vpnProfileName || null,
+          vpnUsername: data.vpnProvider === "NONE" ? null : data.vpnUsername || null,
+          vpnPasswordEncrypted: data.vpnProvider !== "NONE" && vpnPassword ? encryptCredential(vpnPassword) : null,
+          vpnAutoConnect: vpnAutoConnect ? 1 : 0,
+          createdById: ctx.user.id,
+        });
+        return { success: true as const, id };
+      }),
+    update: adminProcedure
+      .input(z.object({
+        id: z.number().int().positive(),
+        name: z.string().trim().min(1).max(120).optional(),
+        type: z.enum(["PORTAL", "RETAGUARDA", "SITE", "API", "OUTRO"]).optional(),
+        loginUrl: z.string().trim().url().max(1000).optional(),
+        username: z.string().trim().max(320).nullable().optional(),
+        password: z.string().max(512).nullable().optional(),
+        vpnProvider: z.enum(["NONE", "COGEL", "SEFAZ", "OUTRA"]).optional(),
+        vpnProfileName: z.string().trim().max(160).nullable().optional(),
+        vpnUsername: z.string().trim().max(320).nullable().optional(),
+        vpnPassword: z.string().max(512).nullable().optional(),
+        vpnAutoConnect: z.boolean().optional(),
+        isActive: z.boolean().optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const { id, password, vpnPassword, vpnAutoConnect, isActive, ...data } = input;
+        const disablingVpn = data.vpnProvider === "NONE";
+        await updateProjectTestEnvironment(id, {
+          ...data,
+          ...(password === undefined ? {} : { passwordEncrypted: password ? encryptCredential(password) : null }),
+          ...(vpnPassword === undefined ? {} : { vpnPasswordEncrypted: vpnPassword ? encryptCredential(vpnPassword) : null }),
+          ...(vpnAutoConnect === undefined ? {} : { vpnAutoConnect: vpnAutoConnect ? 1 : 0 }),
+          ...(isActive === undefined ? {} : { isActive: isActive ? 1 : 0 }),
+          ...(disablingVpn ? {
+            vpnProfileName: null,
+            vpnUsername: null,
+            vpnPasswordEncrypted: null,
+          } : {}),
+        });
+        return { success: true as const };
+      }),
+    delete: adminProcedure
+      .input(z.object({ id: z.number().int().positive() }))
+      .mutation(async ({ input }) => {
+        await deleteProjectTestEnvironment(input.id);
+        return { success: true as const };
+      }),
   }),
   sprints: router({
     list: protectedProcedure
@@ -192,6 +341,33 @@ export const appRouter = router({
         sprintId: z.number().optional(),
       }))
       .query(async ({ input }) => getDashboardMetrics(input)),
+  }),
+  testExecutions: router({
+    history: protectedProcedure
+      .input(z.object({
+        clientId: z.number().int().positive().optional(),
+        projectId: z.number().int().positive().optional(),
+        dateFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        dateTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        limit: z.number().int().min(1).max(200).default(100),
+      }))
+      .query(async ({ ctx, input }) => {
+        const dateFrom = input.dateFrom
+          ? new Date(`${input.dateFrom}T00:00:00`)
+          : undefined;
+        const dateTo = input.dateTo
+          ? new Date(`${input.dateTo}T23:59:59.999`)
+          : undefined;
+        return listTestExecutionHistory({
+          userId: ctx.user.id,
+          isAdmin: ctx.user.role === "admin",
+          clientId: input.clientId,
+          projectId: input.projectId,
+          dateFrom,
+          dateTo,
+          limit: input.limit,
+        });
+      }),
   }),
   defectCards: router({
     history: protectedProcedure
@@ -278,6 +454,7 @@ export const appRouter = router({
         userStory: z.string().min(10),
         systemType: z.string().default("web"),
         criticality: z.enum(["low", "medium", "high", "critical"]).default("medium"),
+        projectId: z.number().int().positive().optional(),
         projectContext: z.string().optional(),
       }))
       .mutation(async ({ input }) => {
@@ -293,12 +470,28 @@ export const appRouter = router({
           ? input.userStory.substring(0, MAX_HU_CHARS) + "\n\n[... HU truncada para processamento. Gere casos com base no contexto acima.]"
           : input.userStory;
 
+        const project = input.projectId
+          ? (await getProjects()).find(item => item.id === input.projectId)
+          : undefined;
+        const projectEnvironments = project
+          ? await listProjectTestEnvironments(project.id)
+          : [];
+        const sourceContext = project?.sourceCodeSummary?.slice(0, 12_000) ?? "";
+
         const systemPrompt = `Você é um especialista em Quality Assurance. Analise a História de Usuário e gere casos de teste BDD (Dado/Quando/Então).
 Seja conciso: máximo 3 categorias, máximo 4 casos por categoria (total máximo: 12 casos).
-Campos de texto devem ter no máximo 120 caracteres cada.`;
+Campos de texto devem ter no máximo 120 caracteres cada.
+Quando houver um índice de código-fonte, use rotas, campos e seletores para tornar os passos concretos. Não invente comportamento ausente da HU.
+Para sistemas web, gere prioritariamente cenários E2E observáveis e executáveis pela interface. Não transforme detalhes internos como transações, rollback, escritas em banco, injeção de falha ou códigos HTTP em cenários de interface, exceto quando a HU descrever como observar esse resultado na tela.
+Cada cenário deve declarar no Dado todas as pré-condições e dados necessários. Não presuma uma segunda conta, perfil especial, processo preparado ou mecanismo de falha que não tenha sido informado na HU.
+Retorne somente um objeto JSON válido, sem Markdown.`;
 
         const userMessage = `HU: ${truncatedStory}
-Sistema: ${input.systemType} | Criticidade: ${critMap[input.criticality] || input.criticality}${input.projectContext ? ` | Contexto: ${input.projectContext}` : ""}`;
+Sistema: ${input.systemType} | Criticidade: ${critMap[input.criticality] || input.criticality}${input.projectContext ? ` | Contexto: ${input.projectContext}` : ""}
+${sourceContext ? `\nÍNDICE TÉCNICO DO PROJETO:\n${sourceContext}` : ""}`;
+        const environmentContext = projectEnvironments.length
+          ? `\nAMBIENTES DISPONÍVEIS: ${projectEnvironments.map(item => `${item.name} (${item.type})`).join(", ")}. Quando um cenário depender de mais de um ambiente, mencione explicitamente o nome do ambiente em cada passo.`
+          : "";
 
         // Schema JSON estruturado para garantir saída válida sem markdown
         const outputSchema = {
@@ -355,12 +548,14 @@ Sistema: ${input.systemType} | Criticidade: ${critMap[input.criticality] || inpu
 
         try {
           const response = await invokeLLM({
-            model: "gpt-5-mini",
+            model: ENV.llmModel,
             messages: [
               { role: "system", content: systemPrompt },
-              { role: "user", content: userMessage },
+              { role: "user", content: userMessage + environmentContext },
             ],
-            maxTokens: 8192,
+            // O plano possui no máximo 12 casos concisos. Esse limite reduz
+            // latência e mantém a chamada dentro das cotas gratuitas usuais.
+            maxTokens: 4096,
             response_format: {
               type: "json_schema",
               json_schema: outputSchema,
@@ -375,15 +570,208 @@ Sistema: ${input.systemType} | Criticidade: ${critMap[input.criticality] || inpu
           const stripped = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
           const jsonStr = stripped.startsWith("{") ? stripped : (stripped.match(/(\{[\s\S]*\})/)?.[1] ?? "");
           if (!jsonStr) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "IA retornou resposta inválida. Tente novamente." });
-          return JSON.parse(jsonStr);
+          const parsed = qaGeneratedCasesSchema.parse(JSON.parse(jsonStr));
+          const totalCases = parsed.cards.reduce(
+            (total, card) => total + card.casos.length,
+            0
+          );
+          if (totalCases === 0) {
+            throw new TRPCError({
+              code: "INTERNAL_SERVER_ERROR",
+              message: "A IA não retornou casos de teste no formato esperado. Tente gerar novamente.",
+            });
+          }
+          return enhancePlanWithQaRules(parsed, {
+            userStory: input.userStory,
+            systemType: input.systemType,
+            criticality: input.criticality,
+          });
         } catch (err: any) {
-          if (err instanceof TRPCError) throw err;
           console.error("[qaPlanner.generateCases] Error:", err?.message);
-          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Erro ao gerar casos de teste. Tente novamente." });
+          return buildRuleBasedPlan({
+            userStory: input.userStory,
+            systemType: input.systemType,
+            criticality: input.criticality,
+          });
         }
       }),
 
     // ── Gerar documento LaTeX/PDF de evidências ───────────────────────────────
+    startAutomatedTests: protectedProcedure
+      .input(z.object({
+        projectId: z.number().int().positive(),
+        sprintId: z.number().int().positive(),
+        environmentId: z.number().int().positive().optional(),
+        environmentIds: z.array(z.number().int().positive()).min(1).max(5).optional(),
+        systemUrl: z.string().trim().url().max(2048).refine(
+          value => value.startsWith("http://") || value.startsWith("https://"),
+          "A URL deve começar com http:// ou https://.",
+        ).optional(),
+        username: z.string().trim().min(1).max(256).optional(),
+        password: z.string().min(1).max(512).optional(),
+        cases: z.array(z.object({
+          id: z.string().max(120),
+          titulo: z.string().min(1).max(500),
+          prioridade: z.string().max(30),
+          dado: z.string().min(1).max(3000),
+          quando: z.string().min(1).max(3000),
+          entao: z.string().min(1).max(3000),
+          resultado_esperado: z.string().max(3000),
+          tipo: z.string().max(80),
+        })).min(1).max(100),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        if (!ENV.n8nQaWebhookUrl || !ENV.qaAgentApiToken) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: "A execução automática ainda não está configurada no servidor.",
+          });
+        }
+
+        const [projects, sprints, clients] = await Promise.all([
+          getProjects(),
+          getSprints(input.projectId),
+          getClients(),
+        ]);
+        const project = projects.find(item => item.id === input.projectId);
+        const sprint = sprints.find(item => item.id === input.sprintId);
+        if (!project || !sprint || sprint.projectId !== project.id) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Projeto ou sprint inválidos.",
+          });
+        }
+        const client = clients.find(item => item.id === project.clientId);
+        const requestedEnvironmentIds = input.environmentIds ?? (input.environmentId ? [input.environmentId] : []);
+        const environments = await Promise.all(requestedEnvironmentIds.map(id => getProjectTestEnvironment(id)));
+        if (environments.some(item => !item || item.projectId !== project.id)) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Um dos ambientes não pertence ao projeto selecionado." });
+        }
+        if (environments.some(item => !item?.isActive)) {
+          throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Um dos ambientes selecionados está inativo." });
+        }
+        const configuredEnvironments = environments.filter((item): item is NonNullable<typeof item> => Boolean(item));
+        const primaryEnvironment = configuredEnvironments[0];
+        const systemUrl = primaryEnvironment?.loginUrl ?? input.systemUrl;
+        const username = primaryEnvironment?.username ?? input.username ?? "";
+        const password = primaryEnvironment?.passwordEncrypted
+          ? decryptCredential(primaryEnvironment.passwordEncrypted)
+          : input.password ?? "";
+        if (!systemUrl) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Selecione um ambiente parametrizado." });
+        }
+        const executionId = `web-${Date.now()}-${randomUUID().slice(0, 8)}`;
+        const scenariosGherkin = input.cases.map(testCase => [
+          `Cenário: ${testCase.titulo}`,
+          `  Dado ${testCase.dado}`,
+          `  Quando ${testCase.quando}`,
+          `  Então ${testCase.entao}`,
+          `  # Resultado esperado: ${testCase.resultado_esperado}`,
+          `  # ID: ${testCase.id} | Tipo: ${testCase.tipo} | Prioridade: ${testCase.prioridade}`,
+        ].join("\n")).join("\n\n");
+
+        await createPendingTestExecution({
+          externalExecutionId: executionId,
+          createdById: ctx.user.id,
+          clientId: client?.id,
+          projectId: project.id,
+          sprintId: sprint.id,
+          clientName: client?.name,
+          projectName: project.name,
+          sprintName: sprint.name,
+          systemUrl,
+          totalScenarios: input.cases.length,
+        });
+
+        const vpnRequirements: VpnRequirement[] = configuredEnvironments.map(item => ({
+          provider: item.vpnProvider,
+          profileName: item.vpnProfileName ?? "",
+          username: item.vpnUsername,
+          password: item.vpnPasswordEncrypted ? decryptCredential(item.vpnPasswordEncrypted) : null,
+          autoConnect: Boolean(item.vpnAutoConnect),
+          targetUrl: item.loginUrl,
+        }));
+        let vpnPreflight;
+        try {
+          assertCompatibleVpnRequirements(vpnRequirements);
+          const requiredVpn = vpnRequirements.find(item => item.provider !== "NONE");
+          vpnPreflight = requiredVpn
+            ? await ensureVpnConnection(requiredVpn)
+            : await ensureVpnConnection({ provider: "NONE", profileName: "", autoConnect: false, targetUrl: systemUrl });
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : "Não foi possível preparar a VPN.";
+          await markTestExecutionStartFailure(executionId, reason);
+          throw new TRPCError({ code: "PRECONDITION_FAILED", message: reason });
+        }
+
+        try {
+          const response = await fetch(ENV.n8nQaWebhookUrl, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              authorization: `Bearer ${ENV.qaAgentApiToken}`,
+            },
+            body: JSON.stringify({
+              execution_id: executionId,
+              projeto: project.name,
+              cliente: client?.name ?? "",
+              sprint: sprint.name,
+              ambiente: primaryEnvironment?.name ?? "Manual",
+              ambiente_tipo: primaryEnvironment?.type ?? "OUTRO",
+              ambiente_sem_autenticacao: !username || !password,
+              vpn: {
+                requerida: vpnPreflight.required,
+                provedor: vpnPreflight.provider,
+                perfil: vpnPreflight.profileName ?? "",
+                conectada_automaticamente: vpnPreflight.connectedAutomatically,
+                verificacao: vpnPreflight.verification,
+              },
+              ambientes: configuredEnvironments.map(item => ({
+                id: item.id,
+                nome: item.name,
+                tipo: item.type,
+                url: item.loginUrl,
+                usuario: item.username ?? "",
+                senha: item.passwordEncrypted ? decryptCredential(item.passwordEncrypted) : "",
+                sem_autenticacao: !item.username || !item.passwordEncrypted,
+                vpn_provedor: item.vpnProvider,
+                vpn_perfil: item.vpnProfileName ?? "",
+              })),
+              sistema_url: systemUrl,
+              login_usuario: username,
+              login_senha: password,
+              cenarios_gherkin: scenariosGherkin,
+              contexto_codigo_fonte: project.sourceCodeSummary?.slice(0, 14_000) ?? "",
+              solicitado_por: ctx.user.id,
+            }),
+            signal: AbortSignal.timeout(15_000),
+          });
+
+          if (!response.ok) {
+            throw new TRPCError({
+              code: "BAD_GATEWAY",
+              message: "O agente de QA não aceitou a execução. Verifique o serviço local.",
+            });
+          }
+
+          return {
+            started: true as const,
+            executionId,
+            totalScenarios: input.cases.length,
+          };
+        } catch (error) {
+          await markTestExecutionStartFailure(
+            executionId,
+            error instanceof Error ? error.message : "Falha desconhecida ao iniciar o agente.",
+          );
+          if (error instanceof TRPCError) throw error;
+          throw new TRPCError({
+            code: "BAD_GATEWAY",
+            message: "Não foi possível iniciar o agente de QA local.",
+          });
+        }
+      }),
+
     generateDocument: protectedProcedure
       .input(z.object({
         projectName: z.string().min(1),
@@ -539,7 +927,7 @@ Analise com rigor e retorne APENAS um JSON válido, sem markdown, com a seguinte
 
         try {
           const response = await invokeLLM({
-            model: "gpt-4o",
+            model: ENV.llmModel,
             messages: [
               { role: "system", content: systemPrompt },
               { role: "user", content: userMessage },
@@ -554,9 +942,8 @@ Analise com rigor e retorne APENAS um JSON válido, sem markdown, com a seguinte
           if (!jsonStr) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "IA retornou formato inválido." });
           return JSON.parse(jsonStr);
         } catch (err: any) {
-          if (err instanceof TRPCError) throw err;
           console.error("[qaPlanner.analyzeCoverage] Error:", err?.message);
-          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Erro ao analisar cobertura. Tente novamente." });
+          return analyzeCoverageWithQaRules(input.userStory, input.generatedCases);
         }
       }),
 

@@ -45,7 +45,7 @@ Importe estes arquivos no n8n:
 - `automation/n8n/Agente_QA_Playwright_MCP.json`: agente principal.
 - `automation/n8n/Diagnostico_MCP.json`: verificação do lote Gherkin e do MCP sem IA e sem consumo de créditos.
 
-No agente principal, confirme que o nó **GPT-4o** usa a credencial OpenAI cadastrada. Não coloque a chave diretamente no JSON. A conta da API precisa ter crédito disponível; uma assinatura do ChatGPT não inclui automaticamente créditos da API.
+No agente principal, confirme que o nó **OpenAI — GPT-5.6 Luna** usa a credencial **OpenAI Orchestrator**. Não coloque a chave diretamente no JSON. A conta da API precisa ter crédito disponível; uma assinatura do ChatGPT não inclui automaticamente créditos da API.
 
 ## 4. Teste de conexão sem IA
 
@@ -57,6 +57,58 @@ No agente principal, confirme que o nó **GPT-4o** usa a credencial OpenAI cadas
 6. Confirme a criação dos dois snapshots em `artifacts/playwright-mcp`.
 
 Esse teste valida o caminho n8n → Docker → host Windows → Playwright MCP e o processamento sequencial, sem depender da OpenAI.
+
+## Disparo direto pelo Orchestrator
+
+O fluxo principal possui o webhook autenticado:
+
+```text
+POST http://localhost:5678/webhook/qa-executions/start
+```
+
+No Orchestrator, depois de gerar os casos, use **Iniciar testes** e informe a
+URL de login, o usuário e a senha de uma conta exclusiva de testes. O backend
+converte os casos para Gherkin e dispara o webhook; não é necessário abrir o
+n8n.
+
+Para cenários autenticados, uma etapa determinística do Playwright navega,
+localiza usuário, senha e botão por label, placeholder, role e atributos
+semânticos, envia o formulário e confirma que a tela de login desapareceu.
+Essa etapa ocorre antes do agente e não depende de IA. Cenários que testam o
+próprio login são executados pelo agente OpenAI; cenários públicos seguem sem
+autenticação. CAPTCHA, MFA e SSO que exijam interação humana são bloqueados.
+
+O Playwright MCP usa a versão fixada `0.0.78`, `--output-mode stdout` e
+`saveSession: false`. O snapshot automático anexado à navegação pode conter
+somente o caminho de um `.yml`; por isso o agente sempre chama
+`browser_snapshot` explicitamente e sem `filename`. Essa segunda chamada
+entrega a árvore YAML diretamente ao agente, com os `target` necessários para
+preencher e clicar nos campos. Não atualize o MCP sem repetir essa validação de
+contrato.
+
+Configure no `.env` da aplicação:
+
+```env
+N8N_QA_WEBHOOK_URL=http://127.0.0.1:5678/webhook/qa-executions/start
+```
+
+O header de autenticação usa o mesmo `QA_AGENT_API_TOKEN` configurado na
+aplicação e no contêiner do n8n. As execuções automáticas do workflow estão
+configuradas para não persistir dados de sucesso ou erro no histórico do n8n.
+Antes dos resultados serem enviados ao Orchestrator, os campos de login e senha
+são removidos.
+
+### OpenAI API
+
+O backend usa `gpt-5.6-terra` para gerar e analisar cenários. O agente de
+navegador usa `gpt-5.6-luna`, com baixo esforço de raciocínio, para executar as
+ferramentas Playwright com menor latência e custo. Configure `OPENAI_API_KEY` no
+`.env` e rode `automation/n8n/configure-openai.ps1`; o script cadastra a
+credencial no n8n sem gravar a chave no JSON do workflow.
+
+O login prévio determinístico não envia credenciais ao modelo. Somente cenários
+que validam o próprio formulário de login fornecem as credenciais à OpenAI.
+Ainda assim, use uma conta descartável de homologação e privilégios mínimos.
 
 ## 5. Preparar uma execução Gherkin
 

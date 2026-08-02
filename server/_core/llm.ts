@@ -212,15 +212,57 @@ const normalizeToolChoice = (
   return toolChoice;
 };
 
-const resolveApiUrl = () =>
-  ENV.forgeApiUrl && ENV.forgeApiUrl.trim().length > 0
-    ? `${ENV.forgeApiUrl.replace(/\/$/, "")}/v1/chat/completions`
+type LlmProviderConfig = {
+  apiUrl: string;
+  apiKey: string;
+  model: string;
+};
+
+const isLocalLlmUrl = (value: string): boolean => {
+  try {
+    const host = new URL(value).hostname.toLowerCase();
+    return host === "localhost" || host === "127.0.0.1" || host === "::1";
+  } catch {
+    return false;
+  }
+};
+
+const resolveProviderPath = (
+  resource: "chat/completions" | "models",
+  apiUrl = ENV.llmApiUrl,
+) => {
+  const baseUrl = apiUrl.replace(/\/$/, "");
+  if (/generativelanguage\.googleapis\.com/i.test(baseUrl)) {
+    return `${baseUrl}/${resource}`;
+  }
+  return `${baseUrl}/v1/${resource}`;
+};
+
+const resolveApiUrl = (apiUrl = ENV.llmApiUrl) =>
+  apiUrl && apiUrl.trim().length > 0
+    ? resolveProviderPath("chat/completions", apiUrl)
     : "https://forge.manus.im/v1/chat/completions";
 
-const assertApiKey = () => {
-  if (!ENV.forgeApiKey) {
-    throw new Error("OPENAI_API_KEY is not configured");
+const assertApiKey = (apiUrl = ENV.llmApiUrl, apiKey = ENV.llmApiKey) => {
+  if (!apiKey && !isLocalLlmUrl(apiUrl)) {
+    throw new Error("LLM_API_KEY is not configured");
   }
+};
+
+const primaryProvider = (): LlmProviderConfig => ({
+  apiUrl: ENV.llmApiUrl,
+  // Never forward a cloud key to a process listening on this computer.
+  apiKey: isLocalLlmUrl(ENV.llmApiUrl) ? "" : ENV.llmApiKey,
+  model: ENV.llmModel,
+});
+
+const fallbackProvider = (): LlmProviderConfig | undefined => {
+  if (!ENV.llmFallbackApiUrl || !ENV.llmFallbackModel) return undefined;
+  return {
+    apiUrl: ENV.llmFallbackApiUrl,
+    apiKey: ENV.llmFallbackApiKey,
+    model: ENV.llmFallbackModel,
+  };
 };
 
 const normalizeResponseFormat = ({
@@ -285,6 +327,13 @@ const parseRetryAfter = (value: string | null): number | undefined => {
   return Number.isNaN(at) ? undefined : Math.max(0, at - Date.now());
 };
 
+const isRetryableStatus = (status: number): boolean =>
+  status === 408 ||
+  status === 409 ||
+  status === 425 ||
+  status === 429 ||
+  status >= 500;
+
 // Equal-jitter exponential backoff. The cap/2 floor guarantees a minimum
 // delay so a misbehaving caller loop slows down instead of hammering the
 // upstream while it keeps returning errors.
@@ -297,8 +346,9 @@ const computeBackoffDelay = (
   return Math.min(Math.max(jittered, retryAfterMs ?? 0), RETRY_MAX_DELAY_MS);
 };
 
-// Retries non-2xx responses and network errors with exponential backoff, then
-// returns the final Response so callers keep their existing error handling.
+// Retries transient HTTP responses and network errors with exponential
+// backoff. Invalid requests and authentication errors return immediately so
+// the caller can show the real problem without unnecessary waiting.
 const fetchWithBackoff = async (
   url: string,
   init: FetchInit
@@ -308,7 +358,11 @@ const fetchWithBackoff = async (
   for (let attempt = 0; attempt <= RETRY_MAX_RETRIES; attempt++) {
     try {
       const response = await fetch(url, init);
-      if (response.ok || attempt === RETRY_MAX_RETRIES) {
+      if (
+        response.ok ||
+        !isRetryableStatus(response.status) ||
+        attempt === RETRY_MAX_RETRIES
+      ) {
         return response;
       }
 
@@ -326,6 +380,7 @@ const fetchWithBackoff = async (
       await sleep(computeBackoffDelay(attempt, retryAfterMs));
     } catch (error) {
       lastError = error;
+      if (error instanceof Error && error.name === "AbortError") throw error;
       if (attempt === RETRY_MAX_RETRIES) throw error;
       console.warn(
         `LLM request retry ${attempt + 1}/${RETRY_MAX_RETRIES} after network error`
@@ -339,8 +394,11 @@ const fetchWithBackoff = async (
     : new Error("LLM request failed after exhausting retries");
 };
 
-export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
-  assertApiKey();
+async function invokeProvider(
+  params: InvokeParams,
+  provider: LlmProviderConfig,
+): Promise<InvokeResult> {
+  assertApiKey(provider.apiUrl, provider.apiKey);
 
   const {
     messages,
@@ -362,8 +420,9 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
     messages: messages.map(normalizeMessage),
   };
 
-  if (model) {
-    payload.model = model;
+  const resolvedModel = model || provider.model;
+  if (resolvedModel) {
+    payload.model = resolvedModel;
   }
 
   if (tools && tools.length > 0) {
@@ -380,7 +439,15 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
 
   const resolvedMaxTokens = max_tokens ?? maxTokens;
   if (typeof resolvedMaxTokens === "number") {
-    payload.max_tokens = resolvedMaxTokens;
+    // GPT-5 and reasoning models reject the legacy max_tokens parameter.
+    // Keep it for older chat models and Forge-compatible providers.
+    const usesCompletionTokenLimit =
+      typeof resolvedModel === "string" &&
+      (/^gpt-5(?:[.-]|$)/i.test(resolvedModel) ||
+        /^o\d(?:[.-]|$)/i.test(resolvedModel));
+    payload[
+      usesCompletionTokenLimit ? "max_completion_tokens" : "max_tokens"
+    ] = resolvedMaxTokens;
   }
 
   if (thinking) {
@@ -398,16 +465,43 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
   });
 
   if (normalizedResponseFormat) {
-    payload.response_format = normalizedResponseFormat;
+    // Groq supports JSON Object Mode across all current chat models. This
+    // keeps the provider swap reliable even when the selected model does not
+    // implement JSON Schema constrained decoding.
+    const usesGroqJsonObject =
+      /api\.groq\.com/i.test(provider.apiUrl) &&
+      normalizedResponseFormat.type === "json_schema";
+    payload.response_format = usesGroqJsonObject
+      ? { type: "json_object" }
+      : normalizedResponseFormat;
+
+    if (usesGroqJsonObject) {
+      payload.messages = [
+        {
+          role: "system",
+          content: [
+            "Retorne exclusivamente um objeto JSON válido, sem Markdown.",
+            "O objeto deve respeitar exatamente o JSON Schema abaixo, incluindo os nomes das propriedades:",
+            JSON.stringify(normalizedResponseFormat.json_schema.schema),
+          ].join("\n"),
+        },
+        ...(payload.messages as ReturnType<typeof normalizeMessage>[]),
+      ];
+    }
   }
 
-  const response = await fetchWithBackoff(resolveApiUrl(), {
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+  };
+  if (provider.apiKey) headers.authorization = `Bearer ${provider.apiKey}`;
+
+  const response = await fetchWithBackoff(resolveApiUrl(provider.apiUrl), {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${ENV.forgeApiKey}`,
-    },
+    headers,
     body: JSON.stringify(payload),
+    signal: isLocalLlmUrl(provider.apiUrl)
+      ? AbortSignal.timeout(180_000)
+      : undefined,
   });
 
   if (!response.ok) {
@@ -418,6 +512,17 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
   }
 
   return (await response.json()) as InvokeResult;
+}
+
+export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
+  try {
+    return await invokeProvider(params, primaryProvider());
+  } catch (primaryError) {
+    const fallback = fallbackProvider();
+    if (!fallback) throw primaryError;
+    console.warn("LLM local indisponível; tentando o provedor de fallback configurado.");
+    return invokeProvider({ ...params, model: fallback.model }, fallback);
+  }
 }
 
 export type ModelInfo = {
@@ -433,15 +538,15 @@ export type ModelsResponse = {
 };
 
 export async function listLLMModels(): Promise<ModelsResponse> {
-  assertApiKey();
+  assertApiKey(ENV.llmApiUrl, ENV.llmApiKey);
 
-  const url = ENV.forgeApiUrl && ENV.forgeApiUrl.trim().length > 0
-    ? `${ENV.forgeApiUrl.replace(/\/$/, "")}/v1/models`
+  const url = ENV.llmApiUrl && ENV.llmApiUrl.trim().length > 0
+    ? resolveProviderPath("models", ENV.llmApiUrl)
     : "https://forge.manus.im/v1/models";
 
-  const response = await fetchWithBackoff(url, {
-    headers: { authorization: `Bearer ${ENV.forgeApiKey}` },
-  });
+  const headers: Record<string, string> = {};
+  if (ENV.llmApiKey) headers.authorization = `Bearer ${ENV.llmApiKey}`;
+  const response = await fetchWithBackoff(url, { headers });
 
   if (!response.ok) {
     const errorText = await response.text();

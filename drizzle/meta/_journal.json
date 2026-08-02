@@ -50,6 +50,48 @@
       "when": 1784835881751,
       "tag": "0006_outgoing_tinkerer",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "5",
+      "when": 1785520176885,
+      "tag": "0007_married_zombie",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "5",
+      "when": 1785525218432,
+      "tag": "0008_fast_otto_octavius",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "5",
+      "when": 1785529936157,
+      "tag": "0009_breezy_the_liberteens",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "5",
+      "when": 1785532731208,
+      "tag": "0010_warm_veda",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "5",
+      "when": 1785534741051,
+      "tag": "0011_brave_mesmero",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "5",
+      "when": 1785538552776,
+      "tag": "0012_watery_jocasta",
+      "breakpoints": true
     }
   ]
 }

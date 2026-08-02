@@ -15,6 +15,7 @@ import {
   nonFunctionalFindings,
   nonFunctionalRuns,
   projects,
+  projectTestEnvironments,
   qaAgentMemories,
   qaPlanDocuments,
   sprints,
@@ -62,6 +63,81 @@ export async function checkDatabaseHealth() {
       reason: "database_unavailable_or_not_migrated",
     };
   }
+}
+
+export async function listTestExecutionHistory(filters: {
+  userId: number;
+  isAdmin: boolean;
+  clientId?: number;
+  projectId?: number;
+  dateFrom?: Date;
+  dateTo?: Date;
+  limit?: number;
+}) {
+  const db = await getDb();
+  if (!db) return [];
+
+  const conditions = [];
+  if (!filters.isAdmin) {
+    conditions.push(eq(testExecutions.createdById, filters.userId));
+  }
+  if (filters.clientId) {
+    conditions.push(eq(testExecutions.clientId, filters.clientId));
+  }
+  if (filters.projectId) {
+    conditions.push(eq(testExecutions.projectId, filters.projectId));
+  }
+  if (filters.dateFrom) {
+    conditions.push(
+      sql`COALESCE(${testExecutions.finishedAt}, ${testExecutions.createdAt}) >= ${filters.dateFrom}`,
+    );
+  }
+  if (filters.dateTo) {
+    conditions.push(
+      sql`COALESCE(${testExecutions.finishedAt}, ${testExecutions.createdAt}) <= ${filters.dateTo}`,
+    );
+  }
+
+  const baseQuery = db
+    .select({
+      id: testExecutions.id,
+      externalExecutionId: testExecutions.externalExecutionId,
+      createdById: testExecutions.createdById,
+      createdByName: users.name,
+      createdByUsername: users.username,
+      clientId: testExecutions.clientId,
+      projectId: testExecutions.projectId,
+      clientName: testExecutions.clientName,
+      projectName: testExecutions.projectName,
+      sprintName: testExecutions.sprintName,
+      systemUrl: testExecutions.systemUrl,
+      status: testExecutions.status,
+      totalScenarios: testExecutions.totalScenarios,
+      passedScenarios: testExecutions.passedScenarios,
+      failedScenarios: testExecutions.failedScenarios,
+      blockedScenarios: testExecutions.blockedScenarios,
+      automationErrors: testExecutions.automationErrors,
+      flakyScenarios: testExecutions.flakyScenarios,
+      coveragePercent: testExecutions.coveragePercent,
+      defectsFound: testExecutions.defectsFound,
+      evidenceDocxUrl: testExecutions.evidenceDocxUrl,
+      reliabilityReportUrl: testExecutions.reliabilityReportUrl,
+      startedAt: testExecutions.startedAt,
+      finishedAt: testExecutions.finishedAt,
+      createdAt: testExecutions.createdAt,
+    })
+    .from(testExecutions)
+    .leftJoin(users, eq(users.id, testExecutions.createdById));
+
+  const limit = Math.min(Math.max(filters.limit ?? 100, 1), 200);
+  return conditions.length > 0
+    ? baseQuery
+        .where(and(...conditions))
+        .orderBy(desc(testExecutions.finishedAt), desc(testExecutions.createdAt))
+        .limit(limit)
+    : baseQuery
+        .orderBy(desc(testExecutions.finishedAt), desc(testExecutions.createdAt))
+        .limit(limit);
 }
 
 // ─── Auth helpers ─────────────────────────────────────────────────────────────
@@ -212,7 +288,14 @@ export async function createProject(data: { name: string; description?: string; 
   await db.insert(projects).values(data);
 }
 
-export async function updateProject(id: number, data: { name?: string; description?: string }) {
+export async function updateProject(id: number, data: {
+  name?: string;
+  description?: string;
+  sourceCodePath?: string | null;
+  sourceCodeSummary?: string | null;
+  sourceCodeFileCount?: number | null;
+  sourceCodeIndexedAt?: Date | null;
+}) {
   const db = await getDb();
   if (!db) throw new Error("DB unavailable");
   await db.update(projects).set(data).where(eq(projects.id, id));
@@ -221,7 +304,65 @@ export async function updateProject(id: number, data: { name?: string; descripti
 export async function deleteProject(id: number) {
   const db = await getDb();
   if (!db) throw new Error("DB unavailable");
-  await db.delete(projects).where(eq(projects.id, id));
+  await db.transaction(async tx => {
+    await tx.delete(projectTestEnvironments).where(eq(projectTestEnvironments.projectId, id));
+    await tx.delete(projects).where(eq(projects.id, id));
+  });
+}
+
+export async function listProjectTestEnvironments(projectId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select({
+    id: projectTestEnvironments.id,
+    projectId: projectTestEnvironments.projectId,
+    name: projectTestEnvironments.name,
+    type: projectTestEnvironments.type,
+    loginUrl: projectTestEnvironments.loginUrl,
+    username: projectTestEnvironments.username,
+    vpnProvider: projectTestEnvironments.vpnProvider,
+    vpnProfileName: projectTestEnvironments.vpnProfileName,
+    vpnUsername: projectTestEnvironments.vpnUsername,
+    vpnAutoConnect: projectTestEnvironments.vpnAutoConnect,
+    isActive: projectTestEnvironments.isActive,
+    createdAt: projectTestEnvironments.createdAt,
+    updatedAt: projectTestEnvironments.updatedAt,
+  }).from(projectTestEnvironments)
+    .where(eq(projectTestEnvironments.projectId, projectId))
+    .orderBy(projectTestEnvironments.name);
+}
+
+export async function getProjectTestEnvironment(id: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db.select().from(projectTestEnvironments)
+    .where(eq(projectTestEnvironments.id, id)).limit(1);
+  return rows[0];
+}
+
+export async function createProjectTestEnvironment(data: typeof projectTestEnvironments.$inferInsert) {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  const [result] = await db.insert(projectTestEnvironments).values(data);
+  return Number((result as any).insertId);
+}
+
+export async function updateProjectTestEnvironment(
+  id: number,
+  data: Partial<Pick<typeof projectTestEnvironments.$inferInsert,
+    "name" | "type" | "loginUrl" | "username" | "passwordEncrypted" |
+    "vpnProvider" | "vpnProfileName" | "vpnUsername" | "vpnPasswordEncrypted" |
+    "vpnAutoConnect" | "isActive">>,
+) {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  await db.update(projectTestEnvironments).set(data).where(eq(projectTestEnvironments.id, id));
+}
+
+export async function deleteProjectTestEnvironment(id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  await db.delete(projectTestEnvironments).where(eq(projectTestEnvironments.id, id));
 }
 
 // ─── Sprints ─────────────────────────────────────────────────────────────────
@@ -400,6 +541,52 @@ export async function deleteQAPlanDocument(id: number): Promise<void> {
 }
 
 // ─── Execuções e resultados de QA ───────────────────────────────────────────
+export async function createPendingTestExecution(data: {
+  externalExecutionId: string;
+  createdById: number;
+  clientId?: number;
+  projectId: number;
+  sprintId: number;
+  clientName?: string;
+  projectName: string;
+  sprintName: string;
+  systemUrl: string;
+  totalScenarios: number;
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  await db.insert(testExecutions).values({
+    externalExecutionId: data.externalExecutionId,
+    createdById: data.createdById,
+    clientId: data.clientId ?? null,
+    projectId: data.projectId,
+    sprintId: data.sprintId,
+    clientName: data.clientName ?? null,
+    projectName: data.projectName,
+    sprintName: data.sprintName,
+    systemUrl: data.systemUrl,
+    status: "EM_ANDAMENTO",
+    totalScenarios: data.totalScenarios,
+    startedAt: new Date(),
+    rawPayload: JSON.stringify({ phase: "STARTED" }),
+  });
+}
+
+export async function markTestExecutionStartFailure(
+  externalExecutionId: string,
+  reason: string,
+) {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(testExecutions).set({
+    status: "ERRO_AUTOMACAO",
+    automationErrors: 1,
+    inconclusiveScenarios: 1,
+    finishedAt: new Date(),
+    rawPayload: JSON.stringify({ phase: "START_FAILED", reason: reason.slice(0, 1000) }),
+  }).where(eq(testExecutions.externalExecutionId, externalExecutionId));
+}
+
 export async function upsertTestExecution(
   data: NormalizedTestExecution,
 ): Promise<{ id: number; created: boolean }> {
@@ -456,6 +643,7 @@ export async function upsertTestExecution(
   return db.transaction(async tx => {
     const executionValues = {
       externalExecutionId: data.externalExecutionId,
+      createdById: data.createdById,
       clientId: clientId ?? null,
       projectId: projectId ?? null,
       sprintId: sprintId ?? null,
@@ -830,6 +1018,14 @@ export async function getAgentMemories(scopeKey: string, limit = 30) {
       ),
     )
     .orderBy(
+      sql`CASE ${qaAgentMemories.category}
+        WHEN 'SELETOR' THEN 0
+        WHEN 'AUTOMACAO' THEN 1
+        WHEN 'REGRA_NEGOCIO' THEN 2
+        WHEN 'OBSERVACAO' THEN 3
+        WHEN 'RISCO' THEN 4
+        ELSE 5
+      END`,
       desc(qaAgentMemories.confidence),
       desc(qaAgentMemories.occurrences),
       desc(qaAgentMemories.lastSeenAt),
@@ -1389,44 +1585,47 @@ export async function getDashboardMetrics(filters: DashboardMetricFilters) {
     };
   }
 
-  const executionIds = executions.map(execution => execution.id);
+  const completedExecutions = executions.filter(
+    execution => execution.status !== "EM_ANDAMENTO",
+  );
+  const executionIds = completedExecutions.map(execution => execution.id);
   const results = await db
     .select()
     .from(testResults)
     .where(inArray(testResults.executionId, executionIds));
-  const totalScenarios = executions.reduce(
+  const totalScenarios = completedExecutions.reduce(
     (total, execution) => total + execution.totalScenarios,
     0,
   );
-  const passed = executions.reduce(
+  const passed = completedExecutions.reduce(
     (total, execution) => total + execution.passedScenarios,
     0,
   );
-  const failed = executions.reduce(
+  const failed = completedExecutions.reduce(
     (total, execution) => total + execution.failedScenarios,
     0,
   );
-  const blocked = executions.reduce(
+  const blocked = completedExecutions.reduce(
     (total, execution) => total + execution.blockedScenarios,
     0,
   );
-  const automationErrors = executions.reduce(
+  const automationErrors = completedExecutions.reduce(
     (total, execution) => total + execution.automationErrors,
     0,
   );
-  const flaky = executions.reduce(
+  const flaky = completedExecutions.reduce(
     (total, execution) => total + execution.flakyScenarios,
     0,
   );
-  const defectsFound = executions.reduce(
+  const defectsFound = completedExecutions.reduce(
     (total, execution) => total + execution.defectsFound,
     0,
   );
-  const criticalDefects = executions.reduce(
+  const criticalDefects = completedExecutions.reduce(
     (total, execution) => total + execution.criticalDefects,
     0,
   );
-  const escapedDefects = executions.reduce(
+  const escapedDefects = completedExecutions.reduce(
     (total, execution) => total + execution.escapedDefects,
     0,
   );
@@ -1502,7 +1701,7 @@ export async function getDashboardMetrics(filters: DashboardMetricFilters) {
       executed: number;
     }
   >();
-  for (const execution of [...executions].reverse()) {
+  for (const execution of [...completedExecutions].reverse()) {
     const date = execution.finishedAt ?? execution.createdAt;
     const label =
       execution.sprintName ||

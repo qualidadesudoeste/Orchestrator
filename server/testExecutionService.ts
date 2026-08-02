@@ -36,6 +36,7 @@ export type NormalizedTestResult = {
 
 export type NormalizedTestExecution = {
   externalExecutionId: string;
+  createdById: number;
   clientId?: number;
   projectId?: number;
   sprintId?: number;
@@ -242,12 +243,21 @@ export function normalizeTestExecutionPayload(
       "Informe execution_id para garantir ingestão sem duplicidade.",
     );
   }
+  const createdById = optionalId(
+    (raw as any).solicitado_por ?? (raw as any).requested_by,
+  );
+  if (!createdById) {
+    throw new TestExecutionValidationError(
+      "Informe solicitado_por para associar a execução ao usuário.",
+    );
+  }
 
   const rawCoverage =
     (raw as any).coverage_percent ?? (raw as any).score_cobertura;
 
   return {
     externalExecutionId,
+    createdById,
     clientId: optionalId((raw as any).client_id),
     projectId: optionalId((raw as any).project_id),
     sprintId: optionalId((raw as any).sprint_id),

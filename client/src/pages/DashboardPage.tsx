@@ -39,6 +39,7 @@ import {
 } from "lucide-react";
 
 const STATUS_STYLE: Record<string, { background: string; color: string; label: string }> = {
+  EM_ANDAMENTO: { background: "#dbeafe", color: "#1d4ed8", label: "Em andamento" },
   PASSOU: { background: "#dcfce7", color: "#15803d", label: "Passou" },
   FALHOU: { background: "#fee2e2", color: "#b91c1c", label: "Falhou" },
   BLOQUEADO: { background: "#fef3c7", color: "#b45309", label: "Bloqueado" },

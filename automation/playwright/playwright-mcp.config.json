@@ -19,5 +19,5 @@
       "127.0.0.1:8931"
     ]
   },
-  "saveSession": true
+  "saveSession": false
 }

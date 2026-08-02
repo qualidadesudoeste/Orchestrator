@@ -38,11 +38,38 @@ export const projects = mysqlTable("projects", {
   clientId: int("clientId").notNull(),
   name: varchar("name", { length: 255 }).notNull(),
   description: text("description"),
+  sourceCodePath: varchar("sourceCodePath", { length: 1000 }),
+  sourceCodeSummary: text("sourceCodeSummary"),
+  sourceCodeFileCount: int("sourceCodeFileCount"),
+  sourceCodeIndexedAt: timestamp("sourceCodeIndexedAt"),
   createdById: int("createdById").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });
 export type Project = typeof projects.$inferSelect;
+
+export const projectTestEnvironments = mysqlTable("project_test_environments", {
+  id: int("id").autoincrement().primaryKey(),
+  projectId: int("projectId").notNull(),
+  name: varchar("name", { length: 120 }).notNull(),
+  type: mysqlEnum("type", ["PORTAL", "RETAGUARDA", "SITE", "API", "OUTRO"]).notNull(),
+  loginUrl: varchar("loginUrl", { length: 1000 }).notNull(),
+  username: varchar("username", { length: 320 }),
+  passwordEncrypted: text("passwordEncrypted"),
+  vpnProvider: mysqlEnum("vpnProvider", ["NONE", "COGEL", "SEFAZ", "OUTRA"]).notNull().default("NONE"),
+  vpnProfileName: varchar("vpnProfileName", { length: 160 }),
+  vpnUsername: varchar("vpnUsername", { length: 320 }),
+  vpnPasswordEncrypted: text("vpnPasswordEncrypted"),
+  vpnAutoConnect: int("vpnAutoConnect").notNull().default(1),
+  isActive: int("isActive").notNull().default(1),
+  createdById: int("createdById").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, table => ({
+  projectIndex: index("project_test_environments_project_idx").on(table.projectId),
+  projectNameUnique: uniqueIndex("project_test_environments_project_name_unique").on(table.projectId, table.name),
+}));
+export type ProjectTestEnvironment = typeof projectTestEnvironments.$inferSelect;
 
 // ─── Sprints ──────────────────────────────────────────────────────────────────
 export const sprints = mysqlTable("sprints", {
@@ -111,11 +138,12 @@ export const testExecutions = mysqlTable("test_executions", {
   clientId: int("clientId"),
   projectId: int("projectId"),
   sprintId: int("sprintId"),
+  createdById: int("createdById"),
   clientName: varchar("clientName", { length: 255 }),
   projectName: varchar("projectName", { length: 255 }).notNull(),
   sprintName: varchar("sprintName", { length: 255 }),
   systemUrl: varchar("systemUrl", { length: 1000 }),
-  status: mysqlEnum("status", ["PASSOU", "FALHOU", "BLOQUEADO", "ERRO_AUTOMACAO"]).notNull(),
+  status: mysqlEnum("status", ["EM_ANDAMENTO", "PASSOU", "FALHOU", "BLOQUEADO", "ERRO_AUTOMACAO"]).notNull(),
   totalScenarios: int("totalScenarios").notNull().default(0),
   passedScenarios: int("passedScenarios").notNull().default(0),
   failedScenarios: int("failedScenarios").notNull().default(0),
@@ -139,6 +167,7 @@ export const testExecutions = mysqlTable("test_executions", {
   externalExecutionUnique: uniqueIndex("test_executions_external_id_unique").on(table.externalExecutionId),
   projectIndex: index("test_executions_project_idx").on(table.projectId),
   sprintIndex: index("test_executions_sprint_idx").on(table.sprintId),
+  createdByIndex: index("test_executions_created_by_idx").on(table.createdById),
   finishedAtIndex: index("test_executions_finished_at_idx").on(table.finishedAt),
 }));
 

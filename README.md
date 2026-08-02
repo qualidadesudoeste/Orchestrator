@@ -9,7 +9,7 @@ O agente de execução utiliza n8n e Playwright MCP. Os artefatos dessa integra�
 - Frontend: React 19, TypeScript, Vite, TailwindCSS e shadcn/ui.
 - Backend: Node.js, Express e tRPC.
 - Banco: MySQL com Drizzle ORM.
-- IA: endpoint compatível com OpenAI Chat Completions por meio de `invokeLLM`.
+- IA: OpenAI API (`gpt-5.6-terra`) para geração e análise de cenários.
 - Automação: n8n 2.31.4 com MCP Client nativo e Playwright MCP.
 
 ## Pré-requisitos
@@ -19,6 +19,7 @@ O agente de execução utiliza n8n e Playwright MCP. Os artefatos dessa integra�
 - MySQL acessível local ou remotamente.
 - Docker Desktop para executar o n8n.
 - Google Chrome para o Playwright MCP local.
+- Chave da OpenAI API com faturamento/créditos habilitados.
 
 ## Instalação local no Windows
 
@@ -31,7 +32,10 @@ npm run build
 npm run dev
 ```
 
-A aplicação inicia por padrão em `http://localhost:3000`. Antes de iniciar, preencha no `.env` pelo menos `DATABASE_URL`, `JWT_SECRET` e `BUILT_IN_FORGE_API_KEY`.
+A aplicação inicia por padrão em `http://localhost:3000`. Antes de iniciar,
+preencha no `.env` pelo menos `DATABASE_URL`, `JWT_SECRET`, `OPENAI_API_KEY`,
+`LLM_API_URL=https://api.openai.com` e `LLM_MODEL=gpt-5.6-terra`. A assinatura
+do ChatGPT não inclui créditos da API.
 
 O projeto usa npm como gerenciador oficial. O arquivo `.npmrc` mantém compatibilidade temporária com um plugin legado do ambiente Manus que ainda declara suporte somente a versões antigas do Vite.
 
@@ -53,7 +57,9 @@ npm test        # Vitest
 npm run build   # Frontend e servidor de produção
 ```
 
-O teste de integração com IA é ignorado quando `BUILT_IN_FORGE_API_KEY` não está configurada. Os testes locais de autenticação utilizam mocks e não dependem de um banco existente.
+O teste de integração com IA roda quando `OPENAI_API_KEY` está configurada. Os
+testes locais de autenticação utilizam mocks e não dependem de um banco
+existente.
 
 ## n8n e Playwright MCP
 
@@ -101,8 +107,8 @@ também constrói a imagem Docker.
 - Configuração e smoke test do Playwright MCP: concluídos.
 - Conexão n8n → Playwright MCP com workflow de diagnóstico: concluída.
 - Loop sequencial por cenário Gherkin, consolidação e separação de falhas: concluídos.
-- Captura rastreável de screenshots pelo agente: configurada; teste funcional aguarda crédito na API OpenAI.
-- Execução completa pelo agente GPT-4o: tecnicamente configurada; aguarda crédito disponível na conta da API OpenAI.
+- Disparo pelo frontend com URL e conta de teste efêmera, sem acesso manual ao n8n: concluído.
+- Captura rastreável de screenshots e execução completa pelo agente: validadas ponta a ponta.
 - Gerador Node.js de evidências DOCX com screenshots: concluído.
 - Persistência de execuções e dashboard operacional: concluídos.
 - k6, OWASP ZAP, axe-core e dashboard não funcional: concluídos.

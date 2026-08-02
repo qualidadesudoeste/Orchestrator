@@ -68,9 +68,17 @@ export function validateProductionEnvironment(
     );
   }
 
-  if (!env.BUILT_IN_FORGE_API_KEY?.trim()) {
+  if (
+    !/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:\/|$)/i.test(
+      env.LLM_API_URL?.trim() ?? "",
+    ) &&
+    !env.OPENAI_API_KEY?.trim() &&
+    !env.GEMINI_API_KEY?.trim() &&
+    !env.LLM_API_KEY?.trim() &&
+    !env.BUILT_IN_FORGE_API_KEY?.trim()
+  ) {
     warnings.push(
-      "BUILT_IN_FORGE_API_KEY ausente: recursos de IA e armazenamento ficarão indisponíveis.",
+      "OPENAI_API_KEY/LLM_API_KEY ausente: recursos de IA ficarão indisponíveis.",
     );
   }
   if (!env.VITE_ANALYTICS_ENDPOINT?.trim()) {
