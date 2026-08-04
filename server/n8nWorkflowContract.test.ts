@@ -133,7 +133,8 @@ describe("workflow do Agente QA", () => {
     );
     const wait = workflow.nodes?.find(node => node.name === "Aguardar Cota da IA");
 
-    expect(prepare?.parameters?.jsCode).toContain("'AMBIENTE_AMBIGUO' : authMode");
+    expect(prepare?.parameters?.jsCode).toContain("ambiente_inferido");
+    expect(prepare?.parameters?.jsCode).toContain("AMBIENTE_PADRAO_DA_EXECUCAO");
     expect(prepare?.parameters?.jsCode).toContain("LOGIN_TEST");
     expect(diagnostics?.parameters?.jsCode).toContain("LIMITE_IA");
     expect(diagnostics?.parameters?.jsCode).toContain("PREENCHIMENTO_FALHOU");
@@ -243,6 +244,8 @@ describe("workflow do Agente QA", () => {
     expect(agent?.parameters?.text).toContain("TROCA DE AMBIENTES");
     expect(agent?.parameters?.text).toContain("ambientes_execucao_json");
     expect(agent?.parameters?.text).toContain("AMBIENTE_AMBIGUO");
+    expect(agent?.parameters?.text).toContain("AMBIENTE INFERIDO");
+    expect(agent?.parameters?.options?.systemMessage).toContain("interceptação de ponteiro");
     expect(formatter?.parameters?.jsCode).toContain("ambientes_execucao_json");
     expect(formatter?.parameters?.jsCode).toContain("login_senha");
   });
