@@ -32,6 +32,7 @@ const STATUS_STYLE = {
   FALHOU: { label: "Falhou", color: "#b91c1c", background: "#fee2e2" },
   BLOQUEADO: { label: "Bloqueado", color: "#b45309", background: "#fef3c7" },
   ERRO_AUTOMACAO: { label: "Erro de automação", color: "#475569", background: "#e2e8f0" },
+  CANCELADO: { label: "Encerrado", color: "#475569", background: "#f1f5f9" },
 } as const;
 
 function formatDate(value: Date | string | null) {

@@ -17,6 +17,7 @@ import { registerDefectCardRoutes } from "../defectCardRoutes";
 import { registerReliabilityReportRoutes } from "../reliabilityReportRoutes";
 import { registerAgentMemoryRoutes } from "../agentMemoryRoutes";
 import { checkDatabaseHealth } from "../db";
+import { startExecutionQueueScheduler, stopExecutionQueueScheduler } from "../executionQueueService";
 import { sdk } from "./sdk";
 import { ENV } from "./env";
 import {
@@ -246,8 +247,10 @@ async function startServer() {
       port,
     }));
   });
+  startExecutionQueueScheduler();
 
   const shutdown = (signal: string) => {
+    stopExecutionQueueScheduler();
     if (shuttingDown) return;
     shuttingDown = true;
     console.log(JSON.stringify({

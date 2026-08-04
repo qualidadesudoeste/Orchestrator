@@ -22,6 +22,8 @@ import {
   Brain,
   Bug,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   ClipboardCopy,
   Database,
   Download,
@@ -48,6 +50,7 @@ const STATUS_STYLE: Record<string, { background: string; color: string; label: s
     color: "#475569",
     label: "Erro de automação",
   },
+  CANCELADO: { background: "#f1f5f9", color: "#475569", label: "Encerrado" },
   PARCIAL: { background: "#fef3c7", color: "#b45309", label: "Parcial" },
   ERRO: { background: "#e2e8f0", color: "#475569", label: "Erro" },
   NAO_EXECUTADO: {
@@ -133,6 +136,7 @@ export default function DashboardPage() {
   const [filterProjeto, setFilterProjeto] = useState("");
   const [filterSprint, setFilterSprint] = useState("");
   const [historyCardId, setHistoryCardId] = useState("");
+  const [showSpecialistMemory, setShowSpecialistMemory] = useState(false);
 
   const { data: clients } = trpc.clients.list.useQuery(undefined, {
     enabled: isAuthenticated,
@@ -1132,12 +1136,20 @@ export default function DashboardPage() {
           }}
         >
           <div
+            role="button"
+            tabIndex={0}
+            aria-expanded={showSpecialistMemory}
+            onClick={() => setShowSpecialistMemory(open => !open)}
+            onKeyDown={event => {
+              if (event.key === "Enter" || event.key === " ") setShowSpecialistMemory(open => !open);
+            }}
             style={{
               display: "flex",
               alignItems: "center",
               justifyContent: "space-between",
               gap: 12,
-              marginBottom: 12,
+              cursor: "pointer",
+              marginBottom: showSpecialistMemory ? 12 : 0,
             }}
           >
             <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
@@ -1173,11 +1185,16 @@ export default function DashboardPage() {
                 </div>
               </div>
             </div>
-            <span style={{ color: "#64748b", fontSize: 11 }}>
-              {agentMemory.summary.activeMemories} conhecimentos ativos
-            </span>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ color: "#64748b", fontSize: 11 }}>
+                {agentMemory.summary.activeMemories} conhecimentos ativos
+              </span>
+              {showSpecialistMemory ? <ChevronUp size={16} color="#64748b" /> : <ChevronDown size={16} color="#64748b" />}
+            </div>
           </div>
 
+          {showSpecialistMemory && (
+            <>
           {agentMemory.recentMemories.length ? (
             <div style={{ overflowX: "auto" }}>
               <table style={tableStyle}>
@@ -1238,6 +1255,9 @@ export default function DashboardPage() {
             </div>
           ) : (
             <EmptyState message="O agente ainda não registrou aprendizados persistentes." />
+          )}
+
+            </>
           )}
         </section>
 

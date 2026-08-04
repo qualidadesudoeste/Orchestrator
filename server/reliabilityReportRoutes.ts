@@ -19,6 +19,8 @@ const OUTPUT_DIRECTORY = path.resolve(
   "artifacts",
   "reliability-reports",
 );
+const ARTIFACTS_DIRECTORY = path.resolve(PROJECT_ROOT, "artifacts");
+const EVIDENCE_DIRECTORY = path.resolve(ARTIFACTS_DIRECTORY, "playwright-mcp");
 const DOWNLOAD_LIFETIME_SECONDS = 7 * 24 * 60 * 60;
 const SAFE_FILENAME = /^[a-z0-9][a-z0-9._-]{0,180}\.html$/i;
 
@@ -70,6 +72,52 @@ function downloadUrl(req: Request, filename: string, expires: number): string {
   return url.toString();
 }
 
+function isInside(directory: string, candidate: string): boolean {
+  const relative = path.relative(directory, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+async function evidenceDataUri(value: string): Promise<string> {
+  if (value.startsWith("data:image/")) return value;
+  if (/^https?:\/\//i.test(value)) return value;
+
+  const normalized = value.replace(/^file:\/\//i, "");
+  const candidates = path.isAbsolute(normalized)
+    ? [path.resolve(normalized)]
+    : [
+        path.resolve(PROJECT_ROOT, normalized),
+        path.resolve(EVIDENCE_DIRECTORY, normalized),
+        path.resolve(EVIDENCE_DIRECTORY, path.basename(normalized)),
+      ];
+  const mimeByExtension: Record<string, string> = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+  };
+
+  for (const candidate of candidates) {
+    if (!isInside(ARTIFACTS_DIRECTORY, candidate)) continue;
+    const mime = mimeByExtension[path.extname(candidate).toLowerCase()];
+    if (!mime) continue;
+    try {
+      const file = await fs.readFile(candidate);
+      if (file.length > 5_000_000) continue;
+      return `data:${mime};base64,${file.toString("base64")}`;
+    } catch {
+      // Tenta o próximo caminho permitido.
+    }
+  }
+  return value;
+}
+
+async function embedEvidenceImages(report: ReturnType<typeof buildReliabilityReport>): Promise<void> {
+  for (const result of report.results) {
+    for (const attempt of result.reliability.history) {
+      attempt.evidence = await Promise.all(attempt.evidence.map(evidenceDataUri));
+    }
+  }
+}
 export function registerReliabilityReportRoutes(app: Express): void {
   app.post("/api/qa/reliability-reports", async (req, res) => {
     try {
@@ -87,6 +135,7 @@ export function registerReliabilityReportRoutes(app: Express): void {
       }
 
       const report = buildReliabilityReport(req.body?.json ?? req.body);
+      await embedEvidenceImages(report);
       const html = renderReliabilityHtml(report);
       await fs.mkdir(OUTPUT_DIRECTORY, { recursive: true });
       const filename = `${slug(report.executionId)}-${crypto.randomUUID()}.html`;

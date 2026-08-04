@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   Checklist,
@@ -10,14 +10,18 @@ import {
   TrailProgress,
   checklists,
   clients,
+  aiProviderSettings,
   defectCardHistory,
   defectCards,
+  executionWorkers,
   nonFunctionalFindings,
   nonFunctionalRuns,
   projects,
   projectTestEnvironments,
+  vpnProfiles,
   qaAgentMemories,
   qaPlanDocuments,
+  qaTestPlans,
   sprints,
   testExecutions,
   testResults,
@@ -33,6 +37,7 @@ import {
 } from "./defectCardLifecycleService";
 import type { NormalizedNonFunctionalRun } from "./nonFunctionalService";
 import type { NormalizedTestExecution } from "./testExecutionService";
+import type { NormalizedExecutionProgress } from "./testExecutionProgressService";
 
 let _db: ReturnType<typeof drizzle> | null = null;
 
@@ -140,6 +145,95 @@ export async function listTestExecutionHistory(filters: {
         .limit(limit);
 }
 
+export async function listExecutionQueue(filters: {
+  userId: number;
+  isAdmin: boolean;
+  state?: "ALL" | "QUEUED" | "RUNNING" | "PAUSED" | "FINISHED" | "FAILED" | "CANCELLED";
+  pool?: "PUBLIC" | "COGEL" | "SEFAZ" | "OUTRA";
+  limit?: number;
+}) {
+  const db = await getDb();
+  if (!db) return { items: [], summary: { queued: 0, running: 0, paused: 0, finished: 0, failed: 0, cancelled: 0 } };
+
+  const visibility = [];
+  if (filters.pool) visibility.push(eq(testExecutions.queuePool, filters.pool));
+  if (filters.state && filters.state !== "ALL") {
+    visibility.push(eq(testExecutions.executionState, filters.state));
+  }
+
+  const queueOrder = await db.select({ id: testExecutions.id })
+    .from(testExecutions)
+    .where(eq(testExecutions.executionState, "QUEUED"))
+    .orderBy(asc(testExecutions.queuedAt), asc(testExecutions.id));
+  const queuePositions = new Map(queueOrder.map((item, index) => [item.id, index + 1]));
+
+  const query = db.select({
+    id: testExecutions.id,
+    externalExecutionId: testExecutions.externalExecutionId,
+    createdById: testExecutions.createdById,
+    createdByName: users.name,
+    createdByUsername: users.username,
+    clientName: testExecutions.clientName,
+    projectName: testExecutions.projectName,
+    sprintName: testExecutions.sprintName,
+    systemUrl: testExecutions.systemUrl,
+    status: testExecutions.status,
+    executionState: testExecutions.executionState,
+    controlState: testExecutions.controlState,
+    controlRequestedAt: testExecutions.controlRequestedAt,
+    controlRequestedById: testExecutions.controlRequestedById,
+    queuePool: testExecutions.queuePool,
+    totalScenarios: testExecutions.totalScenarios,
+    completedScenarios: testExecutions.completedScenarios,
+    currentScenarioIndex: testExecutions.currentScenarioIndex,
+    currentScenarioTitle: testExecutions.currentScenarioTitle,
+    currentEnvironment: testExecutions.currentEnvironment,
+    currentStage: testExecutions.currentStage,
+    progressMessage: testExecutions.progressMessage,
+    dispatchAttempts: testExecutions.dispatchAttempts,
+    queuedAt: testExecutions.queuedAt,
+    dispatchedAt: testExecutions.dispatchedAt,
+    startedAt: testExecutions.startedAt,
+    finishedAt: testExecutions.finishedAt,
+    lastHeartbeatAt: testExecutions.lastHeartbeatAt,
+    workerCode: executionWorkers.code,
+    workerName: executionWorkers.name,
+  }).from(testExecutions)
+    .leftJoin(users, eq(users.id, testExecutions.createdById))
+    .leftJoin(executionWorkers, eq(executionWorkers.id, testExecutions.assignedWorkerId));
+
+  const limit = Math.min(Math.max(filters.limit ?? 100, 1), 200);
+  const rows = visibility.length
+    ? await query.where(and(...visibility)).orderBy(
+        sql`CASE ${testExecutions.executionState} WHEN 'RUNNING' THEN 1 WHEN 'PAUSED' THEN 2 WHEN 'QUEUED' THEN 3 WHEN 'FAILED' THEN 4 WHEN 'CANCELLED' THEN 5 ELSE 6 END`,
+        sql`CASE WHEN ${testExecutions.executionState} IN ('RUNNING', 'PAUSED', 'QUEUED') THEN ${testExecutions.queuedAt} END ASC`,
+        sql`CASE WHEN ${testExecutions.executionState} IN ('FINISHED', 'FAILED', 'CANCELLED') THEN COALESCE(${testExecutions.finishedAt}, ${testExecutions.updatedAt}) END DESC`,
+      ).limit(limit)
+    : await query.orderBy(
+        sql`CASE ${testExecutions.executionState} WHEN 'RUNNING' THEN 1 WHEN 'PAUSED' THEN 2 WHEN 'QUEUED' THEN 3 WHEN 'FAILED' THEN 4 WHEN 'CANCELLED' THEN 5 ELSE 6 END`,
+        sql`CASE WHEN ${testExecutions.executionState} IN ('RUNNING', 'PAUSED', 'QUEUED') THEN ${testExecutions.queuedAt} END ASC`,
+        sql`CASE WHEN ${testExecutions.executionState} IN ('FINISHED', 'FAILED', 'CANCELLED') THEN COALESCE(${testExecutions.finishedAt}, ${testExecutions.updatedAt}) END DESC`,
+      ).limit(limit);
+
+  const items = rows.map(item => ({
+    ...item,
+    queuePosition: item.executionState === "QUEUED" ? queuePositions.get(item.id) ?? null : null,
+    progressPercent: item.totalScenarios > 0
+      ? Math.min(100, Math.round((item.completedScenarios / item.totalScenarios) * 100))
+      : 0,
+  }));
+  return {
+    items,
+    summary: {
+      queued: items.filter(item => item.executionState === "QUEUED").length,
+      running: items.filter(item => item.executionState === "RUNNING").length,
+      paused: items.filter(item => item.executionState === "PAUSED").length,
+      finished: items.filter(item => item.executionState === "FINISHED").length,
+      failed: items.filter(item => item.executionState === "FAILED").length,
+      cancelled: items.filter(item => item.executionState === "CANCELLED").length,
+    },
+  };
+}
 // ─── Auth helpers ─────────────────────────────────────────────────────────────
 
 export async function getUserByUsername(username: string) {
@@ -291,6 +385,8 @@ export async function createProject(data: { name: string; description?: string; 
 export async function updateProject(id: number, data: {
   name?: string;
   description?: string;
+  repositoryUrl?: string | null;
+  repositoryBranch?: string | null;
   sourceCodePath?: string | null;
   sourceCodeSummary?: string | null;
   sourceCodeFileCount?: number | null;
@@ -320,10 +416,18 @@ export async function listProjectTestEnvironments(projectId: number) {
     type: projectTestEnvironments.type,
     loginUrl: projectTestEnvironments.loginUrl,
     username: projectTestEnvironments.username,
+    vpnProfileId: projectTestEnvironments.vpnProfileId,
     vpnProvider: projectTestEnvironments.vpnProvider,
     vpnProfileName: projectTestEnvironments.vpnProfileName,
     vpnUsername: projectTestEnvironments.vpnUsername,
     vpnAutoConnect: projectTestEnvironments.vpnAutoConnect,
+    vpnConnectionStrategy: projectTestEnvironments.vpnConnectionStrategy,
+    vpnConfigFileName: projectTestEnvironments.vpnConfigFileName,
+    hasVpnConfig: sql<number>`${projectTestEnvironments.vpnConfigEncrypted} is not null`,
+    vpnConfigImportedAt: projectTestEnvironments.vpnConfigImportedAt,
+    vpnInstallerUrl: projectTestEnvironments.vpnInstallerUrl,
+    vpnInstallerSha256: projectTestEnvironments.vpnInstallerSha256,
+    vpnVerificationUrl: projectTestEnvironments.vpnVerificationUrl,
     isActive: projectTestEnvironments.isActive,
     createdAt: projectTestEnvironments.createdAt,
     updatedAt: projectTestEnvironments.updatedAt,
@@ -350,9 +454,11 @@ export async function createProjectTestEnvironment(data: typeof projectTestEnvir
 export async function updateProjectTestEnvironment(
   id: number,
   data: Partial<Pick<typeof projectTestEnvironments.$inferInsert,
-    "name" | "type" | "loginUrl" | "username" | "passwordEncrypted" |
+    "name" | "type" | "loginUrl" | "username" | "passwordEncrypted" | "vpnProfileId" |
     "vpnProvider" | "vpnProfileName" | "vpnUsername" | "vpnPasswordEncrypted" |
-    "vpnAutoConnect" | "isActive">>,
+    "vpnAutoConnect" | "vpnConnectionStrategy" | "vpnConfigFileName" |
+    "vpnConfigEncrypted" | "vpnConfigPasswordEncrypted" | "vpnConfigImportedAt" |
+    "vpnInstallerUrl" | "vpnInstallerSha256" | "vpnVerificationUrl" | "isActive">>,
 ) {
   const db = await getDb();
   if (!db) throw new Error("DB unavailable");
@@ -366,6 +472,114 @@ export async function deleteProjectTestEnvironment(id: number) {
 }
 
 // ─── Sprints ─────────────────────────────────────────────────────────────────
+// â”€â”€â”€ ParÃ¢metros globais â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+export async function listVpnProfiles() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select({
+    id: vpnProfiles.id,
+    name: vpnProfiles.name,
+    provider: vpnProfiles.provider,
+    profileName: vpnProfiles.profileName,
+    username: vpnProfiles.username,
+    autoConnect: vpnProfiles.autoConnect,
+    connectionStrategy: vpnProfiles.connectionStrategy,
+    configFileName: vpnProfiles.configFileName,
+    hasPassword: sql<number>`${vpnProfiles.passwordEncrypted} is not null`,
+    hasConfig: sql<number>`${vpnProfiles.configEncrypted} is not null`,
+    hasConfigPassword: sql<number>`${vpnProfiles.configPasswordEncrypted} is not null`,
+    configImportedAt: vpnProfiles.configImportedAt,
+    installerUrl: vpnProfiles.installerUrl,
+    installerSha256: vpnProfiles.installerSha256,
+    verificationUrl: vpnProfiles.verificationUrl,
+    isActive: vpnProfiles.isActive,
+    createdAt: vpnProfiles.createdAt,
+    updatedAt: vpnProfiles.updatedAt,
+  }).from(vpnProfiles).orderBy(vpnProfiles.name);
+}
+
+export async function getVpnProfile(id: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db.select().from(vpnProfiles).where(eq(vpnProfiles.id, id)).limit(1);
+  return rows[0];
+}
+
+export async function createVpnProfile(data: typeof vpnProfiles.$inferInsert) {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  const [result] = await db.insert(vpnProfiles).values(data);
+  return Number((result as any).insertId);
+}
+
+export async function updateVpnProfile(id: number, data: Partial<typeof vpnProfiles.$inferInsert>) {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  await db.update(vpnProfiles).set(data).where(eq(vpnProfiles.id, id));
+}
+
+export async function deleteVpnProfile(id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  const [{ count }] = await db.select({ count: sql<number>`count(*)` }).from(projectTestEnvironments).where(eq(projectTestEnvironments.vpnProfileId, id));
+  if (Number(count) > 0) throw new Error("Esta VPN estÃ¡ associada a um ou mais ambientes e nÃ£o pode ser excluÃ­da.");
+  await db.delete(vpnProfiles).where(eq(vpnProfiles.id, id));
+}
+
+export async function listAiProviderSettings() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select({
+    id: aiProviderSettings.id,
+    name: aiProviderSettings.name,
+    provider: aiProviderSettings.provider,
+    apiUrl: aiProviderSettings.apiUrl,
+    model: aiProviderSettings.model,
+    hasApiKey: sql<number>`${aiProviderSettings.apiKeyEncrypted} is not null`,
+    isActive: aiProviderSettings.isActive,
+    createdAt: aiProviderSettings.createdAt,
+    updatedAt: aiProviderSettings.updatedAt,
+  }).from(aiProviderSettings).orderBy(desc(aiProviderSettings.isActive), aiProviderSettings.name);
+}
+
+export async function getAiProviderSetting(id: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db.select().from(aiProviderSettings).where(eq(aiProviderSettings.id, id)).limit(1);
+  return rows[0];
+}
+
+export async function getActiveAiProviderSetting() {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db.select().from(aiProviderSettings).where(eq(aiProviderSettings.isActive, 1)).orderBy(desc(aiProviderSettings.updatedAt)).limit(1);
+  return rows[0];
+}
+
+export async function createAiProviderSetting(data: typeof aiProviderSettings.$inferInsert) {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  return db.transaction(async tx => {
+    if (data.isActive) await tx.update(aiProviderSettings).set({ isActive: 0 });
+    const [result] = await tx.insert(aiProviderSettings).values(data);
+    return Number((result as any).insertId);
+  });
+}
+
+export async function updateAiProviderSetting(id: number, data: Partial<typeof aiProviderSettings.$inferInsert>) {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  await db.transaction(async tx => {
+    if (data.isActive) await tx.update(aiProviderSettings).set({ isActive: 0 });
+    await tx.update(aiProviderSettings).set(data).where(eq(aiProviderSettings.id, id));
+  });
+}
+
+export async function deleteAiProviderSetting(id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  await db.delete(aiProviderSettings).where(eq(aiProviderSettings.id, id));
+}
 export async function getSprints(projectId?: number) {
   const db = await getDb();
   if (!db) return [];
@@ -402,7 +616,7 @@ export async function getChecklist(sprintId: number, analystId: number): Promise
 export async function getChecklistsByAnalyst(analystId: number) {
   const db = await getDb();
   if (!db) return [];
-  return db.select().from(checklists).where(eq(checklists.analystId, analystId)).orderBy(desc(checklists.startedAt));
+  return db.select().from(checklists).where(or(eq(checklists.responsibleUserId, analystId), and(isNull(checklists.responsibleUserId), eq(checklists.analystId, analystId)))).orderBy(desc(checklists.startedAt));
 }
 
 export async function getAllChecklists() {
@@ -415,7 +629,7 @@ export async function getAllChecklists() {
 export async function getProgressBySprints(analystId: number) {
   const db = await getDb();
   if (!db) return [];
-  const rows = await db.select().from(checklists).where(eq(checklists.analystId, analystId));
+  const rows = await db.select().from(checklists).where(or(eq(checklists.responsibleUserId, analystId), and(isNull(checklists.responsibleUserId), eq(checklists.analystId, analystId))));
   const map = new Map<number, { sprintId: number; completedItems: number; totalItems: number; status: string; startedAt: Date }>();
   for (const row of rows) {
     const existing = map.get(row.sprintId);
@@ -429,6 +643,7 @@ export async function getProgressBySprints(analystId: number) {
 export async function upsertChecklist(data: {
   sprintId: number;
   analystId: number;
+  responsibleUserId: number;
   checkedItems: string;
   totalItems: number;
   completedItems: number;
@@ -440,6 +655,7 @@ export async function upsertChecklist(data: {
   const existing = await getChecklist(data.sprintId, data.analystId);
   if (existing) {
     await db.update(checklists).set({
+      responsibleUserId: data.responsibleUserId,
       checkedItems: data.checkedItems,
       totalItems: data.totalItems,
       completedItems: data.completedItems,
@@ -451,6 +667,7 @@ export async function upsertChecklist(data: {
     await db.insert(checklists).values({
       sprintId: data.sprintId,
       analystId: data.analystId,
+      responsibleUserId: data.responsibleUserId,
       checkedItems: data.checkedItems,
       totalItems: data.totalItems,
       completedItems: data.completedItems,
@@ -460,6 +677,12 @@ export async function upsertChecklist(data: {
     const created = await getChecklist(data.sprintId, data.analystId);
     return created?.id;
   }
+}
+
+export async function updateChecklistResponsible(id: number, responsibleUserId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  await db.update(checklists).set({ responsibleUserId }).where(eq(checklists.id, id));
 }
 
 // ─── Trail Progress ───────────────────────────────────────────────────────────
@@ -540,6 +763,49 @@ export async function deleteQAPlanDocument(id: number): Promise<void> {
   await db.delete(qaPlanDocuments).where(eq(qaPlanDocuments.id, id));
 }
 
+export async function insertQATestPlan(data: typeof qaTestPlans.$inferInsert): Promise<number> {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  const [result] = await db.insert(qaTestPlans).values(data);
+  return Number((result as any).insertId);
+}
+
+export async function listQATestPlans(input: {
+  projectId?: number;
+  sprintId?: number;
+}) {
+  const db = await getDb();
+  if (!db) return [];
+  const filters = [];
+  if (input.projectId) filters.push(eq(qaTestPlans.projectId, input.projectId));
+  if (input.sprintId) filters.push(eq(qaTestPlans.sprintId, input.sprintId));
+  return db.select().from(qaTestPlans)
+    .where(filters.length ? and(...filters) : undefined)
+    .orderBy(desc(qaTestPlans.createdAt))
+    .limit(100);
+}
+
+export async function getQATestPlan(id: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(qaTestPlans).where(eq(qaTestPlans.id, id)).limit(1);
+  return rows[0] ?? null;
+}
+
+export async function updateQATestPlanResponsible(id: number, responsibleUserId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  await db.update(qaTestPlans)
+    .set({ responsibleUserId })
+    .where(eq(qaTestPlans.id, id));
+}
+
+export async function deleteQATestPlan(id: number): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  await db.delete(qaTestPlans).where(eq(qaTestPlans.id, id));
+}
+
 // ─── Execuções e resultados de QA ───────────────────────────────────────────
 export async function createPendingTestExecution(data: {
   externalExecutionId: string;
@@ -552,6 +818,8 @@ export async function createPendingTestExecution(data: {
   sprintName: string;
   systemUrl: string;
   totalScenarios: number;
+  queuePool: "PUBLIC" | "COGEL" | "SEFAZ" | "OUTRA";
+  dispatchPayloadEncrypted: string;
 }) {
   const db = await getDb();
   if (!db) throw new Error("DB unavailable");
@@ -566,7 +834,18 @@ export async function createPendingTestExecution(data: {
     sprintName: data.sprintName,
     systemUrl: data.systemUrl,
     status: "EM_ANDAMENTO",
+    executionState: "QUEUED",
+    controlState: "RUN",
+    queuePool: data.queuePool,
+    dispatchPayloadEncrypted: data.dispatchPayloadEncrypted,
+    dispatchAttempts: 0,
+    queuedAt: new Date(),
     totalScenarios: data.totalScenarios,
+    completedScenarios: 0,
+    currentStage: "AGUARDANDO_FILA",
+    progressMessage: "Preparando a execução automatizada.",
+    liveProgressJson: "[]",
+    lastHeartbeatAt: new Date(),
     startedAt: new Date(),
     rawPayload: JSON.stringify({ phase: "STARTED" }),
   });
@@ -580,11 +859,517 @@ export async function markTestExecutionStartFailure(
   if (!db) return;
   await db.update(testExecutions).set({
     status: "ERRO_AUTOMACAO",
+    executionState: "FAILED",
     automationErrors: 1,
     inconclusiveScenarios: 1,
     finishedAt: new Date(),
+    currentStage: "FALHA_AO_INICIAR",
+    progressMessage: reason.slice(0, 1000),
+    lastHeartbeatAt: new Date(),
     rawPayload: JSON.stringify({ phase: "START_FAILED", reason: reason.slice(0, 1000) }),
+    dispatchPayloadEncrypted: null,
+    leaseExpiresAt: null,
+  }).where(and(
+    eq(testExecutions.externalExecutionId, externalExecutionId),
+    inArray(testExecutions.executionState, ["QUEUED", "RUNNING", "PAUSED"]),
+  ));
+}
+
+type LiveScenarioProgress = {
+  scenarioIndex: number;
+  scenarioId: string;
+  scenarioTitle: string;
+  environment: string;
+  status: "EM_ANDAMENTO" | "PASSOU" | "FALHOU" | "BLOQUEADO" | "ERRO_AUTOMACAO";
+  summary?: string;
+  startedAt?: string;
+  finishedAt?: string;
+};
+
+function parseLiveProgress(value: string | null): LiveScenarioProgress[] {
+  try {
+    const parsed = JSON.parse(value || "[]");
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function updateTestExecutionProgress(progress: NormalizedExecutionProgress) {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  return db.transaction(async tx => {
+    const rows = await tx.select().from(testExecutions)
+      .where(eq(testExecutions.externalExecutionId, progress.externalExecutionId))
+      .limit(1);
+    const execution = rows[0];
+    if (!execution) return null;
+    if (execution.executionState === "CANCELLED" || execution.executionState === "FAILED") {
+      return { executionId: execution.id, completedScenarios: execution.completedScenarios, progressPercent: execution.coveragePercent };
+    }
+    const live = parseLiveProgress(execution.liveProgressJson);
+    const existingIndex = live.findIndex(item => item.scenarioId === progress.scenarioId);
+    const previous = existingIndex >= 0 ? live[existingIndex] : undefined;
+    const next: LiveScenarioProgress = {
+      scenarioIndex: progress.scenarioIndex,
+      scenarioId: progress.scenarioId,
+      scenarioTitle: progress.scenarioTitle,
+      environment: progress.environment,
+      status: progress.event === "SCENARIO_COMPLETED" ? progress.status! : "EM_ANDAMENTO",
+      summary: progress.summary ?? previous?.summary,
+      startedAt: previous?.startedAt ?? progress.occurredAt.toISOString(),
+      finishedAt: progress.event === "SCENARIO_COMPLETED" ? progress.occurredAt.toISOString() : previous?.finishedAt,
+    };
+    if (existingIndex >= 0) live[existingIndex] = next;
+    else live.push(next);
+    live.sort((left, right) => left.scenarioIndex - right.scenarioIndex);
+    const completed = live.filter(item => item.status !== "EM_ANDAMENTO");
+    const counts = {
+      passed: completed.filter(item => item.status === "PASSOU").length,
+      failed: completed.filter(item => item.status === "FALHOU").length,
+      blocked: completed.filter(item => item.status === "BLOQUEADO").length,
+      automation: completed.filter(item => item.status === "ERRO_AUTOMACAO").length,
+    };
+    const completedScenarios = completed.length;
+    const progressPercent = execution.totalScenarios > 0
+      ? Math.min(100, Math.round((completedScenarios / execution.totalScenarios) * 100))
+      : 0;
+    const isFinished =
+      progress.event === "SCENARIO_COMPLETED" &&
+      execution.totalScenarios > 0 &&
+      completedScenarios >= execution.totalScenarios;
+    const finalStatus = counts.failed > 0
+      ? "FALHOU"
+      : counts.blocked > 0
+        ? "BLOQUEADO"
+        : counts.automation > 0
+          ? "ERRO_AUTOMACAO"
+          : "PASSOU";
+    await tx.update(testExecutions).set({
+      executionState: isFinished ? "FINISHED" : "RUNNING",
+      status: isFinished ? finalStatus : execution.status,
+      currentScenarioIndex: progress.scenarioIndex,
+      currentScenarioId: progress.scenarioId,
+      currentScenarioTitle: progress.scenarioTitle,
+      currentEnvironment: progress.environment || null,
+      currentStage: isFinished ? "CONCLUIDO" : progress.stage,
+      progressMessage: isFinished
+        ? `Execução concluída: ${completedScenarios} de ${execution.totalScenarios} cenários processados.`
+        : progress.event === "SCENARIO_STARTED"
+          ? `Executando cenário ${progress.scenarioIndex} de ${execution.totalScenarios}: ${progress.scenarioTitle}`.slice(0, 1000)
+          : `Cenário ${progress.scenarioIndex} concluído com status ${progress.status}.`.slice(0, 1000),
+      completedScenarios,
+      passedScenarios: counts.passed,
+      failedScenarios: counts.failed,
+      blockedScenarios: counts.blocked,
+      automationErrors: counts.automation,
+      coveragePercent: progressPercent,
+      liveProgressJson: JSON.stringify(live),
+      lastHeartbeatAt: progress.occurredAt,
+      leaseExpiresAt: isFinished ? null : new Date(progress.occurredAt.getTime() + 2 * 60 * 60 * 1000),
+      finishedAt: isFinished ? progress.occurredAt : execution.finishedAt,
+      dispatchPayloadEncrypted: isFinished ? null : execution.dispatchPayloadEncrypted,
+    }).where(eq(testExecutions.id, execution.id));
+    return { executionId: execution.id, completedScenarios, progressPercent };
+  });
+}
+
+export async function markTestExecutionQueued(externalExecutionId: string, message: string) {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(testExecutions).set({
+    executionState: "QUEUED",
+    controlState: "RUN",
+    currentStage: "AGUARDANDO_FILA",
+    progressMessage: message.slice(0, 1000),
+    lastHeartbeatAt: new Date(),
   }).where(eq(testExecutions.externalExecutionId, externalExecutionId));
+}
+
+export type TestExecutionControlAction = "PAUSE" | "RESUME" | "CANCEL";
+
+export async function controlTestExecution(input: {
+  externalExecutionId: string;
+  userId: number;
+  isAdmin: boolean;
+  action: TestExecutionControlAction;
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  return db.transaction(async tx => {
+    const rows = await tx.select().from(testExecutions)
+      .where(eq(testExecutions.externalExecutionId, input.externalExecutionId))
+      .limit(1);
+    const execution = rows[0];
+    if (!execution) return { outcome: "NOT_FOUND" as const };
+    if (!input.isAdmin && execution.createdById !== input.userId) {
+      return { outcome: "FORBIDDEN" as const };
+    }
+    if (["FINISHED", "FAILED", "CANCELLED"].includes(execution.executionState)) {
+      return { outcome: "TERMINAL" as const, executionState: execution.executionState };
+    }
+
+    const now = new Date();
+    if (input.action === "PAUSE") {
+      if (execution.executionState === "PAUSED" && execution.controlState === "PAUSE") {
+        return { outcome: "UNCHANGED" as const, executionState: execution.executionState, controlState: execution.controlState };
+      }
+      const queued = execution.executionState === "QUEUED";
+      await tx.update(testExecutions).set({
+        executionState: queued ? "PAUSED" : execution.executionState,
+        controlState: "PAUSE",
+        controlRequestedAt: now,
+        controlRequestedById: input.userId,
+        currentStage: queued ? "PAUSADO" : "PAUSA_SOLICITADA",
+        progressMessage: queued
+          ? "Execução pausada antes da reserva de um worker."
+          : "Pausa solicitada. O cenário atual será concluído antes da pausa.",
+        lastHeartbeatAt: now,
+      }).where(eq(testExecutions.id, execution.id));
+      return { outcome: "UPDATED" as const, executionState: queued ? "PAUSED" as const : execution.executionState, controlState: "PAUSE" as const };
+    }
+
+    if (input.action === "RESUME") {
+      const hasWorker = Boolean(execution.assignedWorkerId);
+      const executionState = hasWorker ? "RUNNING" as const : "QUEUED" as const;
+      await tx.update(testExecutions).set({
+        executionState,
+        controlState: "RUN",
+        controlRequestedAt: now,
+        controlRequestedById: input.userId,
+        currentStage: hasWorker ? "RETOMANDO" : "AGUARDANDO_FILA",
+        progressMessage: hasWorker
+          ? "Retomada solicitada. O agente continuará no próximo cenário."
+          : "Execução retomada e devolvida à fila.",
+        leaseExpiresAt: hasWorker ? new Date(now.getTime() + 2 * 60 * 60 * 1000) : null,
+        lastHeartbeatAt: now,
+      }).where(eq(testExecutions.id, execution.id));
+      return { outcome: "UPDATED" as const, executionState, controlState: "RUN" as const };
+    }
+
+    const agentMustStop = Boolean(execution.assignedWorkerId) && ["RUNNING", "PAUSED"].includes(execution.executionState);
+    if (agentMustStop) {
+      await tx.update(testExecutions).set({
+        controlState: "CANCEL",
+        controlRequestedAt: now,
+        controlRequestedById: input.userId,
+        currentStage: "ENCERRAMENTO_SOLICITADO",
+        progressMessage: "Encerramento solicitado. O cenário atual será concluído e nenhum novo cenário será iniciado.",
+        lastHeartbeatAt: now,
+      }).where(eq(testExecutions.id, execution.id));
+      return { outcome: "UPDATED" as const, executionState: execution.executionState, controlState: "CANCEL" as const };
+    }
+
+    await tx.update(testExecutions).set({
+      status: "CANCELADO",
+      executionState: "CANCELLED",
+      controlState: "CANCEL",
+      controlRequestedAt: now,
+      controlRequestedById: input.userId,
+      currentStage: "ENCERRADO",
+      progressMessage: "Execução encerrada pelo usuário antes de iniciar um novo cenário.",
+      finishedAt: now,
+      lastHeartbeatAt: now,
+      assignedWorkerId: null,
+      dispatchPayloadEncrypted: null,
+      leaseExpiresAt: null,
+    }).where(eq(testExecutions.id, execution.id));
+    return { outcome: "UPDATED" as const, executionState: "CANCELLED" as const, controlState: "CANCEL" as const };
+  });
+}
+
+export async function getTestExecutionControlCheckpoint(externalExecutionId: string) {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  return db.transaction(async tx => {
+    const rows = await tx.select().from(testExecutions)
+      .where(eq(testExecutions.externalExecutionId, externalExecutionId))
+      .limit(1);
+    const execution = rows[0];
+    if (!execution) return null;
+    const now = new Date();
+
+    if (execution.executionState === "FINISHED") {
+      return { action: "RUN" as const, executionState: "FINISHED" as const, pollingMs: 0 };
+    }
+    if (execution.executionState === "FAILED" || execution.executionState === "CANCELLED" || execution.controlState === "CANCEL") {
+      if (execution.executionState !== "CANCELLED") {
+        await tx.update(testExecutions).set({
+          status: "CANCELADO",
+          executionState: "CANCELLED",
+          controlState: "CANCEL",
+          currentStage: "ENCERRADO",
+          progressMessage: "Execução encerrada pelo usuário após a conclusão do cenário atual.",
+          finishedAt: now,
+          lastHeartbeatAt: now,
+          assignedWorkerId: null,
+          dispatchPayloadEncrypted: null,
+          leaseExpiresAt: null,
+        }).where(eq(testExecutions.id, execution.id));
+      }
+      return { action: "CANCEL" as const, executionState: "CANCELLED" as const, pollingMs: 0 };
+    }
+
+    if (execution.controlState === "PAUSE") {
+      await tx.update(testExecutions).set({
+        executionState: "PAUSED",
+        currentStage: "PAUSADO",
+        progressMessage: "Execução pausada. Aguardando o comando para retomar ou encerrar.",
+        lastHeartbeatAt: now,
+        leaseExpiresAt: new Date(now.getTime() + 2 * 60 * 60 * 1000),
+      }).where(eq(testExecutions.id, execution.id));
+      return { action: "PAUSE" as const, executionState: "PAUSED" as const, pollingMs: 5000 };
+    }
+
+    if (execution.executionState === "PAUSED") {
+      const executionState = execution.assignedWorkerId ? "RUNNING" as const : "QUEUED" as const;
+      await tx.update(testExecutions).set({
+        executionState,
+        currentStage: execution.assignedWorkerId ? "RETOMANDO" : "AGUARDANDO_FILA",
+        progressMessage: execution.assignedWorkerId
+          ? "Execução retomada. Preparando o próximo cenário."
+          : "Execução retomada e aguardando um worker.",
+        lastHeartbeatAt: now,
+      }).where(eq(testExecutions.id, execution.id));
+      return { action: "RUN" as const, executionState, pollingMs: 0 };
+    }
+
+    await tx.update(testExecutions).set({
+      lastHeartbeatAt: now,
+      leaseExpiresAt: execution.assignedWorkerId ? new Date(now.getTime() + 2 * 60 * 60 * 1000) : execution.leaseExpiresAt,
+    }).where(eq(testExecutions.id, execution.id));
+    return { action: "RUN" as const, executionState: execution.executionState, pollingMs: 0 };
+  });
+}
+
+export type ExecutionQueuePool = "PUBLIC" | "COGEL" | "SEFAZ" | "OUTRA";
+
+export async function ensureLocalExecutionWorker() {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  const existing = await db.select().from(executionWorkers)
+    .where(eq(executionWorkers.code, "LOCAL-01")).limit(1);
+  if (existing[0]) return existing[0];
+  await db.insert(executionWorkers).values({
+    code: "LOCAL-01",
+    name: "Worker local",
+    mode: "LOCAL",
+    status: "ONLINE",
+    networkPool: "ANY",
+    maxConcurrency: 1,
+    minFreeMemoryMb: 1024,
+    maxCpuPercent: 75,
+    lastHeartbeatAt: new Date(),
+  }).onDuplicateKeyUpdate({ set: { lastHeartbeatAt: new Date() } });
+  const created = await db.select().from(executionWorkers)
+    .where(eq(executionWorkers.code, "LOCAL-01")).limit(1);
+  if (!created[0]) throw new Error("Nao foi possivel registrar o worker local.");
+  return created[0];
+}
+
+export async function listExecutionWorkers() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(executionWorkers).orderBy(executionWorkers.id);
+}
+
+export async function updateExecutionWorkerSettings(id: number, data: {
+  name?: string;
+  status?: "ONLINE" | "OFFLINE" | "PAUSED";
+  networkPool?: "ANY" | ExecutionQueuePool;
+  maxConcurrency?: number;
+  minFreeMemoryMb?: number;
+  maxCpuPercent?: number;
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  await db.update(executionWorkers).set(data).where(eq(executionWorkers.id, id));
+}
+
+export async function updateExecutionWorkerHeartbeat(id: number, data: {
+  currentPool: ExecutionQueuePool | null;
+  freeMemoryMb: number;
+  cpuPercent: number;
+}) {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(executionWorkers).set({
+    ...data,
+    lastHeartbeatAt: new Date(),
+  }).where(eq(executionWorkers.id, id));
+}
+
+export async function listActiveExecutionJobs(workerId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(testExecutions).where(and(
+    eq(testExecutions.assignedWorkerId, workerId),
+    inArray(testExecutions.executionState, ["RUNNING", "PAUSED"]),
+  )).orderBy(testExecutions.dispatchedAt);
+}
+
+export async function markQueuedExecutionsWaitingForResources(message: string) {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(testExecutions).set({
+    currentStage: "AGUARDANDO_RECURSOS",
+    progressMessage: message.slice(0, 1000),
+    lastHeartbeatAt: new Date(),
+  }).where(and(
+    eq(testExecutions.executionState, "QUEUED"),
+    eq(testExecutions.controlState, "RUN"),
+    isNull(testExecutions.assignedWorkerId),
+  ));
+}
+export async function listQueuedExecutionJobs(limit = 25) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select().from(testExecutions).where(and(
+    eq(testExecutions.executionState, "QUEUED"),
+    eq(testExecutions.controlState, "RUN"),
+    isNull(testExecutions.assignedWorkerId),
+  )).orderBy(testExecutions.queuedAt).limit(limit);
+}
+
+export async function claimExecutionJob(executionId: number, workerId: number) {
+  const db = await getDb();
+  if (!db) return false;
+  const result = await db.update(testExecutions).set({
+    assignedWorkerId: workerId,
+    executionState: "RUNNING",
+    dispatchedAt: new Date(),
+    leaseExpiresAt: new Date(Date.now() + 2 * 60 * 60 * 1000),
+    currentStage: "PREPARANDO_WORKER",
+    progressMessage: "Worker reservado. Preparando rede e automacao.",
+    lastHeartbeatAt: new Date(),
+    dispatchAttempts: sql`${testExecutions.dispatchAttempts} + 1`,
+  }).where(and(
+    eq(testExecutions.id, executionId),
+    eq(testExecutions.executionState, "QUEUED"),
+    eq(testExecutions.controlState, "RUN"),
+    isNull(testExecutions.assignedWorkerId),
+  ));
+  const metadata = Array.isArray(result) ? result[0] : result;
+  return Number((metadata as { affectedRows?: number } | undefined)?.affectedRows ?? 0) > 0;
+}
+
+export async function markExecutionJobDispatched(externalExecutionId: string) {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(testExecutions).set({
+    executionState: "RUNNING",
+    currentStage: "AGUARDANDO_PRIMEIRO_CENARIO",
+    progressMessage: "Execucao aceita pelo agente. Aguardando o primeiro cenario.",
+    lastHeartbeatAt: new Date(),
+  }).where(and(
+    eq(testExecutions.externalExecutionId, externalExecutionId),
+    eq(testExecutions.controlState, "RUN"),
+  ));
+}
+
+export async function returnExecutionJobToQueue(externalExecutionId: string, message: string) {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(testExecutions).set({
+    executionState: "QUEUED",
+    assignedWorkerId: null,
+    dispatchedAt: null,
+    leaseExpiresAt: null,
+    currentStage: "AGUARDANDO_FILA",
+    progressMessage: message.slice(0, 1000),
+    lastHeartbeatAt: new Date(),
+  }).where(and(
+    eq(testExecutions.externalExecutionId, externalExecutionId),
+    eq(testExecutions.controlState, "RUN"),
+  ));
+}
+
+export async function failExpiredExecutionJobs() {
+  const db = await getDb();
+  if (!db) return 0;
+  const expired = await db.select({ externalExecutionId: testExecutions.externalExecutionId })
+    .from(testExecutions)
+    .where(and(
+      eq(testExecutions.executionState, "RUNNING"),
+      lt(testExecutions.leaseExpiresAt, new Date()),
+    ));
+  for (const job of expired) {
+    await markTestExecutionStartFailure(
+      job.externalExecutionId,
+      "O worker deixou de enviar atualizacoes por mais de duas horas. A execucao foi encerrada como falha de infraestrutura.",
+    );
+  }
+  return expired.length;
+}
+export async function getExecutionQueueOverview() {
+  const db = await getDb();
+  if (!db) return { queued: 0, running: 0, workers: [] as Awaited<ReturnType<typeof listExecutionWorkers>> };
+  const [workers, rows] = await Promise.all([
+    listExecutionWorkers(),
+    db.select({ state: testExecutions.executionState, pool: testExecutions.queuePool })
+      .from(testExecutions)
+      .where(or(eq(testExecutions.executionState, "QUEUED"), eq(testExecutions.executionState, "RUNNING"))),
+  ]);
+  return {
+    queued: rows.filter(item => item.state === "QUEUED").length,
+    running: rows.filter(item => item.state === "RUNNING").length,
+    byPool: (["PUBLIC", "COGEL", "SEFAZ", "OUTRA"] as const).map(pool => ({
+      pool,
+      queued: rows.filter(item => item.pool === pool && item.state === "QUEUED").length,
+      running: rows.filter(item => item.pool === pool && item.state === "RUNNING").length,
+    })),
+    workers,
+  };
+}
+export async function getTestExecutionProgress(input: {
+  externalExecutionId: string;
+  userId: number;
+  isAdmin: boolean;
+}) {
+  const db = await getDb();
+  if (!db) return null;
+  const conditions = [eq(testExecutions.externalExecutionId, input.externalExecutionId)];
+  if (!input.isAdmin) conditions.push(eq(testExecutions.createdById, input.userId));
+  const rows = await db.select().from(testExecutions).where(and(...conditions)).limit(1);
+  const execution = rows[0];
+  if (!execution) return null;
+  let scenarios = parseLiveProgress(execution.liveProgressJson);
+  if (execution.executionState === "FINISHED" && scenarios.length === 0) {
+    const persisted = await db.select().from(testResults)
+      .where(eq(testResults.executionId, execution.id))
+      .orderBy(testResults.id);
+    scenarios = persisted.map((item, index) => ({
+      scenarioIndex: index + 1,
+      scenarioId: item.externalScenarioId,
+      scenarioTitle: item.title,
+      environment: "",
+      status: item.status,
+      summary: item.summary ?? undefined,
+      finishedAt: item.executedAt?.toISOString(),
+    }));
+  }
+  return {
+    executionId: execution.externalExecutionId,
+    executionState: execution.executionState,
+    controlState: execution.controlState,
+    controlRequestedAt: execution.controlRequestedAt,
+    finalStatus: execution.status,
+    totalScenarios: execution.totalScenarios,
+    completedScenarios: execution.completedScenarios,
+    progressPercent: execution.totalScenarios > 0
+      ? Math.min(100, Math.round((execution.completedScenarios / execution.totalScenarios) * 100))
+      : 0,
+    currentScenarioIndex: execution.currentScenarioIndex,
+    currentScenarioId: execution.currentScenarioId,
+    currentScenarioTitle: execution.currentScenarioTitle,
+    currentEnvironment: execution.currentEnvironment,
+    currentStage: execution.currentStage,
+    progressMessage: execution.progressMessage,
+    scenarios,
+    startedAt: execution.startedAt,
+    finishedAt: execution.finishedAt,
+    lastHeartbeatAt: execution.lastHeartbeatAt,
+  };
 }
 
 export async function upsertTestExecution(
@@ -652,7 +1437,12 @@ export async function upsertTestExecution(
       sprintName: data.sprintName ?? null,
       systemUrl: data.systemUrl ?? null,
       status: data.status,
+      executionState: "FINISHED" as const,
       totalScenarios: data.totalScenarios,
+      completedScenarios: data.totalScenarios,
+      currentStage: "CONCLUIDO",
+      progressMessage: `Execução concluída com status ${data.status}.`,
+      lastHeartbeatAt: data.finishedAt ?? new Date(),
       passedScenarios: data.passedScenarios,
       failedScenarios: data.failedScenarios,
       blockedScenarios: data.blockedScenarios,
@@ -1586,7 +2376,7 @@ export async function getDashboardMetrics(filters: DashboardMetricFilters) {
   }
 
   const completedExecutions = executions.filter(
-    execution => execution.status !== "EM_ANDAMENTO",
+    execution => execution.status !== "EM_ANDAMENTO" && execution.status !== "CANCELADO",
   );
   const executionIds = completedExecutions.map(execution => execution.id);
   const results = await db

@@ -115,6 +115,20 @@ function array(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
+const OMITTED_RAW_KEYS = /^(?:login_usuario|login_senha|username|password|senha|token|authorization|ambientes_json|ambientes_execucao_json|contexto_codigo_fonte|codigo_regressao)$/i;
+
+function rawPayloadForStorage(value: unknown): string {
+  const seen = new WeakSet<object>();
+  return JSON.stringify(value, (key, current) => {
+    if (OMITTED_RAW_KEYS.test(key)) return undefined;
+    if (current && typeof current === "object") {
+      if (seen.has(current)) return "[referência circular omitida]";
+      seen.add(current);
+    }
+    return current;
+  });
+}
+
 function moduleFromGherkin(gherkin: string | undefined): string | undefined {
   return gherkin?.match(/(?:Funcionalidade|Feature):\s*([^\r\n]+)/i)?.[1]?.trim();
 }
@@ -302,7 +316,7 @@ export function normalizeTestExecutionPayload(
       optionalDate(
         (raw as any).fim_processamento ?? (raw as any).finished_at,
       ) ?? new Date(),
-    rawPayload: JSON.stringify(raw),
+    rawPayload: rawPayloadForStorage(raw),
     results,
   };
 }

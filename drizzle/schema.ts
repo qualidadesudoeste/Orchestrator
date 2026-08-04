@@ -1,4 +1,4 @@
-import { index, int, mysqlEnum, mysqlTable, text, timestamp, uniqueIndex, varchar } from "drizzle-orm/mysql-core";
+import { index, int, mysqlEnum, mysqlTable, longtext, text, timestamp, uniqueIndex, varchar } from "drizzle-orm/mysql-core";
 
 /**
  * Core user table backing auth flow.
@@ -38,6 +38,8 @@ export const projects = mysqlTable("projects", {
   clientId: int("clientId").notNull(),
   name: varchar("name", { length: 255 }).notNull(),
   description: text("description"),
+  repositoryUrl: varchar("repositoryUrl", { length: 1000 }),
+  repositoryBranch: varchar("repositoryBranch", { length: 255 }),
   sourceCodePath: varchar("sourceCodePath", { length: 1000 }),
   sourceCodeSummary: text("sourceCodeSummary"),
   sourceCodeFileCount: int("sourceCodeFileCount"),
@@ -48,6 +50,48 @@ export const projects = mysqlTable("projects", {
 });
 export type Project = typeof projects.$inferSelect;
 
+export const vpnProfiles = mysqlTable("vpn_profiles", {
+  id: int("id").autoincrement().primaryKey(),
+  name: varchar("name", { length: 160 }).notNull(),
+  provider: mysqlEnum("provider", ["COGEL", "SEFAZ", "OUTRA"]).notNull(),
+  profileName: varchar("profileName", { length: 160 }).notNull(),
+  username: varchar("username", { length: 320 }),
+  passwordEncrypted: text("passwordEncrypted"),
+  autoConnect: int("autoConnect").notNull().default(1),
+  connectionStrategy: mysqlEnum("connectionStrategy", ["AUTO", "CLI", "AUTOCONNECT"]).notNull().default("AUTO"),
+  configFileName: varchar("configFileName", { length: 255 }),
+  configEncrypted: longtext("configEncrypted"),
+  configPasswordEncrypted: text("configPasswordEncrypted"),
+  configImportedAt: timestamp("configImportedAt"),
+  installerUrl: text("installerUrl"),
+  installerSha256: varchar("installerSha256", { length: 64 }),
+  verificationUrl: varchar("verificationUrl", { length: 1000 }),
+  isActive: int("isActive").notNull().default(1),
+  createdById: int("createdById").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, table => ({
+  nameUnique: uniqueIndex("vpn_profiles_name_unique").on(table.name),
+}));
+export type VpnProfile = typeof vpnProfiles.$inferSelect;
+
+export const aiProviderSettings = mysqlTable("ai_provider_settings", {
+  id: int("id").autoincrement().primaryKey(),
+  name: varchar("name", { length: 120 }).notNull(),
+  provider: mysqlEnum("provider", ["OPENAI", "GEMINI", "GROQ", "CUSTOM"]).notNull(),
+  apiUrl: varchar("apiUrl", { length: 1000 }).notNull(),
+  model: varchar("model", { length: 255 }).notNull(),
+  apiKeyEncrypted: text("apiKeyEncrypted"),
+  isActive: int("isActive").notNull().default(0),
+  createdById: int("createdById").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, table => ({
+  nameUnique: uniqueIndex("ai_provider_settings_name_unique").on(table.name),
+  activeIndex: index("ai_provider_settings_active_idx").on(table.isActive),
+}));
+export type AiProviderSetting = typeof aiProviderSettings.$inferSelect;
+
 export const projectTestEnvironments = mysqlTable("project_test_environments", {
   id: int("id").autoincrement().primaryKey(),
   projectId: int("projectId").notNull(),
@@ -56,11 +100,20 @@ export const projectTestEnvironments = mysqlTable("project_test_environments", {
   loginUrl: varchar("loginUrl", { length: 1000 }).notNull(),
   username: varchar("username", { length: 320 }),
   passwordEncrypted: text("passwordEncrypted"),
+  vpnProfileId: int("vpnProfileId"),
   vpnProvider: mysqlEnum("vpnProvider", ["NONE", "COGEL", "SEFAZ", "OUTRA"]).notNull().default("NONE"),
   vpnProfileName: varchar("vpnProfileName", { length: 160 }),
   vpnUsername: varchar("vpnUsername", { length: 320 }),
   vpnPasswordEncrypted: text("vpnPasswordEncrypted"),
   vpnAutoConnect: int("vpnAutoConnect").notNull().default(1),
+  vpnConnectionStrategy: mysqlEnum("vpnConnectionStrategy", ["AUTO", "CLI", "AUTOCONNECT"]).notNull().default("AUTO"),
+  vpnConfigFileName: varchar("vpnConfigFileName", { length: 255 }),
+  vpnConfigEncrypted: longtext("vpnConfigEncrypted"),
+  vpnConfigPasswordEncrypted: text("vpnConfigPasswordEncrypted"),
+  vpnConfigImportedAt: timestamp("vpnConfigImportedAt"),
+  vpnInstallerUrl: text("vpnInstallerUrl"),
+  vpnInstallerSha256: varchar("vpnInstallerSha256", { length: 64 }),
+  vpnVerificationUrl: varchar("vpnVerificationUrl", { length: 1000 }),
   isActive: int("isActive").notNull().default(1),
   createdById: int("createdById").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
@@ -89,6 +142,7 @@ export const checklists = mysqlTable("checklists", {
   id: int("id").autoincrement().primaryKey(),
   sprintId: int("sprintId").notNull(),
   analystId: int("analystId").notNull(),
+  responsibleUserId: int("responsibleUserId"),
   /** JSON com o estado de cada item: { [itemId]: boolean } */
   checkedItems: text("checkedItems").notNull().default("{}"),
   totalItems: int("totalItems").notNull().default(0),
@@ -131,7 +185,53 @@ export const qaPlanDocuments = mysqlTable("qa_plan_documents", {
 });
 export type QAPlanDocument = typeof qaPlanDocuments.$inferSelect;
 
+export const qaTestPlans = mysqlTable("qa_test_plans", {
+  id: int("id").autoincrement().primaryKey(),
+  clientId: int("clientId").notNull(),
+  projectId: int("projectId").notNull(),
+  sprintId: int("sprintId").notNull(),
+  createdById: int("createdById").notNull(),
+  responsibleUserId: int("responsibleUserId"),
+  title: varchar("title", { length: 255 }).notNull(),
+  userStory: longtext("userStory").notNull(),
+  systemType: varchar("systemType", { length: 80 }).notNull(),
+  criticality: varchar("criticality", { length: 40 }).notNull(),
+  resultJson: longtext("resultJson").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, table => ({
+  sprintIndex: index("qa_test_plans_sprint_idx").on(table.sprintId),
+  projectIndex: index("qa_test_plans_project_idx").on(table.projectId),
+  userIndex: index("qa_test_plans_user_idx").on(table.createdById),
+  responsibleIndex: index("qa_test_plans_responsible_idx").on(table.responsibleUserId),
+}));
+export type QATestPlan = typeof qaTestPlans.$inferSelect;
+
 // ─── Execuções automatizadas de QA ──────────────────────────────────────────
+export const executionWorkers = mysqlTable("execution_workers", {
+  id: int("id").autoincrement().primaryKey(),
+  code: varchar("code", { length: 80 }).notNull(),
+  name: varchar("name", { length: 160 }).notNull(),
+  mode: mysqlEnum("mode", ["LOCAL", "REMOTE"]).notNull().default("LOCAL"),
+  status: mysqlEnum("status", ["ONLINE", "OFFLINE", "PAUSED"]).notNull().default("ONLINE"),
+  networkPool: mysqlEnum("networkPool", ["ANY", "PUBLIC", "COGEL", "SEFAZ", "OUTRA"]).notNull().default("ANY"),
+  maxConcurrency: int("maxConcurrency").notNull().default(2),
+  minFreeMemoryMb: int("minFreeMemoryMb").notNull().default(3072),
+  maxCpuPercent: int("maxCpuPercent").notNull().default(75),
+  endpointUrl: varchar("endpointUrl", { length: 1000 }),
+  apiTokenEncrypted: text("apiTokenEncrypted"),
+  currentPool: mysqlEnum("currentPool", ["PUBLIC", "COGEL", "SEFAZ", "OUTRA"]),
+  freeMemoryMb: int("freeMemoryMb"),
+  cpuPercent: int("cpuPercent"),
+  lastHeartbeatAt: timestamp("lastHeartbeatAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, table => ({
+  codeUnique: uniqueIndex("execution_workers_code_unique").on(table.code),
+  statusIndex: index("execution_workers_status_idx").on(table.status),
+  networkPoolIndex: index("execution_workers_network_pool_idx").on(table.networkPool),
+}));
+export type ExecutionWorker = typeof executionWorkers.$inferSelect;
 export const testExecutions = mysqlTable("test_executions", {
   id: int("id").autoincrement().primaryKey(),
   externalExecutionId: varchar("externalExecutionId", { length: 128 }).notNull(),
@@ -143,8 +243,28 @@ export const testExecutions = mysqlTable("test_executions", {
   projectName: varchar("projectName", { length: 255 }).notNull(),
   sprintName: varchar("sprintName", { length: 255 }),
   systemUrl: varchar("systemUrl", { length: 1000 }),
-  status: mysqlEnum("status", ["EM_ANDAMENTO", "PASSOU", "FALHOU", "BLOQUEADO", "ERRO_AUTOMACAO"]).notNull(),
+  status: mysqlEnum("status", ["EM_ANDAMENTO", "PASSOU", "FALHOU", "BLOQUEADO", "ERRO_AUTOMACAO", "CANCELADO"]).notNull(),
+  executionState: mysqlEnum("executionState", ["QUEUED", "RUNNING", "PAUSED", "FINISHED", "FAILED", "CANCELLED"]).notNull().default("QUEUED"),
+  controlState: mysqlEnum("controlState", ["RUN", "PAUSE", "CANCEL"]).notNull().default("RUN"),
+  controlRequestedAt: timestamp("controlRequestedAt"),
+  controlRequestedById: int("controlRequestedById"),
+  queuePool: mysqlEnum("queuePool", ["PUBLIC", "COGEL", "SEFAZ", "OUTRA"]).notNull().default("PUBLIC"),
+  assignedWorkerId: int("assignedWorkerId"),
+  dispatchPayloadEncrypted: longtext("dispatchPayloadEncrypted"),
+  dispatchAttempts: int("dispatchAttempts").notNull().default(0),
+  queuedAt: timestamp("queuedAt").defaultNow().notNull(),
+  dispatchedAt: timestamp("dispatchedAt"),
+  leaseExpiresAt: timestamp("leaseExpiresAt"),
   totalScenarios: int("totalScenarios").notNull().default(0),
+  completedScenarios: int("completedScenarios").notNull().default(0),
+  currentScenarioIndex: int("currentScenarioIndex"),
+  currentScenarioId: varchar("currentScenarioId", { length: 160 }),
+  currentScenarioTitle: varchar("currentScenarioTitle", { length: 500 }),
+  currentEnvironment: varchar("currentEnvironment", { length: 160 }),
+  currentStage: varchar("currentStage", { length: 80 }),
+  progressMessage: varchar("progressMessage", { length: 1000 }),
+  liveProgressJson: text("liveProgressJson"),
+  lastHeartbeatAt: timestamp("lastHeartbeatAt"),
   passedScenarios: int("passedScenarios").notNull().default(0),
   failedScenarios: int("failedScenarios").notNull().default(0),
   blockedScenarios: int("blockedScenarios").notNull().default(0),
@@ -160,7 +280,7 @@ export const testExecutions = mysqlTable("test_executions", {
   regressionBundleId: varchar("regressionBundleId", { length: 64 }),
   startedAt: timestamp("startedAt"),
   finishedAt: timestamp("finishedAt"),
-  rawPayload: text("rawPayload"),
+  rawPayload: longtext("rawPayload"),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 }, table => ({
@@ -169,6 +289,8 @@ export const testExecutions = mysqlTable("test_executions", {
   sprintIndex: index("test_executions_sprint_idx").on(table.sprintId),
   createdByIndex: index("test_executions_created_by_idx").on(table.createdById),
   finishedAtIndex: index("test_executions_finished_at_idx").on(table.finishedAt),
+  queueIndex: index("test_executions_queue_idx").on(table.executionState, table.queuePool, table.queuedAt),
+  workerIndex: index("test_executions_worker_idx").on(table.assignedWorkerId, table.executionState),
 }));
 
 export type TestExecution = typeof testExecutions.$inferSelect;

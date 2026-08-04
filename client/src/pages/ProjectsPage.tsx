@@ -1,6 +1,6 @@
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -63,12 +63,13 @@ function EnvironmentManager({ projectId }: { projectId: number }) {
     <div className="mt-4 rounded-lg border border-blue-100 bg-blue-50/50 p-3">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
-          <Globe2 className="h-4 w-4 text-blue-600" /> Ambientes de automação
+          <Globe2 className="h-4 w-4 text-blue-600" /> Ambientes, acessos e VPN
         </div>
         <Button size="sm" variant="outline" onClick={startNewEnvironment}>
           <Plus className="mr-1 h-3.5 w-3.5" /> Ambiente
         </Button>
       </div>
+      <p className="mt-1 text-xs text-slate-500">Cadastre portal, retaguarda, site ou API. Usuário, senha e VPN ficam vinculados ao projeto.</p>
       {environments.length > 0 && (
         <div className="mt-2 space-y-2">
           {environments.map(environment => (
@@ -197,16 +198,38 @@ export default function ProjectsPage() {
     id: number;
     name: string;
     description: string;
+    repositoryUrl: string;
+    repositoryBranch: string;
     sourceCodePath: string;
   } | null>(null);
 
   const clientMap = Object.fromEntries((clients ?? []).map(c => [c.id, c.name]));
 
+  useEffect(() => {
+    const requestedId = Number(new URLSearchParams(window.location.search).get("projectId"));
+    if (!Number.isInteger(requestedId) || requestedId <= 0 || !projects?.length) return;
+    const project = projects.find(item => item.id === requestedId);
+    if (!project) return;
+    setEditing({
+      id: project.id,
+      name: project.name,
+      description: project.description ?? "",
+      repositoryUrl: project.repositoryUrl ?? "",
+      repositoryBranch: project.repositoryBranch ?? "main",
+      sourceCodePath: project.sourceCodePath ?? "",
+    });
+    window.history.replaceState({}, "", "/projects");
+  }, [projects]);
+
   if (!isCoordinator) return <div className="p-8 text-center text-sm text-gray-500">Acesso restrito ao Coordenador.</div>;
 
   return (
     <AppLayout>
-      <main className="container py-8 max-w-3xl">
+      <main className="container py-8 max-w-5xl">
+        <div className="mb-6">
+          <h1 className="text-2xl font-bold text-slate-900">Cadastro de Projetos</h1>
+          <p className="mt-1 text-sm text-slate-500">Centralize os dados do projeto, ambientes de teste, acessos, VPN e repositório do código.</p>
+        </div>
         <Card className="mb-6">
           <CardHeader><CardTitle className="text-base">Novo Projeto</CardTitle></CardHeader>
           <CardContent className="space-y-3">
@@ -230,24 +253,27 @@ export default function ProjectsPage() {
                   <div className="space-y-2">
                     <Input value={editing.name} onChange={e => setEditing(ed => ed ? { ...ed, name: e.target.value } : null)} />
                     <Input value={editing.description} onChange={e => setEditing(ed => ed ? { ...ed, description: e.target.value } : null)} />
-                    <div className="rounded-lg border bg-slate-50 p-3 space-y-2">
-                      <div className="flex items-center gap-2 text-sm font-medium text-slate-700">
-                        <Code2 className="h-4 w-4" /> Código-fonte local
+                    <div className="rounded-lg border border-violet-100 bg-violet-50/50 p-4 space-y-3">
+                      <div>
+                        <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+                          <Code2 className="h-4 w-4 text-violet-600" /> Repositório e código-fonte
+                        </div>
+                        <p className="mt-1 text-xs text-slate-500">A URL identifica a origem do código. A pasta local clonada permite que o agente analise os arquivos sem depender da internet.</p>
                       </div>
-                      <Input
-                        value={editing.sourceCodePath}
-                        onChange={e => setEditing(ed => ed ? { ...ed, sourceCodePath: e.target.value } : null)}
-                        placeholder="C:\\Desenvolvimento\\MeuSistema"
-                      />
-                      <p className="text-xs text-slate-500">
-                        A análise é somente leitura e ignora .env, chaves, node_modules e builds.
-                      </p>
+                      <Input type="url" value={editing.repositoryUrl} onChange={e => setEditing(ed => ed ? { ...ed, repositoryUrl: e.target.value } : null)} placeholder="URL do repositório: https://github.com/empresa/sistema" />
+                      <div className="grid gap-2 sm:grid-cols-[180px_1fr]">
+                        <Input value={editing.repositoryBranch} onChange={e => setEditing(ed => ed ? { ...ed, repositoryBranch: e.target.value } : null)} placeholder="Branch: main" />
+                        <Input value={editing.sourceCodePath} onChange={e => setEditing(ed => ed ? { ...ed, sourceCodePath: e.target.value } : null)} placeholder="Pasta local clonada: C:\Desenvolvimento\MeuSistema" />
+                      </div>
+                      <p className="text-xs text-slate-500">A análise é somente leitura e ignora .env, chaves, node_modules e arquivos de build.</p>
                     </div>
                     <div className="flex gap-2">
                       <Button size="sm" onClick={() => updateMutation.mutate({
                         id: editing.id,
                         name: editing.name,
                         description: editing.description,
+                        repositoryUrl: editing.repositoryUrl.trim() || null,
+                        repositoryBranch: editing.repositoryBranch.trim() || null,
                         sourceCodePath: editing.sourceCodePath.trim() || null,
                       })} style={{ background: "oklch(0.50 0.20 264)" }}>Salvar</Button>
                       <Button
@@ -270,25 +296,31 @@ export default function ProjectsPage() {
                       <p className="font-semibold text-sm">{project.name}</p>
                       <p className="text-xs text-gray-400 mt-0.5">Cliente: {clientMap[project.clientId] ?? "—"}</p>
                       {project.description && <p className="text-xs text-gray-500 mt-0.5">{project.description}</p>}
-                      {project.sourceCodePath ? (
-                        <div className="mt-2 flex items-center gap-1.5 text-xs text-emerald-700">
-                          <Code2 className="h-3.5 w-3.5" />
-                          {project.sourceCodeIndexedAt
-                            ? `${project.sourceCodeFileCount ?? 0} arquivos indexados localmente`
-                            : "Pasta configurada; análise pendente"}
-                        </div>
-                      ) : (
-                        <p className="mt-2 text-xs text-slate-400">Código-fonte ainda não configurado.</p>
-                      )}
+                      <div className="mt-3 rounded-md border border-violet-100 bg-violet-50/40 p-3 text-xs">
+                        <p className="font-semibold text-slate-700">Repositório e código-fonte</p>
+                        {project.repositoryUrl ? (
+                          <a href={project.repositoryUrl} target="_blank" rel="noreferrer" className="mt-1 block break-all text-violet-700 hover:underline">
+                            {project.repositoryUrl}{project.repositoryBranch ? ` · branch ${project.repositoryBranch}` : ""}
+                          </a>
+                        ) : <p className="mt-1 text-slate-400">URL do repositório não configurada.</p>}
+                        {project.sourceCodePath ? (
+                          <div className="mt-2 flex items-center gap-1.5 text-emerald-700">
+                            <Code2 className="h-3.5 w-3.5" />
+                            {project.sourceCodeIndexedAt ? `${project.sourceCodeFileCount ?? 0} arquivos indexados localmente` : "Pasta local configurada; análise pendente"}
+                          </div>
+                        ) : <p className="mt-2 text-slate-400">Pasta local ainda não configurada.</p>}
+                      </div>
                       <EnvironmentManager projectId={project.id} />
                     </div>
                     <div className="flex gap-1">
-                      <Button size="icon" variant="ghost" className="w-7 h-7" onClick={() => setEditing({
+                      <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => setEditing({
                         id: project.id,
                         name: project.name,
                         description: project.description ?? "",
+                        repositoryUrl: project.repositoryUrl ?? "",
+                        repositoryBranch: project.repositoryBranch ?? "main",
                         sourceCodePath: project.sourceCodePath ?? "",
-                      })}><Pencil className="w-3.5 h-3.5" /></Button>
+                      })}><Pencil className="mr-1 h-3.5 w-3.5" /> Configurar projeto</Button>
                       <Button size="icon" variant="ghost" className="w-7 h-7 text-red-500 hover:text-red-700" onClick={() => deleteMutation.mutate({ id: project.id })}><Trash2 className="w-3.5 h-3.5" /></Button>
                     </div>
                   </div>

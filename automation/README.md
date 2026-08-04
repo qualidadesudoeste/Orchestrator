@@ -98,6 +98,12 @@ configuradas para não persistir dados de sucesso ou erro no histórico do n8n.
 Antes dos resultados serem enviados ao Orchestrator, os campos de login e senha
 são removidos.
 
+Durante a execução, o workflow notifica o início e o término de cada cenário em
+`POST /api/qa/test-executions/progress`. O Gerador de Plano consulta esse estado
+a cada dois segundos e mostra percentual, cenário atual, ambiente, etapa e
+resultado parcial. Essas notificações contêm apenas dados operacionais; usuário
+e senha nunca são enviados ao endpoint de progresso.
+
 ### OpenAI API
 
 O backend usa `gpt-5.6-terra` para gerar e analisar cenários. O agente de

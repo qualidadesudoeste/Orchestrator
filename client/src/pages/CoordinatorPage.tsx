@@ -1,37 +1,40 @@
+import { useState } from "react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
-import { useLocation } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Users, CheckCircle2, Clock, Eye, GraduationCap } from "lucide-react";
+import { CheckCircle2, Clock, Eye, FileText, GraduationCap } from "lucide-react";
 import { totalItems } from "@/data/qaData";
 import { totalTrailTopics } from "@/data/trailData";
-import { Button } from "@/components/ui/button";
 import AppLayout from "@/components/AppLayout";
 import { ChecklistViewModal } from "@/components/ChecklistViewModal";
-import { useState } from "react";
+import SprintTestPlansModal from "@/components/SprintTestPlansModal";
 
 export default function CoordinatorPage() {
   const { user } = useAuth();
-  const [, navigate] = useLocation();
   const isCoordinator = user?.role === "admin";
-
   const { data: allChecklists } = trpc.checklists.allHistory.useQuery(undefined, { enabled: isCoordinator });
+  const { data: allPlans } = trpc.qaPlanner.listPlans.useQuery({}, { enabled: isCoordinator });
   const { data: allUsers } = trpc.users.list.useQuery(undefined, { enabled: isCoordinator });
   const { data: sprints } = trpc.sprints.list.useQuery({ projectId: undefined }, { enabled: isCoordinator });
+  const { data: projects } = trpc.projects.list.useQuery({ clientId: undefined }, { enabled: isCoordinator });
   const { data: allTrailProgress } = trpc.trail.allProgress.useQuery(undefined, { enabled: isCoordinator });
 
   type ChecklistRow = NonNullable<typeof allChecklists>[number];
   const [viewChecklist, setViewChecklist] = useState<ChecklistRow | null>(null);
+  type PlanRow = NonNullable<typeof allPlans>[number];
+  const [viewPlan, setViewPlan] = useState<PlanRow | null>(null);
 
   if (!isCoordinator) return <div className="p-8 text-center text-sm text-gray-500">Acesso restrito ao Coordenador.</div>;
 
-  const sprintMap = Object.fromEntries((sprints ?? []).map(s => [s.id, s.name]));
-  const userMap = Object.fromEntries((allUsers ?? []).map(u => [u.id, u.name ?? u.email ?? `#${u.id}`]));
-  // Mapas de projeto e cliente para o modal
-  const sprintProjectMap = Object.fromEntries((sprints ?? []).map(s => [s.id, (s as any).projectName ?? ""]));
-  const sprintClientMap = Object.fromEntries((sprints ?? []).map(s => [s.id, (s as any).clientName ?? ""]));
-
-  const analystIds = Array.from(new Set((allChecklists ?? []).map(c => c.analystId)));
+  const sprintMap = Object.fromEntries((sprints ?? []).map(sprint => [sprint.id, sprint.name]));
+  const projectMap = Object.fromEntries((projects ?? []).map(project => [project.id, project.name]));
+  const userMap = Object.fromEntries((allUsers ?? []).map(option => [option.id, option.name ?? option.email ?? `#${option.id}`]));
+  const sprintProjectMap = Object.fromEntries((sprints ?? []).map(sprint => [sprint.id, (sprint as any).projectName ?? ""]));
+  const sprintClientMap = Object.fromEntries((sprints ?? []).map(sprint => [sprint.id, (sprint as any).clientName ?? ""]));
+  const responsibleIds = Array.from(new Set([
+    ...(allChecklists ?? []).map(checklist => checklist.responsibleUserId ?? checklist.analystId),
+    ...(allPlans ?? []).map(plan => plan.responsibleUserId ?? plan.createdById),
+  ]));
 
   return (
     <AppLayout>
@@ -40,7 +43,7 @@ export default function CoordinatorPage() {
           sprintName={sprintMap[viewChecklist.sprintId] ?? `Sprint #${viewChecklist.sprintId}`}
           projectName={sprintProjectMap[viewChecklist.sprintId] ?? "—"}
           clientName={sprintClientMap[viewChecklist.sprintId] ?? "—"}
-          analystName={userMap[viewChecklist.analystId] ?? `Analista #${viewChecklist.analystId}`}
+          analystName={userMap[viewChecklist.responsibleUserId ?? viewChecklist.analystId] ?? `Analista #${viewChecklist.responsibleUserId ?? viewChecklist.analystId}`}
           checkedItems={viewChecklist.checkedItems ?? "{}"}
           completedItems={viewChecklist.completedItems}
           status={viewChecklist.status}
@@ -48,124 +51,95 @@ export default function CoordinatorPage() {
           onClose={() => setViewChecklist(null)}
         />
       )}
+      {viewPlan && (
+        <SprintTestPlansModal
+          projectId={viewPlan.projectId}
+          sprintId={viewPlan.sprintId}
+          sprintName={sprintMap[viewPlan.sprintId] ?? ("Sprint #" + viewPlan.sprintId)}
+          projectName={projectMap[viewPlan.projectId] ?? ("Projeto #" + viewPlan.projectId)}
+          initialPlanId={viewPlan.id}
+          readOnly
+          onClose={() => setViewPlan(null)}
+        />
+      )}
+
       <main className="container py-8">
-        {/* Summary cards */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+        <div className="mb-8 grid grid-cols-2 gap-4 md:grid-cols-4">
           {[
-            { label: "Analistas Ativos", value: analystIds.length, color: "oklch(0.55 0.18 264)" },
-            { label: "Checklists Totais", value: allChecklists?.length ?? 0, color: "oklch(0.50 0.15 45)" },
-            { label: "Concluídos", value: allChecklists?.filter(c => c.status === "completed").length ?? 0, color: "oklch(0.50 0.18 145)" },
-            { label: "Em Andamento", value: allChecklists?.filter(c => c.status === "in_progress").length ?? 0, color: "oklch(0.55 0.20 25)" },
-          ].map((stat, i) => (
-            <Card key={i}>
+            { label: "Responsáveis ativos", value: responsibleIds.length, color: "oklch(0.55 0.18 264)" },
+            { label: "Checklists", value: allChecklists?.length ?? 0, color: "oklch(0.50 0.15 45)" },
+            { label: "Planos de teste", value: allPlans?.length ?? 0, color: "oklch(0.50 0.18 145)" },
+            { label: "Checklists em andamento", value: allChecklists?.filter(item => item.status === "in_progress").length ?? 0, color: "oklch(0.55 0.20 25)" },
+          ].map(stat => (
+            <Card key={stat.label}>
               <CardContent className="p-4">
-                <div className="text-2xl font-bold tabular-nums mb-1" style={{ color: stat.color }}>{stat.value}</div>
+                <div className="mb-1 text-2xl font-bold tabular-nums" style={{ color: stat.color }}>{stat.value}</div>
                 <div className="text-xs text-gray-500">{stat.label}</div>
               </CardContent>
             </Card>
           ))}
         </div>
 
-        {/* Per-analyst breakdown */}
-        <h2 className="font-bold text-base mb-4" style={{ color: "oklch(0.15 0.01 260)" }}>Atividade por Analista</h2>
-        {analystIds.length === 0 && <p className="text-sm text-gray-400 py-8 text-center">Nenhum checklist registrado ainda.</p>}
+        <h2 className="mb-1 text-base font-bold text-slate-900">Gestão de atividades por responsável</h2>
+        <p className="mb-4 text-xs text-slate-500">A vinculação abaixo é atualizada pelos campos Responsável dos checklists e planos de teste.</p>
+        {responsibleIds.length === 0 && <p className="py-8 text-center text-sm text-gray-400">Nenhuma atividade atribuída ainda.</p>}
         <div className="space-y-4">
-          {analystIds.map(analystId => {
-            const analystChecklists = (allChecklists ?? []).filter(c => c.analystId === analystId);
-            const completed = analystChecklists.filter(c => c.status === "completed").length;
+          {responsibleIds.map(responsibleId => {
+            const responsibleChecklists = (allChecklists ?? []).filter(item => (item.responsibleUserId ?? item.analystId) === responsibleId);
+            const responsiblePlans = (allPlans ?? []).filter(item => (item.responsibleUserId ?? item.createdById) === responsibleId);
+            const responsibleName = userMap[responsibleId] ?? `Analista #${responsibleId}`;
             return (
-              <Card key={analystId}>
+              <Card key={responsibleId}>
                 <CardHeader className="pb-3">
-                  <CardTitle className="text-sm flex items-center gap-2">
-                    <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white" style={{ background: "oklch(0.50 0.20 264)" }}>
-                      {(userMap[analystId] ?? "?").charAt(0).toUpperCase()}
-                    </div>
-                    {userMap[analystId] ?? `Analista #${analystId}`}
-                    <span className="ml-auto text-xs font-normal text-gray-400">{completed}/{analystChecklists.length} concluídos</span>
+                  <CardTitle className="flex items-center gap-2 text-sm">
+                    <div className="flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold text-white" style={{ background: "oklch(0.50 0.20 264)" }}>{responsibleName.charAt(0).toUpperCase()}</div>
+                    {responsibleName}
+                    <span className="ml-auto text-xs font-normal text-gray-400">{responsibleChecklists.length} checklist{responsibleChecklists.length === 1 ? "" : "s"} · {responsiblePlans.length} plano{responsiblePlans.length === 1 ? "" : "s"}</span>
                   </CardTitle>
                 </CardHeader>
-                <CardContent className="pt-0">
-                  <div className="space-y-2">
-                    {analystChecklists.map(cl => {
-                      const progress = totalItems > 0 ? Math.round((cl.completedItems / totalItems) * 100) : 0;
-                      const isCompleted = cl.status === "completed";
-                      return (
-                        <div key={cl.id} className="flex items-center gap-3 p-2 rounded" style={{ background: "oklch(0.97 0.005 80)" }}>
-                          {isCompleted ? <CheckCircle2 className="w-4 h-4 shrink-0" style={{ color: "oklch(0.50 0.18 145)" }} /> : <Clock className="w-4 h-4 shrink-0" style={{ color: "oklch(0.55 0.18 264)" }} />}
-                          <div className="flex-1 min-w-0">
-                            <p className="text-xs font-medium truncate">{sprintMap[cl.sprintId] ?? `Sprint #${cl.sprintId}`}</p>
-                            <p className="text-xs text-gray-400">{new Date(cl.startedAt).toLocaleDateString("pt-BR")}</p>
-                          </div>
-                          <div className="flex items-center gap-2 shrink-0">
-                            <div className="w-20 h-1.5 rounded-full overflow-hidden" style={{ background: "oklch(0.88 0.008 80)" }}>
-                              <div className="h-full rounded-full" style={{ width: `${progress}%`, background: isCompleted ? "oklch(0.50 0.18 145)" : "oklch(0.55 0.18 264)" }} />
-                            </div>
-                            <span className="text-xs font-bold tabular-nums w-8 text-right" style={{ color: isCompleted ? "oklch(0.50 0.18 145)" : "oklch(0.55 0.18 264)" }}>{progress}%</span>
-                          </div>
-                          <button
-                            onClick={() => setViewChecklist(cl)}
-                            className="p-1.5 rounded-lg transition-colors flex items-center gap-1 text-xs font-medium"
-                            style={{ color: "oklch(0.50 0.18 264)", background: "oklch(0.92 0.02 264)" }}
-                            title="Visualizar checklist"
-                          >
-                            <Eye className="w-3.5 h-3.5" />
-                            Ver
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
+                <CardContent className="space-y-2 pt-0">
+                  {responsibleChecklists.map(checklist => {
+                    const progress = totalItems > 0 ? Math.round((checklist.completedItems / totalItems) * 100) : 0;
+                    const completed = checklist.status === "completed";
+                    return (
+                      <div key={`checklist-${checklist.id}`} className="flex items-center gap-3 rounded border border-slate-100 bg-slate-50 p-2">
+                        {completed ? <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" /> : <Clock className="h-4 w-4 shrink-0 text-blue-600" />}
+                        <div className="min-w-0 flex-1"><p className="truncate text-xs font-medium">Checklist · {sprintMap[checklist.sprintId] ?? `Sprint #${checklist.sprintId}`}</p><p className="text-xs text-gray-400">Atualizado em {new Date(checklist.updatedAt).toLocaleDateString("pt-BR")}</p></div>
+                        <div className="flex shrink-0 items-center gap-2"><div className="h-1.5 w-20 overflow-hidden rounded-full bg-slate-200"><div className={`h-full rounded-full ${completed ? "bg-emerald-500" : "bg-blue-500"}`} style={{ width: `${progress}%` }} /></div><span className="w-8 text-right text-xs font-bold">{progress}%</span></div>
+                        <button onClick={() => setViewChecklist(checklist)} className="flex items-center gap-1 rounded-lg bg-blue-50 p-1.5 text-xs font-medium text-blue-700"><Eye className="h-3.5 w-3.5" /> Ver</button>
+                      </div>
+                    );
+                  })}
+                  {responsiblePlans.map(plan => (
+                    <div key={`plan-${plan.id}`} className="flex items-center gap-3 rounded border border-violet-100 bg-violet-50/50 p-2">
+                      <FileText className="h-4 w-4 shrink-0 text-violet-600" />
+                      <div className="min-w-0 flex-1"><p className="truncate text-xs font-medium">{plan.title}</p><p className="text-xs text-gray-400">{sprintMap[plan.sprintId] ?? `Sprint #${plan.sprintId}`} · atualizado em {new Date(plan.updatedAt).toLocaleDateString("pt-BR")}</p></div>
+                      <span className="rounded-full bg-violet-100 px-2 py-1 text-[10px] font-semibold text-violet-700">Plano de teste</span>
+                      <button onClick={() => setViewPlan(plan)} className="flex items-center gap-1 rounded-lg bg-violet-100 p-1.5 text-xs font-medium text-violet-700" title="Visualizar plano"><Eye className="h-3.5 w-3.5" /> Ver</button>
+                    </div>
+                  ))}
                 </CardContent>
               </Card>
             );
           })}
         </div>
 
-        {/* Progresso da Trilha do Conhecimento por analista */}
-        <h2 className="font-bold text-base mt-10 mb-4 flex items-center gap-2" style={{ color: "oklch(0.15 0.01 260)" }}>
-          <GraduationCap className="w-4 h-4" style={{ color: "oklch(0.50 0.20 264)" }} />
-          Trilha do Conhecimento — Progresso por Analista
-        </h2>
+        <h2 className="mb-4 mt-10 flex items-center gap-2 text-base font-bold text-slate-900"><GraduationCap className="h-4 w-4 text-blue-600" /> Trilha do Conhecimento — Progresso por Analista</h2>
         {(!allTrailProgress || allTrailProgress.length === 0) ? (
-          <p className="text-sm text-gray-400 py-8 text-center">Nenhum analista iniciou a trilha ainda.</p>
+          <p className="py-8 text-center text-sm text-gray-400">Nenhum analista iniciou a trilha ainda.</p>
         ) : (
           <div className="space-y-3">
-            {allTrailProgress.map(tp => {
+            {allTrailProgress.map(trail => {
               let completed = 0;
-              try {
-                const parsed = JSON.parse(tp.completedTopics);
-                if (Array.isArray(parsed)) completed = parsed.length;
-              } catch { /* ignore */ }
+              try { const parsed = JSON.parse(trail.completedTopics); if (Array.isArray(parsed)) completed = parsed.length; } catch { /* ignore */ }
               const percent = totalTrailTopics > 0 ? Math.round((completed / totalTrailTopics) * 100) : 0;
-              const analystName = userMap[tp.userId] ?? `Analista #${tp.userId}`;
+              const analystName = userMap[trail.userId] ?? `Analista #${trail.userId}`;
               return (
-                <Card key={tp.id}>
-                  <CardContent className="p-4 flex items-center gap-4">
-                    <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white flex-shrink-0"
-                      style={{ background: "oklch(0.50 0.20 264)" }}>
-                      {analystName.charAt(0).toUpperCase()}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-semibold truncate" style={{ color: "oklch(0.15 0.01 260)" }}>{analystName}</p>
-                      <p className="text-xs text-gray-400">
-                        Atualizado em {new Date(tp.updatedAt).toLocaleDateString("pt-BR")}
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-3 flex-shrink-0">
-                      <div className="w-32 h-2 rounded-full overflow-hidden" style={{ background: "oklch(0.88 0.008 80)" }}>
-                        <div className="h-full rounded-full transition-all"
-                          style={{
-                            width: `${percent}%`,
-                            background: percent === 100 ? "oklch(0.50 0.18 145)" : "linear-gradient(90deg, oklch(0.50 0.20 264), oklch(0.45 0.20 300))",
-                          }}
-                        />
-                      </div>
-                      <span className="text-sm font-bold tabular-nums w-10 text-right"
-                        style={{ color: percent === 100 ? "oklch(0.50 0.18 145)" : "oklch(0.50 0.20 264)" }}>
-                        {percent}%
-                      </span>
-                      <span className="text-xs text-gray-400 w-16 text-right">{completed}/{totalTrailTopics} tópicos</span>
-                    </div>
+                <Card key={trail.id}>
+                  <CardContent className="flex items-center gap-4 p-4">
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-600 text-xs font-bold text-white">{analystName.charAt(0).toUpperCase()}</div>
+                    <div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold text-slate-900">{analystName}</p><p className="text-xs text-gray-400">Atualizado em {new Date(trail.updatedAt).toLocaleDateString("pt-BR")}</p></div>
+                    <div className="flex shrink-0 items-center gap-3"><div className="h-2 w-32 overflow-hidden rounded-full bg-slate-200"><div className="h-full rounded-full bg-blue-600" style={{ width: `${percent}%` }} /></div><span className="w-10 text-right text-sm font-bold text-blue-700">{percent}%</span><span className="w-16 text-right text-xs text-gray-400">{completed}/{totalTrailTopics} tópicos</span></div>
                   </CardContent>
                 </Card>
               );
@@ -173,6 +147,6 @@ export default function CoordinatorPage() {
           </div>
         )}
       </main>
-  </AppLayout>
+    </AppLayout>
   );
 }

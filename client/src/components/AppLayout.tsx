@@ -3,8 +3,8 @@ import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import {
   CheckSquare, Folder, Users, History,
-  Shield, LogOut, GraduationCap, Wand2,
-  ChevronDown, ChevronRight, LayoutGrid, LayoutDashboard, User
+  Shield, LogOut, GraduationCap, Wand2, Settings,
+  ChevronDown, ChevronRight, LayoutGrid, LayoutDashboard, User, X, GripVertical, Activity
 } from "lucide-react";
 
 // Estrutura de módulos recolhíveis
@@ -16,8 +16,9 @@ const MODULES = [
     items: [
       { label: "Painel Individual", icon: User, path: "/painel" },
       { label: "Cadastro de Projetos", icon: Folder, path: "/workspace" },
-      { label: "Histórico de Execuções", icon: History, path: "/history" },
       { label: "Gerador de Plano de Teste", icon: Wand2, path: "/qa-planner" },
+      { label: "Fila de Execuções", icon: Activity, path: "/workspace/execution-queue" },
+      { label: "Histórico de Execuções", icon: History, path: "/history" },
     ],
   },
   {
@@ -37,13 +38,107 @@ const ADMIN_MODULE = {
   items: [
     { label: "Gestão de Atividades", icon: LayoutGrid, path: "/coordinator" },
     { label: "Usuários", icon: Users, path: "/users" },
+    { label: "Parâmetros", icon: Settings, path: "/parameters" },
   ],
 };
+
+type NavigationTab = { path: string; label: string };
+const TAB_STORAGE_KEY = "orchestrator-navigation-tabs";
+const ROUTE_LABELS: NavigationTab[] = [
+  { path: "/dashboard", label: "Dashboard" },
+  ...MODULES.flatMap(module => module.items.map(item => ({ path: item.path, label: item.label }))),
+  ...ADMIN_MODULE.items.map(item => ({ path: item.path, label: item.label })),
+  { path: "/projects", label: "Configurar Projeto" },
+];
+
+function normalizedPath(path: string): string {
+  const pathname = path.split("?")[0] || "/dashboard";
+  return pathname === "/" ? "/dashboard" : pathname;
+}
+
+function tabForPath(path: string): NavigationTab | null {
+  const normalized = normalizedPath(path);
+  return ROUTE_LABELS.find(item => normalized === item.path) ?? null;
+}
+
+function tabStorageKey(userId?: number): string | null {
+  return userId ? `${TAB_STORAGE_KEY}:${userId}` : null;
+}
+
+function storedTabs(currentPath: string, userId?: number): NavigationTab[] {
+  const storageKey = tabStorageKey(userId);
+  let tabs: NavigationTab[] = [];
+  if (storageKey) {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(storageKey) ?? "[]");
+      if (Array.isArray(parsed)) {
+        tabs = parsed.filter(item => item && typeof item.path === "string" && typeof item.label === "string");
+      }
+    } catch {
+      tabs = [];
+    }
+  }
+  const current = tabForPath(currentPath);
+  if (current && !tabs.some(tab => tab.path === current.path)) tabs.push(current);
+  const resolved = tabs.length ? tabs : [{ path: "/dashboard", label: "Dashboard" }];
+  if (storageKey) localStorage.setItem(storageKey, JSON.stringify(resolved));
+  return resolved;
+}
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const { user, isAuthenticated, loading, logout } = useAuth();
   const [location, navigate] = useLocation();
   const isAdmin = user?.role === "admin";
+  const [tabs, setTabs] = useState<NavigationTab[]>(() => storedTabs(location, user?.id));
+  const [draggedTabPath, setDraggedTabPath] = useState<string | null>(null);
+
+  const persistTabs = (nextTabs: NavigationTab[]) => {
+    setTabs(nextTabs);
+    const storageKey = tabStorageKey(user?.id);
+    if (storageKey) localStorage.setItem(storageKey, JSON.stringify(nextTabs));
+  };
+
+  useEffect(() => {
+    if (!user?.id) return;
+    setTabs(storedTabs(location, user.id));
+  }, [user?.id]);
+
+  const openRoute = (path: string) => {
+    const tab = tabForPath(path);
+    if (tab) {
+      const nextTabs = tabs.some(item => item.path === tab.path) ? tabs : [...tabs, tab];
+      persistTabs(nextTabs);
+    }
+    navigate(path);
+  };
+
+  const closeTab = (path: string) => {
+    if (tabs.length <= 1) return;
+    const index = tabs.findIndex(tab => tab.path === path);
+    const nextTabs = tabs.filter(tab => tab.path !== path);
+    persistTabs(nextTabs);
+    if (normalizedPath(location) === path) {
+      const fallback = nextTabs[Math.min(index, nextTabs.length - 1)] ?? nextTabs[0];
+      navigate(fallback.path);
+    }
+  };
+
+  const moveTab = (targetPath: string) => {
+    if (!draggedTabPath || draggedTabPath === targetPath) return;
+    const fromIndex = tabs.findIndex(tab => tab.path === draggedTabPath);
+    const targetIndex = tabs.findIndex(tab => tab.path === targetPath);
+    if (fromIndex < 0 || targetIndex < 0) return;
+    const nextTabs = [...tabs];
+    const [moved] = nextTabs.splice(fromIndex, 1);
+    nextTabs.splice(targetIndex, 0, moved);
+    persistTabs(nextTabs);
+  };
+
+  useEffect(() => {
+    const current = tabForPath(location);
+    if (!current || tabs.some(tab => tab.path === current.path)) return;
+    persistTabs([...tabs, current]);
+  }, [location]);
 
   // Determinar módulo ativo com base na rota atual
   const getActiveModule = () => {
@@ -142,7 +237,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               return (
                 <button
                   key={item.path}
-                  onClick={() => navigate(item.path)}
+                  onClick={() => openRoute(item.path)}
                   className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg mb-0.5 text-left transition-all"
                   style={{
                     background: active ? "oklch(0.50 0.20 264)" : "transparent",
@@ -178,7 +273,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       <aside className="fixed left-0 top-0 h-screen w-64 flex flex-col z-20" style={{ background: "oklch(0.13 0.015 260)" }}>
         {/* Logo */}
         <div className="px-5 pt-6 pb-4 border-b" style={{ borderColor: "oklch(0.22 0.015 260)" }}>
-          <div className="flex items-center gap-2.5 cursor-pointer" onClick={() => navigate("/")}>
+          <div className="flex items-center gap-2.5 cursor-pointer" onClick={() => openRoute("/dashboard")}>
             <div className="w-8 h-8 rounded-xl flex items-center justify-center" style={{ background: "oklch(0.50 0.20 264)" }}>
               <CheckSquare className="w-4 h-4 text-white" />
             </div>
@@ -193,7 +288,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         <nav className="flex-1 overflow-y-auto py-4 px-2">
           {/* Dashboard — fora dos módulos, como item fixo */}
           <button
-            onClick={() => navigate("/dashboard")}
+            onClick={() => openRoute("/dashboard")}
             className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg mb-3 text-left transition-all"
             style={{
               background: location === "/dashboard" || location === "/" ? "oklch(0.50 0.20 264)" : "transparent",
@@ -254,8 +349,48 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       </aside>
 
       {/* Conteúdo principal */}
-      <div className="flex-1 ml-64 flex flex-col min-h-screen">
-        {children}
+      <div className="flex-1 ml-64 flex flex-col min-h-screen min-w-0">
+        <div className="sticky top-0 z-10 flex h-11 shrink-0 items-end gap-1 overflow-x-auto border-b border-slate-200 bg-white px-3 pt-2 shadow-sm">
+          {tabs.map(tab => {
+            const active = normalizedPath(location) === tab.path;
+            return (
+              <div
+                key={tab.path}
+                draggable
+                onDragStart={event => {
+                  setDraggedTabPath(tab.path);
+                  event.dataTransfer.effectAllowed = "move";
+                  event.dataTransfer.setData("text/plain", tab.path);
+                }}
+                onDragOver={event => {
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = "move";
+                }}
+                onDrop={event => {
+                  event.preventDefault();
+                  moveTab(tab.path);
+                  setDraggedTabPath(null);
+                }}
+                onDragEnd={() => setDraggedTabPath(null)}
+                className={`group flex h-9 shrink-0 items-center rounded-t-lg border border-b-0 px-2 text-xs transition-all ${draggedTabPath === tab.path ? "opacity-50" : "opacity-100"} ${active ? "border-slate-200 bg-slate-50 font-semibold text-blue-700" : "border-transparent bg-slate-100/70 text-slate-500 hover:bg-slate-100"}`}
+              >
+                <GripVertical className="mr-1 h-3.5 w-3.5 cursor-grab text-slate-400 active:cursor-grabbing" aria-hidden="true" />
+                <button className="max-w-52 truncate" onClick={() => openRoute(tab.path)} title={tab.label}>{tab.label}</button>
+                {tabs.length > 1 && (
+                  <button
+                    className="ml-2 rounded p-0.5 text-slate-400 hover:bg-slate-200 hover:text-slate-700"
+                    onClick={() => closeTab(tab.path)}
+                    aria-label={`Fechar aba ${tab.label}`}
+                    title="Fechar aba"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        <div className="min-w-0 flex-1">{children}</div>
       </div>
     </div>
   );

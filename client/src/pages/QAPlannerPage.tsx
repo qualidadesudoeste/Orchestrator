@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useEffect, useState, useRef } from "react";
 import { trpc } from "@/lib/trpc";
 import AppLayout from "@/components/AppLayout";
 import { Button } from "@/components/ui/button";
@@ -7,13 +7,14 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import {
   Wand2, FileText, Plus, Trash2, Upload, Download,
   ChevronDown, ChevronUp, Loader2, ClipboardList, History, X,
   FileJson, FileUp, ShieldCheck, AlertTriangle, AlertCircle, Info, CheckCircle2,
-  Play, ExternalLink, Code2, Globe2
+  Play, ExternalLink, Code2, Globe2, Save
 } from "lucide-react";
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
@@ -168,6 +169,62 @@ function montarHUConsolidada(cards: SigCard[]): string {
 }
 
 const STORAGE_KEY = "qa-planner-evidence-draft";
+const GENERATOR_STORAGE_KEY = "orchestrator-qa-planner-generator-state-v2";
+const PAGE_STORAGE_KEY = "orchestrator-qa-planner-page-state";
+
+type GeneratorUiState = {
+  userStory: string;
+  showUserStoryEditor: boolean;
+  systemType: string;
+  criticality: "low" | "medium" | "high" | "critical";
+  result: AIResult | null;
+  expandedCards: number[];
+  selectedProjectId: string;
+  selectedSprintId: string;
+  coverageResult: CoverageAnalysis | null;
+  showCoveragePanel: boolean;
+  showAutomationPanel: boolean;
+  selectedEnvironmentIds: string[];
+  authorizedEnvironment: boolean;
+  startedExecution: { executionId: string; totalScenarios: number } | null;
+  savedPlanId: number | null;
+};
+
+const EMPTY_GENERATOR_UI_STATE: GeneratorUiState = {
+  userStory: "",
+  showUserStoryEditor: false,
+  systemType: "web",
+  criticality: "medium",
+  result: null,
+  expandedCards: [0],
+  selectedProjectId: "",
+  selectedSprintId: "",
+  coverageResult: null,
+  showCoveragePanel: false,
+  showAutomationPanel: false,
+  selectedEnvironmentIds: [],
+  authorizedEnvironment: false,
+  startedExecution: null,
+  savedPlanId: null,
+};
+
+function loadGeneratorUiState(): GeneratorUiState {
+  try {
+    const saved = sessionStorage.getItem(GENERATOR_STORAGE_KEY);
+    const parsed = saved ? JSON.parse(saved) : {};
+    const queryParams = new URLSearchParams(window.location.search);
+    return {
+      ...EMPTY_GENERATOR_UI_STATE,
+      ...parsed,
+      selectedProjectId: queryParams.get("projectId") ?? parsed.selectedProjectId ?? "",
+      selectedSprintId: queryParams.get("sprintId") ?? parsed.selectedSprintId ?? "",
+      expandedCards: Array.isArray(parsed.expandedCards) ? parsed.expandedCards : [0],
+      selectedEnvironmentIds: Array.isArray(parsed.selectedEnvironmentIds) ? parsed.selectedEnvironmentIds : [],
+    };
+  } catch {
+    return EMPTY_GENERATOR_UI_STATE;
+  }
+}
 function loadDraft(): EvidenceProject {
   try {
     const s = localStorage.getItem(STORAGE_KEY);
@@ -178,13 +235,15 @@ function loadDraft(): EvidenceProject {
 
 // ─── Sub-componente: Gerador de Casos ─────────────────────────────────────────
 function CaseGenerator({ onExport }: { onExport: (cases: TestCase[], project: { name: string; sprint: string; clientName: string }) => void }) {
-  const [userStory, setUserStory] = useState("");
-  const [systemType, setSystemType] = useState("web");
-  const [criticality, setCriticality] = useState<"low" | "medium" | "high" | "critical">("medium");
-  const [result, setResult] = useState<AIResult | null>(null);
-  const [expandedCards, setExpandedCards] = useState<Set<number>>(new Set([0]));
-  const [selectedProjectId, setSelectedProjectId] = useState<string>("");
-  const [selectedSprintId, setSelectedSprintId] = useState<string>("");
+  const [initialUiState] = useState(loadGeneratorUiState);
+  const [userStory, setUserStory] = useState(initialUiState.userStory);
+  const [showUserStoryEditor, setShowUserStoryEditor] = useState(initialUiState.showUserStoryEditor);
+  const [systemType, setSystemType] = useState(initialUiState.systemType);
+  const [criticality, setCriticality] = useState<"low" | "medium" | "high" | "critical">(initialUiState.criticality);
+  const [result, setResult] = useState<AIResult | null>(initialUiState.result);
+  const [expandedCards, setExpandedCards] = useState<Set<number>>(() => new Set(initialUiState.expandedCards));
+  const [selectedProjectId, setSelectedProjectId] = useState<string>(initialUiState.selectedProjectId);
+  const [selectedSprintId, setSelectedSprintId] = useState<string>(initialUiState.selectedSprintId);
   const [importWorking, setImportWorking] = useState(false);
   const jsonRef = useRef<HTMLInputElement>(null);
   const docRef = useRef<HTMLInputElement>(null);
@@ -214,15 +273,50 @@ function CaseGenerator({ onExport }: { onExport: (cases: TestCase[], project: { 
     { enabled: Boolean(selectedProjectId) },
   );
 
-  const [coverageResult, setCoverageResult] = useState<CoverageAnalysis | null>(null);
-  const [showCoveragePanel, setShowCoveragePanel] = useState(false);
-  const [showAutomationPanel, setShowAutomationPanel] = useState(false);
-  const [selectedEnvironmentIds, setSelectedEnvironmentIds] = useState<string[]>([]);
-  const [authorizedEnvironment, setAuthorizedEnvironment] = useState(false);
+  const [coverageResult, setCoverageResult] = useState<CoverageAnalysis | null>(initialUiState.coverageResult);
+  const [showCoveragePanel, setShowCoveragePanel] = useState(initialUiState.showCoveragePanel);
+  const [showAutomationPanel, setShowAutomationPanel] = useState(initialUiState.showAutomationPanel);
+  const [selectedEnvironmentIds, setSelectedEnvironmentIds] = useState<string[]>(initialUiState.selectedEnvironmentIds);
+  const [authorizedEnvironment, setAuthorizedEnvironment] = useState(initialUiState.authorizedEnvironment);
   const [startedExecution, setStartedExecution] = useState<{
     executionId: string;
     totalScenarios: number;
-  } | null>(null);
+  } | null>(initialUiState.startedExecution);
+  const [savedPlanId, setSavedPlanId] = useState<number | null>(initialUiState.savedPlanId);
+
+  useEffect(() => {
+    const state: GeneratorUiState = {
+      userStory,
+      showUserStoryEditor,
+      systemType,
+      criticality,
+      result,
+      expandedCards: Array.from(expandedCards),
+      selectedProjectId,
+      selectedSprintId,
+      coverageResult,
+      showCoveragePanel,
+      showAutomationPanel,
+      selectedEnvironmentIds,
+      authorizedEnvironment,
+      startedExecution,
+      savedPlanId,
+    };
+    sessionStorage.setItem(GENERATOR_STORAGE_KEY, JSON.stringify(state));
+  }, [userStory, showUserStoryEditor, systemType, criticality, result, expandedCards, selectedProjectId, selectedSprintId, coverageResult, showCoveragePanel, showAutomationPanel, selectedEnvironmentIds, authorizedEnvironment, startedExecution, savedPlanId]);
+  const executionProgressQuery = trpc.testExecutions.progress.useQuery(
+    { externalExecutionId: startedExecution?.executionId ?? "" },
+    {
+      enabled: Boolean(startedExecution?.executionId),
+      refetchInterval: 2_000,
+      refetchOnWindowFocus: true,
+    },
+  );
+  const executionProgress = executionProgressQuery.data;
+  const savePlanMutation = trpc.qaPlanner.savePlan.useMutation({
+    onSuccess: data => { setSavedPlanId(data.id); toast.success("Plano salvo na sprint."); },
+    onError: error => toast.error("Os casos foram gerados, mas o plano não pôde ser salvo: " + error.message),
+  });
 
   const generateMutation = trpc.qaPlanner.generateCases.useMutation({
     onSuccess: (data) => {
@@ -233,9 +327,20 @@ function CaseGenerator({ onExport }: { onExport: (cases: TestCase[], project: { 
         toast.error("A IA retornou uma resposta sem casos de teste. Gere novamente.");
         return;
       }
-      setResult({ ...data, cards } as AIResult);
-      setCoverageResult(null); // reset análise anterior ao gerar novos casos
-      toast.success("Casos de teste gerados com sucesso!");
+      const normalizedResult = { ...data, cards } as AIResult;
+      setResult(normalizedResult);
+      setSavedPlanId(null);
+      setCoverageResult(null);
+      if (selectedProjectId && selectedSprintId) {
+        savePlanMutation.mutate({
+          projectId: Number(selectedProjectId),
+          sprintId: Number(selectedSprintId),
+          userStory,
+          systemType,
+          criticality,
+          result: normalizedResult,
+        });
+      }
     },
     onError: (err) => toast.error("Erro ao gerar casos: " + err.message),
   });
@@ -255,7 +360,7 @@ function CaseGenerator({ onExport }: { onExport: (cases: TestCase[], project: { 
         executionId: data.executionId,
         totalScenarios: data.totalScenarios,
       });
-      toast.success("Testes automatizados iniciados!");
+      toast.success("Execução adicionada à fila. Você já pode preparar outro plano.");
     },
     onError: (err) => toast.error("Erro ao iniciar testes: " + err.message),
   });
@@ -287,6 +392,20 @@ function CaseGenerator({ onExport }: { onExport: (cases: TestCase[], project: { 
       environmentIds: selectedEnvironmentIds.map(Number),
       cases: result.cards.flatMap(card => card.casos),
     });
+  };
+
+  const handleNewPlan = () => {
+    setUserStory("");
+    setShowUserStoryEditor(false);
+    setResult(null);
+    setCoverageResult(null);
+    setShowCoveragePanel(false);
+    setShowAutomationPanel(false);
+    setAuthorizedEnvironment(false);
+    setStartedExecution(null);
+    setSavedPlanId(null);
+    setExpandedCards(new Set([0]));
+    toast.success("Novo plano preparado. A execução anterior continua normalmente na fila.");
   };
 
   const toggleCard = (idx: number) => {
@@ -321,6 +440,21 @@ function CaseGenerator({ onExport }: { onExport: (cases: TestCase[], project: { 
     });
   };
 
+  const handleSavePlan = () => {
+    if (!result) return;
+    if (!selectedProjectId || !selectedSprintId) {
+      toast.error("Selecione o projeto e a sprint antes de salvar.");
+      return;
+    }
+    savePlanMutation.mutate({
+      projectId: Number(selectedProjectId),
+      sprintId: Number(selectedSprintId),
+      userStory,
+      systemType,
+      criticality,
+      result,
+    });
+  };
   const handleExport = () => {
     if (!result) return;
     const allCases = result.cards.flatMap(c => c.casos);
@@ -471,9 +605,11 @@ function CaseGenerator({ onExport }: { onExport: (cases: TestCase[], project: { 
             <CardContent className="pt-4 flex flex-col gap-3">
               {/* Cabeçalho da HU com botões de importação */}
               <div className="flex items-center justify-between">
-                <Label className="text-xs font-medium" style={{ color: "#374151" }}>
+                <button type="button" onClick={() => setShowUserStoryEditor(open => !open)} className="flex items-center gap-1.5 text-xs font-medium text-slate-700">
+                  {showUserStoryEditor ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
                   História de Usuário <span style={{ color: "#ef4444" }}>*</span>
-                </Label>
+                  {!showUserStoryEditor && userStory.trim() && <span className="ml-1 font-normal text-slate-400">({userStory.length} caracteres)</span>}
+                </button>
                 <div className="flex gap-1.5">
                   <input ref={jsonRef} type="file" accept="application/json" className="hidden" onChange={handleImportJSON} />
                   <input ref={docRef} type="file" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" multiple className="hidden" onChange={handleImportDoc} />
@@ -501,6 +637,7 @@ function CaseGenerator({ onExport }: { onExport: (cases: TestCase[], project: { 
                   </Button>
                 </div>
               </div>
+              {showUserStoryEditor && (
               <Textarea
                 value={userStory}
                 onChange={e => setUserStory(e.target.value)}
@@ -508,6 +645,7 @@ function CaseGenerator({ onExport }: { onExport: (cases: TestCase[], project: { 
                 className="resize-none text-sm"
                 style={{ minHeight: "280px" }}
               />
+              )}
               {/* Linha de configurações: Tipo de Sistema + Criticidade */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -541,6 +679,11 @@ function CaseGenerator({ onExport }: { onExport: (cases: TestCase[], project: { 
               {/* Ações */}
               <div className="flex gap-2 flex-wrap">
                 {result && (
+                  <Button onClick={handleSavePlan} disabled={savePlanMutation.isPending || Boolean(savedPlanId)} variant="outline">
+                    {savePlanMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+                    {savedPlanId ? "Plano salvo" : "Salvar plano"}
+                  </Button>
+                )}                {result && (
                   <Button
                     onClick={handleAnalyzeCoverage}
                     disabled={analyzeMutation.isPending}
@@ -567,6 +710,17 @@ function CaseGenerator({ onExport }: { onExport: (cases: TestCase[], project: { 
                   <Button onClick={handleExport} variant="outline">
                     <FileText className="w-4 h-4 mr-2" />
                     Exportar para Evidências
+                  </Button>
+                )}
+                {result && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={handleNewPlan}
+                    disabled={generateMutation.isPending || startAutomationMutation.isPending}
+                  >
+                    <Plus className="w-4 h-4 mr-2" />
+                    Novo plano
                   </Button>
                 )}
               </div>
@@ -619,7 +773,7 @@ function CaseGenerator({ onExport }: { onExport: (cases: TestCase[], project: { 
                     })}
                   </div>
                   {testEnvironments.length === 0 && (
-                    <Button type="button" variant="link" className="mt-1 h-auto p-0 text-xs" onClick={() => window.location.assign("/projects")}>
+                    <Button type="button" variant="link" className="mt-1 h-auto p-0 text-xs" onClick={() => window.location.assign("/workspace")}>
                       <Globe2 className="mr-1 h-3.5 w-3.5" /> Cadastrar ambientes deste projeto
                     </Button>
                   )}
@@ -641,17 +795,65 @@ function CaseGenerator({ onExport }: { onExport: (cases: TestCase[], project: { 
                 </label>
 
                 {startedExecution && (
-                  <div className="rounded-lg border border-green-300 bg-white p-3 flex items-center justify-between gap-3">
-                    <div>
-                      <p className="text-sm font-semibold text-green-700">Execução iniciada</p>
-                      <p className="text-xs text-slate-600">
-                        {startedExecution.totalScenarios} cenários · {startedExecution.executionId}
-                      </p>
+                  <div className="rounded-lg border border-green-300 bg-white p-4 space-y-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold text-green-700">
+                          {executionProgress?.executionState === "FINISHED"
+                            ? "Execução concluída"
+                            : executionProgress?.executionState === "FAILED"
+                              ? "Falha na execução"
+                              : executionProgress?.executionState === "CANCELLED"
+                                ? "Execução encerrada"
+                                : executionProgress?.executionState === "PAUSED"
+                                  ? "Execução pausada"
+                                  : executionProgress?.executionState === "RUNNING"
+                                    ? "Automação em execução"
+                                    : "Execução na fila"}
+                        </p>
+                        <p className="text-xs text-slate-600">
+                          {executionProgress?.completedScenarios ?? 0} de {executionProgress?.totalScenarios ?? startedExecution.totalScenarios} cenários · {startedExecution.executionId}
+                        </p>
+                      </div>
+                      <Button type="button" variant="outline" onClick={() => window.location.assign("/dashboard")}>
+                        <ExternalLink className="w-4 h-4 mr-2" /> Dashboard
+                      </Button>
                     </div>
-                    <Button type="button" variant="outline" onClick={() => window.location.assign("/dashboard")}>
-                      <ExternalLink className="w-4 h-4 mr-2" />
-                      Acompanhar
-                    </Button>
+                    <Progress value={executionProgress?.progressPercent ?? 0} className="h-2" />
+                    <div className="grid gap-2 text-xs sm:grid-cols-2">
+                      <div className="rounded bg-slate-50 p-2">
+                        <span className="text-slate-500">Etapa atual</span>
+                        <p className="font-medium text-slate-800">{executionProgress?.currentStage?.replaceAll("_", " ") ?? "PREPARANDO"}</p>
+                      </div>
+                      <div className="rounded bg-slate-50 p-2">
+                        <span className="text-slate-500">Ambiente</span>
+                        <p className="font-medium text-slate-800">{executionProgress?.currentEnvironment || "Aguardando identificação"}</p>
+                      </div>
+                    </div>
+                    <p className="text-xs text-slate-600">
+                      {executionProgress?.progressMessage ?? "O agente está preparando a execução."}
+                    </p>
+                    {executionProgress?.scenarios && executionProgress.scenarios.length > 0 && (
+                      <div className="max-h-52 space-y-1 overflow-y-auto border-t pt-2">
+                        {executionProgress.scenarios.map(scenario => (
+                          <div key={scenario.scenarioId} className="flex items-center justify-between gap-2 rounded px-2 py-1.5 text-xs hover:bg-slate-50">
+                            <span className="min-w-0 truncate">{scenario.scenarioIndex}. {scenario.scenarioTitle}</span>
+                            <Badge variant="outline" className={
+                              scenario.status === "PASSOU" ? "border-green-300 text-green-700" :
+                                scenario.status === "FALHOU" ? "border-red-300 text-red-700" :
+                                  scenario.status === "BLOQUEADO" ? "border-amber-300 text-amber-700" :
+                                    scenario.status === "ERRO_AUTOMACAO" ? "border-slate-400 text-slate-700" :
+                                      "border-blue-300 text-blue-700"
+                            }>
+                              {scenario.status === "EM_ANDAMENTO" ? "Executando" : scenario.status}
+                            </Badge>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {executionProgressQuery.isError && (
+                      <p className="text-xs text-red-600">Não foi possível atualizar o progresso agora. Uma nova tentativa será feita automaticamente.</p>
+                    )}
                   </div>
                 )}
 
@@ -667,6 +869,11 @@ function CaseGenerator({ onExport }: { onExport: (cases: TestCase[], project: { 
                     <><Play className="w-4 h-4 mr-2" />Executar {totalCases} cenários agora</>
                   )}
                 </Button>
+                {startedExecution && executionProgress?.executionState !== "FINISHED" && executionProgress?.executionState !== "FAILED" && (
+                  <p className="text-xs text-slate-600">
+                    Esta execução continuará em segundo plano. Use <strong>Novo plano</strong> para gerar e iniciar outra automação; se o worker estiver ocupado, ela ficará na fila.
+                  </p>
+                )}
               </CardContent>
             </Card>
           )}
@@ -1158,9 +1365,19 @@ function EvidenceEditor({ initialProject }: { initialProject?: Partial<EvidenceP
 
 // ─── Página principal ─────────────────────────────────────────────────────────
 export default function QAPlannerPage() {
-  const [activeTab, setActiveTab] = useState("generator");
+  const [activeTab, setActiveTab] = useState(() => {
+    try {
+      return sessionStorage.getItem(PAGE_STORAGE_KEY) ?? "generator";
+    } catch {
+      return "generator";
+    }
+  });
   const [exportedCases, setExportedCases] = useState<TestCase[]>([]);
   const [exportedProject, setExportedProject] = useState<{ name: string; sprint: string; clientName: string } | null>(null);
+
+  useEffect(() => {
+    sessionStorage.setItem(PAGE_STORAGE_KEY, activeTab);
+  }, [activeTab]);
 
   const handleExport = (cases: TestCase[], project: { name: string; sprint: string; clientName: string }) => {
     setExportedCases(cases);

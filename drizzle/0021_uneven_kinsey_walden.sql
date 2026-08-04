@@ -1,0 +1,1 @@
+ALTER TABLE `qa_test_plans` MODIFY COLUMN `userStory` longtext NOT NULL;

@@ -108,6 +108,7 @@ também constrói a imagem Docker.
 - Conexão n8n → Playwright MCP com workflow de diagnóstico: concluída.
 - Loop sequencial por cenário Gherkin, consolidação e separação de falhas: concluídos.
 - Disparo pelo frontend com URL e conta de teste efêmera, sem acesso manual ao n8n: concluído.
+- Acompanhamento em tempo real por cenário, etapa e ambiente no frontend: concluído.
 - Captura rastreável de screenshots e execução completa pelo agente: validadas ponta a ponta.
 - Gerador Node.js de evidências DOCX com screenshots: concluído.
 - Persistência de execuções e dashboard operacional: concluídos.

@@ -64,4 +64,22 @@ describe("reliability report", () => {
       "FLAKY",
     );
   });
+
+  it("exibe screenshots incorporadas na galeria do relatório", () => {
+    const data = buildReliabilityReport({
+      execution_id: "exec-evidence-001",
+      resultados: [{
+        scenario_id: "CT-001",
+        scenario_title: "Cenário com print",
+        status: "PASSOU",
+        resultado_teste: {
+          tentativas: [{ status: "PASSOU", evidencias: ["data:image/png;base64,AAAA"] }],
+        },
+      }],
+    });
+    const html = renderReliabilityHtml(data);
+    expect(html).toContain("Prints dos cenários executados");
+    expect(html).toContain('src="data:image/png;base64,AAAA"');
+    expect(html).toContain("Cenário com print");
+  });
 });

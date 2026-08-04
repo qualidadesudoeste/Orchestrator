@@ -95,4 +95,23 @@ describe("normalizeTestExecutionPayload", () => {
       }),
     ).toThrowError("Informe solicitado_por");
   });
+
+  it("remove segredos e contexto repetido do payload persistido", () => {
+    const execution = normalizeTestExecutionPayload({
+      execution_id: "exec-compacto",
+      solicitado_por: 42,
+      login_senha: "segredo",
+      contexto_codigo_fonte: "índice muito grande",
+      resultados: [{
+        scenario_id: "CT-001",
+        status: "PASSOU",
+        contexto_codigo_fonte: "índice muito grande",
+        resultado_teste: { codigo_regressao: "código extenso" },
+      }],
+    });
+    expect(execution.rawPayload).not.toContain("segredo");
+    expect(execution.rawPayload).not.toContain("índice muito grande");
+    expect(execution.rawPayload).not.toContain("código extenso");
+    expect(execution.rawPayload).toContain("exec-compacto");
+  });
 });

@@ -13,6 +13,8 @@ type WorkflowNode = {
     openAiApi?: { id?: string; name?: string };
   };
   parameters?: {
+    url?: string;
+    body?: string;
     jsCode?: string;
     text?: string;
     model?: string | { value?: string; mode?: string };
@@ -71,7 +73,8 @@ describe("workflow do Agente QA", () => {
 
     expect(startScript).toContain("--output-mode stdout");
     expect(startScript).toContain("@playwright/mcp@0.0.78");
-    expect(startScript).not.toContain("--output-dir");
+    expect(startScript).toContain("--output-dir $outputDirectory");
+    expect(startScript).toContain("artifacts\\playwright-mcp");
     expect(config.saveSession).toBe(false);
   });
 
@@ -242,5 +245,70 @@ describe("workflow do Agente QA", () => {
     expect(agent?.parameters?.text).toContain("AMBIENTE_AMBIGUO");
     expect(formatter?.parameters?.jsCode).toContain("ambientes_execucao_json");
     expect(formatter?.parameters?.jsCode).toContain("login_senha");
+  });
+
+  it("notifica o progresso de cada cenário sem enviar credenciais", () => {
+    const workflowPath = resolve(
+      process.cwd(),
+      "automation/n8n/Agente_QA_Playwright_MCP.json",
+    );
+    const workflow = JSON.parse(readFileSync(workflowPath, "utf8")) as {
+      nodes?: WorkflowNode[];
+      connections?: Record<string, unknown>;
+    };
+    const started = workflow.nodes?.find(
+      node => node.name === "Notificar Início do Cenário",
+    );
+    const completed = workflow.nodes?.find(
+      node => node.name === "Notificar Cenário Concluído",
+    );
+
+    expect(started?.parameters?.url).toContain(
+      "/api/qa/test-executions/progress",
+    );
+    expect(started?.parameters?.body).toContain("SCENARIO_STARTED");
+    expect(completed?.parameters?.url).toContain(
+      "/api/qa/test-executions/progress",
+    );
+    expect(completed?.parameters?.body).toContain("SCENARIO_COMPLETED");
+    expect(started?.parameters?.body).not.toContain("login_senha");
+    expect(completed?.parameters?.body).not.toContain("login_senha");
+    expect(workflow.connections).toHaveProperty("Notificar Início do Cenário");
+    expect(workflow.connections).toHaveProperty("Notificar Cenário Concluído");
+  });
+  it("consulta pausa e encerramento antes de iniciar o próximo cenário", () => {
+    const workflowPath = resolve(
+      process.cwd(),
+      "automation/n8n/Agente_QA_Playwright_MCP.json",
+    );
+    const workflow = JSON.parse(readFileSync(workflowPath, "utf8")) as {
+      nodes?: WorkflowNode[];
+      connections?: Record<string, unknown>;
+    };
+    const checkpoint = workflow.nodes?.find(
+      node => node.name === "Consultar Controle da Execução",
+    );
+    const pause = workflow.nodes?.find(
+      node => node.name === "Execução está pausada?",
+    );
+    const stop = workflow.nodes?.find(
+      node => node.name === "Execução deve encerrar?",
+    );
+    const wait = workflow.nodes?.find(
+      node => node.name === "Aguardar Retomada",
+    );
+    const connections = JSON.stringify(workflow.connections ?? {});
+
+    expect(checkpoint?.parameters?.url).toContain(
+      "/api/qa/test-executions/control-state",
+    );
+    expect(checkpoint?.parameters?.body).toContain("execution_id");
+    expect(pause?.parameters?.conditions?.conditions?.[0]?.rightValue).toBe("PAUSE");
+    expect(stop?.parameters?.conditions?.conditions?.[0]?.rightValue).toBe("CANCEL");
+    expect(wait?.parameters?.amount).toBe(5);
+    expect(connections).toContain("Salvar Aprendizado");
+    expect(connections).toContain("Preparar Checkpoint de Controle");
+    expect(connections).toContain("Aguardar Retomada");
+    expect(connections).toContain("Encerrar Fluxo com Segurança");
   });
 });

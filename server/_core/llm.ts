@@ -1,4 +1,6 @@
 import { ENV } from "./env";
+import { getActiveAiProviderSetting } from "../db";
+import { decryptCredential } from "../credentialCrypto";
 
 export type Role = "system" | "user" | "assistant" | "tool" | "function";
 
@@ -249,12 +251,28 @@ const assertApiKey = (apiUrl = ENV.llmApiUrl, apiKey = ENV.llmApiKey) => {
   }
 };
 
-const primaryProvider = (): LlmProviderConfig => ({
+const environmentPrimaryProvider = (): LlmProviderConfig => ({
   apiUrl: ENV.llmApiUrl,
   // Never forward a cloud key to a process listening on this computer.
   apiKey: isLocalLlmUrl(ENV.llmApiUrl) ? "" : ENV.llmApiKey,
   model: ENV.llmModel,
 });
+
+const primaryProvider = async (): Promise<LlmProviderConfig> => {
+  try {
+    const setting = await getActiveAiProviderSetting();
+    if (setting) {
+      return {
+        apiUrl: setting.apiUrl,
+        apiKey: setting.apiKeyEncrypted ? decryptCredential(setting.apiKeyEncrypted) : "",
+        model: setting.model,
+      };
+    }
+  } catch (error) {
+    console.warn("[LLM] Não foi possível ler o provedor global; usando o .env.", error);
+  }
+  return environmentPrimaryProvider();
+};
 
 const fallbackProvider = (): LlmProviderConfig | undefined => {
   if (!ENV.llmFallbackApiUrl || !ENV.llmFallbackModel) return undefined;
@@ -516,7 +534,7 @@ async function invokeProvider(
 
 export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
   try {
-    return await invokeProvider(params, primaryProvider());
+    return await invokeProvider(params, await primaryProvider());
   } catch (primaryError) {
     const fallback = fallbackProvider();
     if (!fallback) throw primaryError;
@@ -537,23 +555,26 @@ export type ModelsResponse = {
   data: ModelInfo[];
 };
 
-export async function listLLMModels(): Promise<ModelsResponse> {
-  assertApiKey(ENV.llmApiUrl, ENV.llmApiKey);
-
-  const url = ENV.llmApiUrl && ENV.llmApiUrl.trim().length > 0
-    ? resolveProviderPath("models", ENV.llmApiUrl)
+async function listModelsForProvider(provider: LlmProviderConfig): Promise<ModelsResponse> {
+  assertApiKey(provider.apiUrl, provider.apiKey);
+  const url = provider.apiUrl && provider.apiUrl.trim().length > 0
+    ? resolveProviderPath("models", provider.apiUrl)
     : "https://forge.manus.im/v1/models";
-
   const headers: Record<string, string> = {};
-  if (ENV.llmApiKey) headers.authorization = `Bearer ${ENV.llmApiKey}`;
+  if (provider.apiKey) headers.authorization = `Bearer ${provider.apiKey}`;
   const response = await fetchWithBackoff(url, { headers });
-
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(
-      `List LLM models failed: ${response.status} ${response.statusText} – ${errorText}`
-    );
+    throw new Error(`List LLM models failed: ${response.status} ${response.statusText} – ${errorText}`);
   }
-
   return (await response.json()) as ModelsResponse;
+}
+
+export async function testLLMProviderConfig(provider: LlmProviderConfig): Promise<{ ok: true; modelCount: number }> {
+  const models = await listModelsForProvider(provider);
+  return { ok: true, modelCount: Array.isArray(models.data) ? models.data.length : 0 };
+}
+
+export async function listLLMModels(): Promise<ModelsResponse> {
+  return listModelsForProvider(await primaryProvider());
 }

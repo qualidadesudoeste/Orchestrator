@@ -318,6 +318,29 @@ function scenarioRows(
     .join("");
 }
 
+function evidenceGallery(results: ReliabilityReportData["results"]): string {
+  const scenarios = results
+    .map(result => {
+      const images = result.reliability.history.flatMap(attempt =>
+        attempt.evidence
+          .filter(value => value.startsWith("data:image/"))
+          .map(
+            (value, index) => `<figure>
+              <img src="${value}" alt="Evidência do cenário ${escapeHtml(result.scenarioId)}, tentativa ${attempt.attempt}, imagem ${index + 1}">
+              <figcaption>Tentativa ${attempt.attempt} · ${escapeHtml(attempt.status)}</figcaption>
+            </figure>`,
+          ),
+      );
+      if (images.length === 0) return "";
+      return `<article class="evidence-scenario">
+        <h3>${escapeHtml(result.scenarioId)} — ${escapeHtml(result.title)}</h3>
+        <div class="evidence-grid">${images.join("")}</div>
+      </article>`;
+    })
+    .filter(Boolean)
+    .join("");
+  return scenarios || '<p class="empty">Nenhum print foi encontrado para esta execução.</p>';
+}
 export function renderReliabilityHtml(data: ReliabilityReportData): string {
   const realFailures = data.results.filter(
     item => item.reliability.classification === "FALHA_REAL",
@@ -345,6 +368,8 @@ export function renderReliabilityHtml(data: ReliabilityReportData): string {
     .estavel,.passou{background:#dcfce7;color:#166534}.flaky{background:#fef3c7;color:#92400e}.falha_real,.falhou{background:#fee2e2;color:#991b1b}.inconclusivo,.bloqueado,.erro_automacao{background:#e2e8f0;color:#475569}
     .attempt{margin:0 3px 3px 0}.empty{color:#64748b;text-align:center;padding:24px}
     .note{border-left:4px solid #f59e0b;background:#fffbeb;padding:12px 14px;border-radius:8px;color:#78350f}
+    .evidence-scenario{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin-bottom:14px}.evidence-scenario h3{font-size:15px;margin:0 0 12px}
+    .evidence-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}figure{margin:0}figure img{display:block;width:100%;height:auto;max-height:620px;object-fit:contain;border:1px solid #dbe2ea;border-radius:8px;background:#f8fafc}figcaption{font-size:12px;color:#64748b;margin-top:6px}
     footer{color:#64748b;font-size:12px;margin:24px 0;text-align:center}
     @media(max-width:800px){.cards{grid-template-columns:repeat(2,1fr)}.wrap{padding:14px}}
   </style>
@@ -368,11 +393,13 @@ export function renderReliabilityHtml(data: ReliabilityReportData): string {
   <div class="table"><table><thead><tr><th>Cenário</th><th>Título</th><th>Classificação</th><th>Tentativas</th><th>Resumo</th></tr></thead><tbody>${scenarioRows(flaky, "Nenhum teste flaky nesta execução.")}</tbody></table></div>
   <h2>Todos os cenários</h2>
   <div class="table"><table><thead><tr><th>Cenário</th><th>Título</th><th>Classificação</th><th>Tentativas</th><th>Resumo</th></tr></thead><tbody>${scenarioRows(data.results, "Nenhum cenário.")}</tbody></table></div>
+  <h2>Prints dos cenários executados</h2>
+  ${evidenceGallery(data.results)}
   <footer>Gerado automaticamente pelo Orchestrator em ${escapeHtml(data.generatedAt)}.</footer>
 </main></body></html>`;
-  if (Buffer.byteLength(html, "utf8") > 2_000_000) {
+  if (Buffer.byteLength(html, "utf8") > 30_000_000) {
     throw new ReliabilityReportValidationError(
-      "O relatório de confiabilidade excede 2 MB.",
+      "O relatório de confiabilidade excede 30 MB.",
     );
   }
   return html;
