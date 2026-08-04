@@ -136,6 +136,7 @@ describe("workflow do Agente QA", () => {
     expect(prepare?.parameters?.jsCode).toContain("ambiente_inferido");
     expect(prepare?.parameters?.jsCode).toContain("AMBIENTE_PADRAO_DA_EXECUCAO");
     expect(prepare?.parameters?.jsCode).toContain("LOGIN_TEST");
+    expect(prepare?.parameters?.jsCode).not.toContain("senha|autentic|credencial");
     expect(diagnostics?.parameters?.jsCode).toContain("LIMITE_IA");
     expect(diagnostics?.parameters?.jsCode).toContain("PREENCHIMENTO_FALHOU");
     expect(wait?.type).toBe("n8n-nodes-base.wait");
@@ -248,6 +249,12 @@ describe("workflow do Agente QA", () => {
     expect(agent?.parameters?.options?.systemMessage).toContain("interceptação de ponteiro");
     expect(formatter?.parameters?.jsCode).toContain("ambientes_execucao_json");
     expect(formatter?.parameters?.jsCode).toContain("login_senha");
+    const deterministicLogin = workflow.nodes?.find(node => node.id === "prepare-deterministic-login");
+    const diagnostics = workflow.nodes?.find(node => node.id === "diagnosticar-falha-agente");
+    expect(deterministicLogin?.parameters?.jsCode).toContain("cpf|cnpj");
+    expect(deterministicLogin?.parameters?.jsCode).toContain("timeout: 30000");
+    expect(diagnostics?.parameters?.jsCode).toContain("technical_detail");
+    expect(formatter?.parameters?.jsCode).toContain("erroCodigo");
   });
 
   it("notifica o progresso de cada cenário sem enviar credenciais", () => {
@@ -313,5 +320,27 @@ describe("workflow do Agente QA", () => {
     expect(connections).toContain("Preparar Checkpoint de Controle");
     expect(connections).toContain("Aguardar Retomada");
     expect(connections).toContain("Encerrar Fluxo com Segurança");
+  });
+
+  it("gera um script Playwright de login sintaticamente valido", () => {
+    const workflowPath = resolve(
+      process.cwd(),
+      "automation/n8n/Agente_QA_Playwright_MCP.json",
+    );
+    const workflow = JSON.parse(readFileSync(workflowPath, "utf8")) as {
+      nodes?: WorkflowNode[];
+    };
+    const preparation = workflow.nodes?.find(node =>
+      node.parameters?.jsCode?.includes("item.login_script"),
+    );
+    const result = new Function("$json", preparation?.parameters?.jsCode ?? "")({
+      sistema_url: "https://example.com",
+      login_usuario: "qa-user",
+      login_senha: "qa-password",
+    }) as { json: { login_script: string } };
+
+    expect(result.json.login_script).toContain('page.goto("https://example.com"');
+    expect(result.json.login_script).not.toContain("\${url}");
+    expect(() => new Function("return (" + result.json.login_script + ")")).not.toThrow();
   });
 });
