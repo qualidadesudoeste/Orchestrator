@@ -169,6 +169,13 @@
       "when": 1785856715429,
       "tag": "0023_careless_pestilence",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "5",
+      "when": 1786055237737,
+      "tag": "0024_square_strong_guy",
+      "breakpoints": true
     }
   ]
 }

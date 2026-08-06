@@ -1,5 +1,6 @@
 import { useState } from "react";
 import AppLayout from "@/components/AppLayout";
+import SigMcpSettingsSection from "@/components/SigMcpSettingsSection";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -60,7 +61,7 @@ async function fileToBase64(file: File): Promise<string> {
 }
 
 export default function ParametersPage() {
-  const [section, setSection] = useState<"vpn" | "ai" | "execution">("vpn");
+  const [section, setSection] = useState<"vpn" | "ai" | "sig" | "execution">("vpn");
   const [vpnForm, setVpnForm] = useState<VpnForm>(emptyVpn);
   const [vpnEditingId, setVpnEditingId] = useState<number | null>(null);
   const [showVpnForm, setShowVpnForm] = useState(false);
@@ -118,6 +119,7 @@ export default function ParametersPage() {
         <div className="mb-5 flex gap-2 border-b">
           <button className={`flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-semibold ${section === "vpn" ? "border-blue-600 text-blue-700" : "border-transparent text-slate-500"}`} onClick={() => setSection("vpn")}><ShieldCheck className="h-4 w-4" /> VPNs</button>
           <button className={`flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-semibold ${section === "ai" ? "border-blue-600 text-blue-700" : "border-transparent text-slate-500"}`} onClick={() => setSection("ai")}><Bot className="h-4 w-4" /> Inteligencia Artificial</button>
+          <button className={`flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-semibold ${section === "sig" ? "border-blue-600 text-blue-700" : "border-transparent text-slate-500"}`} onClick={() => setSection("sig")}><ServerCog className="h-4 w-4" /> SIG</button>
           <button className={`flex items-center gap-2 border-b-2 px-4 py-3 text-sm font-semibold ${section === "execution" ? "border-blue-600 text-blue-700" : "border-transparent text-slate-500"}`} onClick={() => setSection("execution")}><ServerCog className="h-4 w-4" /> Execucao</button>
         </div>
 
@@ -159,6 +161,8 @@ export default function ParametersPage() {
           <div className="space-y-3">{aiQuery.data?.map(ai => <div key={ai.id} className="flex items-center justify-between gap-4 rounded-xl border bg-white p-4 shadow-sm"><div><div className="flex items-center gap-2"><h3 className="font-semibold text-slate-900">{ai.name}</h3>{ai.isActive ? <span className="flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] text-emerald-700"><CheckCircle2 className="h-3 w-3" /> Em uso</span> : null}</div><p className="mt-1 text-xs text-slate-500">{ai.provider} · {ai.model}</p><p className="mt-1 break-all text-xs text-slate-400">{ai.apiUrl} · {ai.hasApiKey ? "chave armazenada" : "sem chave"}</p></div><div className="flex gap-1"><Button size="sm" variant="outline" disabled={testAi.isPending} onClick={() => testAi.mutate({ id:ai.id })}>{testAi.isPending ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Bot className="mr-1 h-4 w-4" />}Testar</Button><Button size="icon" variant="ghost" onClick={() => { setAiEditingId(ai.id); setAiForm({ name:ai.name, provider:ai.provider, apiUrl:ai.apiUrl, model:ai.model, apiKey:"", isActive:Boolean(ai.isActive) }); setShowAiForm(true); }}><Pencil className="h-4 w-4" /></Button><Button size="icon" variant="ghost" onClick={() => deleteAi.mutate({ id:ai.id })}><Trash2 className="h-4 w-4 text-red-500" /></Button></div></div>)}</div>
           {!aiQuery.isLoading && !aiQuery.data?.length && <div className="rounded-xl border border-dashed p-8 text-center text-sm text-slate-500">Nenhuma API cadastrada. Enquanto isso, o sistema continuará usando o arquivo .env.</div>}
         </div>}
+
+        {section === "sig" && <SigMcpSettingsSection />}
 
         {section === "execution" && <div className="space-y-4">
           <div className="rounded-xl border bg-white p-5 shadow-sm">

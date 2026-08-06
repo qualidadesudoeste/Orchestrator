@@ -5,6 +5,7 @@ import { z } from "zod";
 import { COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
+import { sigRouter } from "./sigRouter";
 import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import { sdk } from "./_core/sdk";
 import {
@@ -186,6 +187,7 @@ const qaGeneratedCasesSchema = z.object({
 
 export const appRouter = router({
   system: systemRouter,
+  sig: sigRouter,
   auth: router({
     login: publicProcedure
       .input(z.object({ username: z.string().min(1), password: z.string().min(1) }))

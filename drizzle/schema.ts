@@ -44,6 +44,7 @@ export const projects = mysqlTable("projects", {
   sourceCodeSummary: text("sourceCodeSummary"),
   sourceCodeFileCount: int("sourceCodeFileCount"),
   sourceCodeIndexedAt: timestamp("sourceCodeIndexedAt"),
+  sigProjectId: varchar("sigProjectId", { length: 128 }),
   createdById: int("createdById").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
@@ -92,6 +93,23 @@ export const aiProviderSettings = mysqlTable("ai_provider_settings", {
 }));
 export type AiProviderSetting = typeof aiProviderSettings.$inferSelect;
 
+export const sigMcpSettings = mysqlTable("sig_mcp_settings", {
+  id: int("id").autoincrement().primaryKey(),
+  name: varchar("name", { length: 120 }).notNull(),
+  endpointUrl: varchar("endpointUrl", { length: 1000 }).notNull(),
+  username: varchar("username", { length: 320 }).notNull(),
+  passwordEncrypted: text("passwordEncrypted"),
+  cardsToolName: varchar("cardsToolName", { length: 255 }),
+  isActive: int("isActive").notNull().default(1),
+  createdById: int("createdById").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, table => ({
+  nameUnique: uniqueIndex("sig_mcp_settings_name_unique").on(table.name),
+  activeIndex: index("sig_mcp_settings_active_idx").on(table.isActive),
+}));
+export type SigMcpSetting = typeof sigMcpSettings.$inferSelect;
+
 export const projectTestEnvironments = mysqlTable("project_test_environments", {
   id: int("id").autoincrement().primaryKey(),
   projectId: int("projectId").notNull(),
@@ -131,6 +149,7 @@ export const sprints = mysqlTable("sprints", {
   name: varchar("name", { length: 255 }).notNull(),
   description: text("description"),
   status: mysqlEnum("status", ["pending", "in_progress", "in_review", "done"]).default("pending").notNull(),
+  sigSprintId: varchar("sigSprintId", { length: 128 }),
   createdById: int("createdById").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),

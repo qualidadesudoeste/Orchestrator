@@ -4,9 +4,10 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ChevronDown, ChevronUp, ClipboardList, FileText, Globe2, Loader2, Play, Plus, Trash2, UserRound } from "lucide-react";
+import { ChevronDown, ChevronUp, ClipboardList, CloudDownload, FileText, Globe2, Loader2, Play, Plus, Trash2, UserRound } from "lucide-react";
 import { toast } from "sonner";
 import { useLocation } from "wouter";
+import SigCardsImportDialog from "@/components/SigCardsImportDialog";
 
 type TestCase = {
   id: string;
@@ -53,6 +54,7 @@ export default function SprintTestPlansModal({
   const [authorizedEnvironment, setAuthorizedEnvironment] = useState(false);
   const [startedExecution, setStartedExecution] = useState<{ executionId: string; totalScenarios: number } | null>(null);
   const [showUserStory, setShowUserStory] = useState(false);
+  const [showSigImport, setShowSigImport] = useState(false);
 
   const executionProgressQuery = trpc.testExecutions.progress.useQuery(
     { externalExecutionId: startedExecution?.executionId ?? "" },
@@ -162,9 +164,14 @@ export default function SprintTestPlansModal({
               <p className="mt-2 text-sm text-slate-500">{projectName} · {readOnly ? "consulta do plano vinculado a esta sprint." : "planos gerados e vinculados a esta sprint."}</p>
             </div>
             {!readOnly && (
-              <Button className="shrink-0" onClick={() => { onClose(); navigate("/qa-planner?projectId=" + projectId + "&sprintId=" + sprintId); }}>
-                <Plus className="mr-2 h-4 w-4" /> Criar plano de teste
-              </Button>
+              <div className="flex shrink-0 flex-wrap gap-2">
+                <Button variant="outline" onClick={() => setShowSigImport(true)}>
+                  <CloudDownload className="mr-2 h-4 w-4" /> Importar do SIG
+                </Button>
+                <Button onClick={() => { onClose(); navigate("/qa-planner?projectId=" + projectId + "&sprintId=" + sprintId); }}>
+                  <Plus className="mr-2 h-4 w-4" /> Criar plano de teste
+                </Button>
+              </div>
             )}
           </div>
         </DialogHeader>
@@ -305,6 +312,39 @@ export default function SprintTestPlansModal({
           </div>
         )}
       </DialogContent>
+      {!readOnly && (
+        <SigCardsImportDialog
+          open={showSigImport}
+          onOpenChange={setShowSigImport}
+          projectId={projectId}
+          sprintId={sprintId}
+          projectName={projectName}
+          sprintName={sprintName}
+          onImport={userStory => {
+            const storageKey = "orchestrator-qa-planner-generator-state-v2";
+            let current: Record<string, unknown> = {};
+            try {
+              current = JSON.parse(sessionStorage.getItem(storageKey) || "{}") as Record<string, unknown>;
+            } catch {
+              current = {};
+            }
+            sessionStorage.setItem(storageKey, JSON.stringify({
+              ...current,
+              userStory,
+              showUserStoryEditor: true,
+              result: null,
+              coverageResult: null,
+              showCoveragePanel: false,
+              savedPlanId: null,
+              selectedProjectId: String(projectId),
+              selectedSprintId: String(sprintId),
+            }));
+            setShowSigImport(false);
+            onClose();
+            navigate("/qa-planner?projectId=" + projectId + "&sprintId=" + sprintId);
+          }}
+        />
+      )}
     </Dialog>
   );
 }
