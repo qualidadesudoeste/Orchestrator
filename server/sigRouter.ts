@@ -13,7 +13,8 @@ import {
   saveSigMapping,
   updateSigMcpSetting,
 } from "./sigIntegrationRepository";
-import { fetchSigCards, fetchSigTestQueue, listSigMcpTools, type SigMcpConnection } from "./sigMcpService";
+import { fetchSigCards, listSigMcpTools, type SigMcpConnection } from "./sigMcpService";
+import { fetchSigReleasedQueue } from "./sigQaQueueService";
 
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
   if (ctx.user.role !== "admin") {
@@ -198,18 +199,20 @@ export const sigRouter = router({
   testQueue: protectedProcedure.query(async () => {
     const setting = await getActiveSigMcpSetting();
     if (!setting) {
-      throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Configure e ative o MCP do SIG em Parâmetros." });
+      throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Configure e ative a integração do SIG em Parâmetros." });
     }
     try {
+      const credentials = connectionFor({ ...setting, projectId: "0", sprintId: "0" });
       const [result, mappings] = await Promise.all([
-        fetchSigTestQueue({
-          connection: connectionFor({ ...setting, projectId: "0", sprintId: "0" }),
-          queueToolName: setting.queueToolName,
+        fetchSigReleasedQueue({
+          endpointUrl: setting.endpointUrl,
+          username: credentials.username,
+          password: credentials.password,
         }),
         listSigMappings(),
       ]);
       return {
-        toolName: result.toolName,
+        toolName: result.source,
         items: result.items.map(item => {
           const local = mappings.find(mapping =>
             Boolean(item.sprintId) && String(mapping.sigSprintId ?? "") === item.sprintId &&
@@ -225,7 +228,7 @@ export const sigRouter = router({
             localClientName: local?.clientName ?? null,
           };
         }),
-        availableTools: result.tools.map(tool => ({ name: tool.name, description: tool.description ?? "" })),
+        availableTools: [],
       };
     } catch (error) {
       throw sigError(error);
