@@ -12,6 +12,7 @@ type FormState = {
   username: string;
   password: string;
   cardsToolName: string;
+  queueToolName: string;
   isActive: boolean;
 };
 
@@ -21,6 +22,7 @@ const emptyForm = (): FormState => ({
   username: "",
   password: "",
   cardsToolName: "",
+  queueToolName: "",
   isActive: true,
 });
 
@@ -73,11 +75,12 @@ export default function SigMcpSettingsSection() {
       endpointUrl: form.endpointUrl.trim(),
       username: form.username.trim(),
       cardsToolName: form.cardsToolName.trim() || null,
+      queueToolName: form.queueToolName.trim() || null,
       isActive: form.isActive,
       ...(form.password ? { password: form.password } : {}),
     };
     if (editingId) update.mutate({ id: editingId, ...common });
-    else create.mutate({ ...common, password: form.password, cardsToolName: common.cardsToolName ?? undefined });
+    else create.mutate({ ...common, password: form.password, cardsToolName: common.cardsToolName ?? undefined, queueToolName: common.queueToolName ?? undefined });
   };
 
   return (
@@ -96,7 +99,9 @@ export default function SigMcpSettingsSection() {
           <div><Label>URL MCP</Label><Input className="mt-1" type="url" value={form.endpointUrl} onChange={event => setForm(value => ({ ...value, endpointUrl: event.target.value }))} /></div>
           <div><Label>Usuário do SIG</Label><Input className="mt-1" autoComplete="username" value={form.username} onChange={event => setForm(value => ({ ...value, username: event.target.value }))} /></div>
           <div><Label>Senha do SIG</Label><Input className="mt-1" type="password" autoComplete="new-password" value={form.password} onChange={event => setForm(value => ({ ...value, password: event.target.value }))} placeholder={editingId ? "Vazio mantém a senha atual" : "Senha do SIG"} /></div>
-          <div className="sm:col-span-2"><Label>Ferramenta que lista cards (opcional)</Label><Input className="mt-1 font-mono text-xs" value={form.cardsToolName} onChange={event => setForm(value => ({ ...value, cardsToolName: event.target.value }))} placeholder="Detecção automática; ex.: listar_cards_sprint" /><p className="mt-1 text-xs text-slate-500">Use o teste de conexão para descobrir os nomes disponíveis.</p></div>
+          <div><Label>Ferramenta que lista cards (opcional)</Label><Input className="mt-1 font-mono text-xs" value={form.cardsToolName} onChange={event => setForm(value => ({ ...value, cardsToolName: event.target.value }))} placeholder="Ex.: listar_cards_sprint" /></div>
+          <div><Label>Ferramenta da fila de testes (opcional)</Label><Input className="mt-1 font-mono text-xs" value={form.queueToolName} onChange={event => setForm(value => ({ ...value, queueToolName: event.target.value }))} placeholder="Ex.: listar_sprints_liberadas" /></div>
+          <p className="text-xs text-slate-500 sm:col-span-2">Deixe vazio para detecção automática ou use o teste de conexão para descobrir os nomes disponíveis.</p>
           <label className="flex items-center gap-2 text-sm sm:col-span-2"><input type="checkbox" checked={form.isActive} onChange={event => setForm(value => ({ ...value, isActive: event.target.checked }))} /> Usar esta configuração nas importações</label>
           <div className="flex gap-2 sm:col-span-2"><Button onClick={save} disabled={create.isPending || update.isPending}>{(create.isPending || update.isPending) && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Salvar integração</Button><Button variant="outline" onClick={() => setShowForm(false)}>Cancelar</Button></div>
         </div>
@@ -110,10 +115,10 @@ export default function SigMcpSettingsSection() {
                 <div className="flex flex-wrap items-center gap-2"><h3 className="font-semibold text-slate-900">{setting.name}</h3>{setting.isActive ? <span className="flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] text-emerald-700"><CheckCircle2 className="h-3 w-3" /> Em uso</span> : null}</div>
                 <p className="mt-1 break-all text-xs text-slate-500">{setting.endpointUrl}</p>
                 <p className="mt-2 text-xs text-slate-500">Usuário: {setting.username} · {setting.hasPassword ? "senha armazenada" : "sem senha"}</p>
-                <p className="mt-1 text-xs text-slate-400">Ferramenta: {setting.cardsToolName || "detecção automática"}</p>
+                <p className="mt-1 text-xs text-slate-400">Cards: {setting.cardsToolName || "detecção automática"}</p><p className="mt-1 text-xs text-slate-400">Fila de testes: {setting.queueToolName || "detecção automática"}</p>
               </div>
               <div className="flex h-fit gap-1">
-                <Button size="icon" variant="ghost" onClick={() => { setEditingId(setting.id); setForm({ name: setting.name, endpointUrl: setting.endpointUrl, username: setting.username, password: "", cardsToolName: setting.cardsToolName ?? "", isActive: Boolean(setting.isActive) }); setShowForm(true); }}><Pencil className="h-4 w-4" /></Button>
+                <Button size="icon" variant="ghost" onClick={() => { setEditingId(setting.id); setForm({ name: setting.name, endpointUrl: setting.endpointUrl, username: setting.username, password: "", cardsToolName: setting.cardsToolName ?? "", queueToolName: setting.queueToolName ?? "", isActive: Boolean(setting.isActive) }); setShowForm(true); }}><Pencil className="h-4 w-4" /></Button>
                 <Button size="icon" variant="ghost" onClick={() => remove.mutate({ id: setting.id })}><Trash2 className="h-4 w-4 text-red-500" /></Button>
               </div>
             </div>

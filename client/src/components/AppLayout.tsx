@@ -4,7 +4,7 @@ import { useLocation } from "wouter";
 import {
   CheckSquare, Folder, Users, History,
   Shield, LogOut, GraduationCap, Wand2, Settings,
-  ChevronDown, ChevronRight, LayoutGrid, LayoutDashboard, User, X, GripVertical, Activity
+  ChevronDown, ChevronRight, LayoutGrid, LayoutDashboard, User, X, GripVertical, Activity, ListChecks
 } from "lucide-react";
 
 // Estrutura de módulos recolhíveis
@@ -17,6 +17,7 @@ const MODULES = [
       { label: "Painel Individual", icon: User, path: "/painel" },
       { label: "Cadastro de Projetos", icon: Folder, path: "/workspace" },
       { label: "Gerador de Plano de Teste", icon: Wand2, path: "/qa-planner" },
+      { label: "Fila de Testes SIG", icon: ListChecks, path: "/workspace/sig-test-queue" },
       { label: "Fila de Execuções", icon: Activity, path: "/workspace/execution-queue" },
       { label: "Histórico de Execuções", icon: History, path: "/history" },
     ],

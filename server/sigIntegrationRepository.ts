@@ -1,5 +1,5 @@
 import { desc, eq, sql } from "drizzle-orm";
-import { projects, sigMcpSettings, sprints } from "../drizzle/schema";
+import { clients, projects, sigMcpSettings, sprints } from "../drizzle/schema";
 import { getDb } from "./db";
 
 export async function listSigMcpSettings() {
@@ -11,6 +11,7 @@ export async function listSigMcpSettings() {
     endpointUrl: sigMcpSettings.endpointUrl,
     username: sigMcpSettings.username,
     cardsToolName: sigMcpSettings.cardsToolName,
+    queueToolName: sigMcpSettings.queueToolName,
     hasPassword: sql<number>`${sigMcpSettings.passwordEncrypted} is not null`,
     isActive: sigMcpSettings.isActive,
     createdAt: sigMcpSettings.createdAt,
@@ -88,4 +89,22 @@ export async function saveSigMapping(input: {
   if (!mapping) throw new Error("Projeto ou sprint não encontrado.");
   await db.update(projects).set({ sigProjectId: input.sigProjectId }).where(eq(projects.id, input.projectId));
   await db.update(sprints).set({ sigSprintId: input.sigSprintId }).where(eq(sprints.id, input.sprintId));
+}
+
+
+export async function listSigMappings() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select({
+    projectId: projects.id,
+    projectName: projects.name,
+    sigProjectId: projects.sigProjectId,
+    sprintId: sprints.id,
+    sprintName: sprints.name,
+    sigSprintId: sprints.sigSprintId,
+    clientId: clients.id,
+    clientName: clients.name,
+  }).from(sprints)
+    .innerJoin(projects, eq(sprints.projectId, projects.id))
+    .innerJoin(clients, eq(projects.clientId, clients.id));
 }

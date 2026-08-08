@@ -16,6 +16,7 @@ import QAPlannerPage from "./pages/QAPlannerPage";
 import DashboardPage from "./pages/DashboardPage";
 import ParametersPage from "./pages/ParametersPage";
 import ExecutionQueuePage from "./pages/ExecutionQueuePage";
+import SigTestQueuePage from "./pages/SigTestQueuePage";
 
 function Router() {
   return (
@@ -25,6 +26,7 @@ function Router() {
       <Route path="/painel" component={Home} />
       <Route path="/dashboard" component={DashboardPage} />
       <Route path="/workspace/execution-queue" component={ExecutionQueuePage} />
+      <Route path="/workspace/sig-test-queue" component={SigTestQueuePage} />
       <Route path="/workspace" component={WorkspacePage} />
       <Route path="/projects">{() => <Redirect to="/workspace" />}</Route>
       <Route path="/history" component={HistoryPage} />

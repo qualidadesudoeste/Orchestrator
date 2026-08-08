@@ -176,6 +176,13 @@
       "when": 1786055237737,
       "tag": "0024_square_strong_guy",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "5",
+      "when": 1786197449157,
+      "tag": "0025_adorable_wither",
+      "breakpoints": true
     }
   ]
 }

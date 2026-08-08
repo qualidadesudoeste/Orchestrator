@@ -1,0 +1,1 @@
+ALTER TABLE `sig_mcp_settings` ADD `queueToolName` varchar(255);

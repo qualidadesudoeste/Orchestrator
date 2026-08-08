@@ -100,6 +100,7 @@ export const sigMcpSettings = mysqlTable("sig_mcp_settings", {
   username: varchar("username", { length: 320 }).notNull(),
   passwordEncrypted: text("passwordEncrypted"),
   cardsToolName: varchar("cardsToolName", { length: 255 }),
+  queueToolName: varchar("queueToolName", { length: 255 }),
   isActive: int("isActive").notNull().default(1),
   createdById: int("createdById").notNull(),
   createdAt: timestamp("createdAt").defaultNow().notNull(),

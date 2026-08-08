@@ -9,10 +9,11 @@ import {
   getSigMapping,
   getSigMcpSetting,
   listSigMcpSettings,
+  listSigMappings,
   saveSigMapping,
   updateSigMcpSetting,
 } from "./sigIntegrationRepository";
-import { fetchSigCards, listSigMcpTools, type SigMcpConnection } from "./sigMcpService";
+import { fetchSigCards, fetchSigTestQueue, listSigMcpTools, type SigMcpConnection } from "./sigMcpService";
 
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
   if (ctx.user.role !== "admin") {
@@ -60,6 +61,7 @@ export const sigRouter = router({
     username: z.string().trim().min(1).max(320),
     password: z.string().min(1).max(512),
     cardsToolName: z.string().trim().max(255).optional(),
+    queueToolName: z.string().trim().max(255).optional(),
     isActive: z.boolean().default(true),
   })).mutation(async ({ ctx, input }) => {
     const id = await createSigMcpSetting({
@@ -68,6 +70,7 @@ export const sigRouter = router({
       username: input.username,
       passwordEncrypted: encryptCredential(input.password),
       cardsToolName: input.cardsToolName || null,
+      queueToolName: input.queueToolName || null,
       isActive: input.isActive ? 1 : 0,
       createdById: ctx.user.id,
     });
@@ -81,6 +84,7 @@ export const sigRouter = router({
     username: z.string().trim().min(1).max(320).optional(),
     password: z.string().max(512).nullable().optional(),
     cardsToolName: z.string().trim().max(255).nullable().optional(),
+    queueToolName: z.string().trim().max(255).nullable().optional(),
     isActive: z.boolean().optional(),
   })).mutation(async ({ input }) => {
     const { id, password, isActive, ...data } = input;
@@ -139,6 +143,7 @@ export const sigRouter = router({
         endpointUrl: setting.endpointUrl,
         username: setting.username,
         cardsToolName: setting.cardsToolName,
+        queueToolName: setting.queueToolName,
         hasPassword: Boolean(setting.passwordEncrypted),
       } : null,
       sigProjectId: mapping.project.sigProjectId ?? "",
@@ -183,6 +188,43 @@ export const sigRouter = router({
       return {
         toolName: result.toolName,
         cards: result.cards,
+        availableTools: result.tools.map(tool => ({ name: tool.name, description: tool.description ?? "" })),
+      };
+    } catch (error) {
+      throw sigError(error);
+    }
+  }),
+
+  testQueue: protectedProcedure.query(async () => {
+    const setting = await getActiveSigMcpSetting();
+    if (!setting) {
+      throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Configure e ative o MCP do SIG em Parâmetros." });
+    }
+    try {
+      const [result, mappings] = await Promise.all([
+        fetchSigTestQueue({
+          connection: connectionFor({ ...setting, projectId: "0", sprintId: "0" }),
+          queueToolName: setting.queueToolName,
+        }),
+        listSigMappings(),
+      ]);
+      return {
+        toolName: result.toolName,
+        items: result.items.map(item => {
+          const local = mappings.find(mapping =>
+            Boolean(item.sprintId) && String(mapping.sigSprintId ?? "") === item.sprintId &&
+            (!item.projectId || String(mapping.sigProjectId ?? "") === item.projectId),
+          );
+          return {
+            ...item,
+            localProjectId: local?.projectId ?? null,
+            localProjectName: local?.projectName ?? null,
+            localSprintId: local?.sprintId ?? null,
+            localSprintName: local?.sprintName ?? null,
+            localClientId: local?.clientId ?? null,
+            localClientName: local?.clientName ?? null,
+          };
+        }),
         availableTools: result.tools.map(tool => ({ name: tool.name, description: tool.description ?? "" })),
       };
     } catch (error) {
