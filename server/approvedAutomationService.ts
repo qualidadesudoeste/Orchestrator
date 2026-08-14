@@ -43,6 +43,16 @@ export function legacyScenarioFingerprint(gherkin: string): string {
   return crypto.createHash("sha256").update(normalized(gherkin)).digest("hex");
 }
 
+export function migrateLegacyApprovedRecipe(
+  recipe: ApprovedAutomationRecipe,
+  currentGherkin: string,
+  persistedSourceGherkin: string,
+): ApprovedAutomationRecipe | undefined {
+  const currentFingerprint = scenarioFingerprint(currentGherkin);
+  if (scenarioFingerprint(persistedSourceGherkin) !== currentFingerprint) return undefined;
+  return { ...recipe, scenarioFingerprint: currentFingerprint };
+}
+
 function object(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown> : {};
@@ -50,6 +60,20 @@ function object(value: unknown): Record<string, unknown> {
 
 function safeText(value: unknown, max = 300): string {
   return String(value ?? "").trim().slice(0, max);
+}
+
+export function parseApprovedAutomationRecipe(
+  memory: { title: string; content: string },
+): ApprovedAutomationRecipe | undefined {
+  if (!memory.title.startsWith(APPROVED_RECIPE_TITLE_PREFIX)) return undefined;
+  try {
+    const recipe = JSON.parse(memory.content) as ApprovedAutomationRecipe;
+    return recipe.version === APPROVED_RECIPE_VERSION && Array.isArray(recipe.actions)
+      ? recipe
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function actionFromTrace(event: QaPilotTraceEvent): ApprovedAutomationAction | undefined {
@@ -161,14 +185,8 @@ export function findApprovedAutomationRecipe(
 ): ApprovedAutomationRecipe | undefined {
   const expected = new Set([scenarioFingerprint(gherkin), legacyScenarioFingerprint(gherkin)]);
   for (const memory of memories) {
-    if (!memory.title.startsWith(APPROVED_RECIPE_TITLE_PREFIX)) continue;
-    try {
-      const recipe = JSON.parse(memory.content) as ApprovedAutomationRecipe;
-      if (recipe.version === APPROVED_RECIPE_VERSION &&
-          expected.has(recipe.scenarioFingerprint) && Array.isArray(recipe.actions)) return recipe;
-    } catch {
-      // Memórias legadas ou corrompidas não impedem a execução inteligente.
-    }
+    const recipe = parseApprovedAutomationRecipe(memory);
+    if (recipe && expected.has(recipe.scenarioFingerprint)) return recipe;
   }
   return undefined;
 }

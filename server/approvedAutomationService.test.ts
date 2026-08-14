@@ -4,6 +4,7 @@ import {
   createApprovedAutomationRecipe,
   findApprovedAutomationRecipe,
   legacyScenarioFingerprint,
+  migrateLegacyApprovedRecipe,
   scenarioFingerprint,
 } from "./approvedAutomationService";
 import type { QaPilotResult, QaPilotTraceEvent } from "./qaPilotAgent";
@@ -65,6 +66,16 @@ describe("receitas de automação aprovadas", () => {
     ].join("\n");
     expect(scenarioFingerprint(decorated)).toBe(scenarioFingerprint(gherkin));
     expect(legacyScenarioFingerprint(decorated)).not.toBe(legacyScenarioFingerprint(gherkin));
+  });
+
+  it("migra receita legada somente após validar o Gherkin persistido da origem", () => {
+    const recipe = createApprovedAutomationRecipe({ result: successfulResult(), gherkin, title: "Buscar", executionId: "run-1" })!;
+    const legacyRecipe = { ...recipe, scenarioFingerprint: legacyScenarioFingerprint(gherkin) };
+    const current = gherkin.replace("Cenário: Buscar", "Cenário: Busca atualizada");
+    expect(migrateLegacyApprovedRecipe(legacyRecipe, current, gherkin)?.scenarioFingerprint)
+      .toBe(scenarioFingerprint(current));
+    expect(migrateLegacyApprovedRecipe(legacyRecipe, `${current}\nE vejo detalhes`, gherkin))
+      .toBeUndefined();
   });
 
   it("não aprova receita de uma execução falha", () => {

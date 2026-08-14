@@ -56,6 +56,24 @@ export async function createPendingTestExecution(data: {
   });
 }
 
+export async function getPersistedScenarioGherkin(
+  externalExecutionId: string,
+  externalScenarioId: string,
+): Promise<string | undefined> {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  const rows = await db
+    .select({ gherkin: testResults.gherkin })
+    .from(testResults)
+    .innerJoin(testExecutions, eq(testExecutions.id, testResults.executionId))
+    .where(and(
+      eq(testExecutions.externalExecutionId, externalExecutionId),
+      eq(testResults.externalScenarioId, externalScenarioId),
+    ))
+    .limit(1);
+  return rows[0]?.gherkin ?? undefined;
+}
+
 export async function markTestExecutionStartFailure(
   externalExecutionId: string,
   reason: string,

@@ -28,6 +28,8 @@ import {
   createApprovedAutomationRecipe,
   findApprovedAutomationRecipe,
   legacyScenarioFingerprint,
+  migrateLegacyApprovedRecipe,
+  parseApprovedAutomationRecipe,
   scenarioFingerprint,
 } from "./approvedAutomationService";
 import { normalizeTestExecutionPayload } from "./testExecutionService";
@@ -37,6 +39,7 @@ import type { QueuedExecutionDispatchPayload } from "./executionQueueTypes";
 import { buildAutomaticTestData } from "./automaticTestDataService";
 import { logError, logWarn } from "./_core/logger";
 import { compileGherkinScenarios, compileSingleGherkinScenario, resolveScenarioPlan } from "./automation-v2";
+import { getPersistedScenarioGherkin } from "./repositories/testExecutionRepository";
 
 export type DirectScenario = {
   index: number;
@@ -293,7 +296,7 @@ export async function runDirectQaExecution(
   if (!environments.length) throw new Error("A execução não possui ambiente com URL parametrizada.");
 
   const memoryScope = getAgentMemoryScope(body);
-  const memories = await getAgentMemories(memoryScope.scopeKey, 30);
+  const memories = await getAgentMemories(memoryScope.scopeKey, 50);
   const memoryContext = formatAgentMemoryContext(
     memories.filter(memory => !memory.title.startsWith(APPROVED_RECIPE_TITLE_PREFIX)),
   );
@@ -349,9 +352,32 @@ export async function runDirectQaExecution(
       const recipeMemories = (await Promise.all(recipeMemoryFingerprints.map(fingerprint =>
         getAgentMemoryByFingerprint(memoryScope.scopeKey, fingerprint),
       ))).filter(Boolean) as Array<{ title: string; content: string; status?: string }>;
-      const approvedRecipe = recipeMemories.length
+      let approvedRecipe = recipeMemories.length
         ? findApprovedAutomationRecipe(recipeMemories, scenario.gherkin)
         : undefined;
+      if (!approvedRecipe) {
+        for (const memory of memories) {
+          const legacyRecipe = parseApprovedAutomationRecipe(memory);
+          if (!legacyRecipe || legacyRecipe.scenarioId !== scenario.id) continue;
+          const sourceGherkin = await getPersistedScenarioGherkin(
+            legacyRecipe.sourceExecutionId,
+            legacyRecipe.scenarioId,
+          );
+          if (!sourceGherkin) continue;
+          approvedRecipe = migrateLegacyApprovedRecipe(legacyRecipe, scenario.gherkin, sourceGherkin);
+          if (!approvedRecipe) continue;
+          try {
+            await upsertAgentMemories([approvedRecipeLearning({
+              ...memoryScope,
+              externalExecutionId: legacyRecipe.sourceExecutionId,
+              externalScenarioId: legacyRecipe.scenarioId,
+            }, approvedRecipe)]);
+          } catch (error) {
+            logError("direct_qa_legacy_recipe_migration_failed", error);
+          }
+          break;
+        }
+      }
       let result: QaPilotResult;
       if (!approvedRecipe) {
         result = await runQaPilotAgent(pilotInput);
