@@ -1,4 +1,5 @@
 import type { Express, Request } from "express";
+import { logError } from "./_core/logger";
 import crypto from "node:crypto";
 import { ENV } from "./_core/env";
 import { getTestExecutionControlCheckpoint, updateTestExecutionProgress, upsertTestExecution } from "./db";
@@ -62,7 +63,7 @@ export function registerTestExecutionRoutes(app: Express): void {
         res.status(503).json({ error: "Banco de dados indisponível." });
         return;
       }
-      console.error("[qa-test-execution-control] error:", error);
+      logError("qa_test_execution_control_failed", error);
       res.status(500).json({ error: `Falha ao consultar controle: ${message}` });
     }
   });
@@ -103,7 +104,7 @@ export function registerTestExecutionRoutes(app: Express): void {
         res.status(503).json({ error: "Banco de dados indisponível." });
         return;
       }
-      console.error("[qa-test-execution-progress] error:", error);
+      logError("qa_test_execution_progress_failed", error);
       res.status(500).json({ error: `Falha ao atualizar progresso: ${message}` });
     }
   });
@@ -149,7 +150,7 @@ export function registerTestExecutionRoutes(app: Express): void {
         });
         return;
       }
-      console.error("[qa-test-executions] error:", error);
+      logError("qa_test_execution_persistence_failed", error);
       res.status(500).json({
         error: `Falha ao persistir execução: ${message}`,
       });

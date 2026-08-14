@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { classifyScenarioReliability } from "./reliabilityReportService";
+import { sanitizeSensitiveText } from "./_core/sensitiveData";
 
 export type AgentMemoryCategory =
   | "REGRA_NEGOCIO"
@@ -55,13 +56,8 @@ function optionalId(value: unknown): number | undefined {
 
 function redact(value: string | undefined): string | undefined {
   if (!value) return undefined;
-  return value
+  return sanitizeSensitiveText(value)
     .replace(/<[^>]*>/g, " ")
-    .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/gi, "Bearer [REDACTED]")
-    .replace(
-      /\b(password|senha|token|authorization|api[_-]?key|secret)\b\s*[:=]\s*([^\s,;]+)/gi,
-      "$1=[REDACTED]",
-    )
     .replace(/[\u0000-\u001f\u007f]/g, " ")
     .replace(/\s+/g, " ")
     .trim()

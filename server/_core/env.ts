@@ -2,7 +2,10 @@ export const ENV = {
   appId: process.env.VITE_APP_ID ?? "",
   cookieSecret: process.env.JWT_SECRET ?? "",
   credentialEncryptionKey:
-    process.env.CREDENTIAL_ENCRYPTION_KEY ?? process.env.JWT_SECRET ?? "",
+    process.env.CREDENTIAL_ENCRYPTION_KEY ??
+    (process.env.NODE_ENV === "production"
+      ? ""
+      : (process.env.JWT_SECRET ?? "")),
   databaseUrl: process.env.DATABASE_URL ?? "",
   oAuthServerUrl: process.env.OAUTH_SERVER_URL ?? "",
   ownerOpenId: process.env.OWNER_OPEN_ID ?? "",
@@ -28,4 +31,5 @@ export const ENV = {
   trustProxy: process.env.TRUST_PROXY,
   shutdownTimeoutMs: Number(process.env.SHUTDOWN_TIMEOUT_MS || 10_000),
   jsonBodyLimit: process.env.JSON_BODY_LIMIT ?? "10mb",
+  allowManualTestUrls: process.env.ALLOW_MANUAL_TEST_URLS === "true",
 };

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Express, Request } from "express";
+import { logError } from "./_core/logger";
 import { ENV } from "./_core/env";
 import {
   buildReliabilityReport,
@@ -168,7 +169,7 @@ export function registerReliabilityReportRoutes(app: Express): void {
         res.status(400).json({ error: message });
         return;
       }
-      console.error("[qa-reliability-report] error:", error);
+      logError("qa_reliability_report_failed", error);
       res.status(500).json({
         error: `Falha ao gerar relatório de confiabilidade: ${message}`,
       });

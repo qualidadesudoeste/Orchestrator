@@ -10,6 +10,7 @@ const validEnvironment = {
   DATABASE_URL: "mysql://app:strong-db-value@mysql:3306/orchestrator",
   JWT_SECRET: "jwt_4f8ec97ca6754a75a084ff49d7af99ba",
   QA_AGENT_API_TOKEN: "qa_9fb2c3a8dddf4ca19ac5ce192aaec936",
+  CREDENTIAL_ENCRYPTION_KEY: "cred_31d259c42eff443ab605ec2fcbde6212",
   ORCHESTRATOR_PUBLIC_URL: "https://qa.example.org",
   BUILT_IN_FORGE_API_KEY: "configured",
 } satisfies NodeJS.ProcessEnv;
@@ -24,9 +25,17 @@ describe("validação do ambiente de produção", () => {
       ...validEnvironment,
       JWT_SECRET: "curto",
       QA_AGENT_API_TOKEN: "curto",
+      CREDENTIAL_ENCRYPTION_KEY: "curto",
       ORCHESTRATOR_PUBLIC_URL: "http://qa.example.org",
     });
-    expect(result.errors).toHaveLength(4);
+    expect(result.errors).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("JWT_SECRET"),
+        expect.stringContaining("QA_AGENT_API_TOKEN"),
+        expect.stringContaining("CREDENTIAL_ENCRYPTION_KEY"),
+        expect.stringContaining("ORCHESTRATOR_PUBLIC_URL"),
+      ])
+    );
   });
 
   it("não bloqueia o ambiente de desenvolvimento", () => {
@@ -38,7 +47,7 @@ describe("validação do ambiente de produção", () => {
 
   it("falha cedo quando a configuração de produção é inválida", () => {
     expect(() =>
-      assertProductionEnvironment({ NODE_ENV: "production" }),
+      assertProductionEnvironment({ NODE_ENV: "production" })
     ).toThrow("Configuração de produção inválida");
   });
 

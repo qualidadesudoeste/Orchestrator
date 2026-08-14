@@ -1,4 +1,6 @@
 import { ENV } from "./env";
+import { sanitizeSensitiveData, sanitizeSensitiveText } from "./sensitiveData";
+import { logWarn } from "./logger";
 import { getActiveAiProviderSetting } from "../db";
 import { decryptCredential } from "../credentialCrypto";
 
@@ -273,7 +275,7 @@ const primaryProvider = async (): Promise<LlmProviderConfig> => {
       };
     }
   } catch (error) {
-    console.warn("[LLM] Não foi possível ler o provedor global; usando o .env.", error);
+    logWarn("llm_provider_database_read_failed", { error });
   }
   return environmentPrimaryProvider();
 };
@@ -396,17 +398,21 @@ const fetchWithBackoff = async (
       } catch {
         // Body already settled; nothing to clean up.
       }
-      console.warn(
-        `LLM request retry ${attempt + 1}/${RETRY_MAX_RETRIES} after status ${response.status}`
-      );
+      logWarn("llm_request_retry", {
+        attempt: attempt + 1,
+        maxAttempts: RETRY_MAX_RETRIES,
+        status: response.status,
+      });
       await sleep(computeBackoffDelay(attempt, retryAfterMs));
     } catch (error) {
       lastError = error;
       if (error instanceof Error && error.name === "AbortError") throw error;
       if (attempt === RETRY_MAX_RETRIES) throw error;
-      console.warn(
-        `LLM request retry ${attempt + 1}/${RETRY_MAX_RETRIES} after network error`
-      );
+      logWarn("llm_request_retry", {
+        attempt: attempt + 1,
+        maxAttempts: RETRY_MAX_RETRIES,
+        reason: "network_error",
+      });
       await sleep(computeBackoffDelay(attempt));
     }
   }
@@ -440,7 +446,7 @@ async function invokeProvider(
   } = params;
 
   const payload: Record<string, unknown> = {
-    messages: messages.map(normalizeMessage),
+    messages: sanitizeSensitiveData(messages.map(normalizeMessage)),
   };
 
   const resolvedModel = model || provider.model;
@@ -533,7 +539,7 @@ async function invokeProvider(
   if (!response.ok) {
     const errorText = await response.text();
     throw new Error(
-      `LLM invoke failed: ${response.status} ${response.statusText} – ${errorText}`
+      `LLM invoke failed: ${response.status} ${response.statusText} - ${sanitizeSensitiveText(errorText)}`
     );
   }
 
@@ -546,7 +552,7 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
   } catch (primaryError) {
     const fallback = fallbackProvider();
     if (!fallback) throw primaryError;
-    console.warn("LLM local indisponível; tentando o provedor de fallback configurado.");
+    logWarn("llm_primary_unavailable_using_fallback", { error: primaryError });
     return invokeProvider({ ...params, model: fallback.model }, fallback);
   }
 }

@@ -5,6 +5,7 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { ENV } from "./_core/env";
+import { logError } from "./_core/logger";
 
 type EvidenceDocumentData = {
   execution_id: string;
@@ -184,7 +185,7 @@ export function registerEvidenceDocxRoutes(app: Express): void {
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Falha desconhecida.";
-      console.error("[qa-evidence-docx] error:", error);
+      logError("qa_evidence_docx_failed", error);
       res.status(500).json({ error: `Falha ao gerar evidências: ${message}` });
     }
   });
