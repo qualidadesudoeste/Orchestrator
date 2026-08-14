@@ -19,6 +19,8 @@
     "agent:resume": "tsx automation/agent-pilot/resume-integrated-smoke.ts",
     "agent:status": "tsx automation/agent-pilot/execution-status.ts",
     "agent:worker-memory": "tsx automation/agent-pilot/local-worker-memory.ts",
+    "sandbox:smoke": "node automation/qa-sandbox/smoke.cjs",
+    "sandbox:agent-smoke": "tsx automation/qa-sandbox/agent-smoke.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:push": "npm run db:generate && npm run db:migrate",
