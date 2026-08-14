@@ -2,8 +2,9 @@
 
 Data: 12/08/2026
 
-Referência: execução 14 do projeto CLE. O piloto não alterou o histórico nem os
-resultados salvos no Orchestrator.
+Referência: execução histórica de um projeto de homologação. O piloto não
+alterou o histórico nem os resultados salvos no Orchestrator. Os nomes do
+cliente e do sistema foram omitidos porque não fazem parte do produto.
 
 ## Resultados
 

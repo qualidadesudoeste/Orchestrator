@@ -67,22 +67,16 @@ preenchimento, captura e reutilização dos valores.
 
 ## Execução local
 
-Repositório principal:
+Repositório principal e runtime (pasta local não sincronizada):
 
 ```text
-G:\Meu Drive\Documentos Jéssica\PC\Codex\Orchestrator\orchestrator-platform
-```
-
-Cópia de runtime:
-
-```text
-C:\Users\jessi\AppData\Local\Orchestrator\orchestrator-platform-runtime
+C:\Desenvolvimento\RPA\orchestrator-platform
 ```
 
 Comandos:
 
 ```powershell
-npm install
+npm ci
 npm run db:push
 npm run check
 npm test
@@ -102,20 +96,18 @@ A aplicação local fica em `http://localhost:3000`.
 ## Validação atual
 
 - TypeScript sem erros.
-- 85 testes automatizados aprovados e 1 teste de integração opcional ignorado.
+- Testes automatizados, typecheck e build executados antes da publicação.
 - Build de produção concluído.
 - Servidor local disponível em `http://localhost:3000`.
-- Ciclo real COGEL validado em 13/08/2026 pela execução
-  `web-1786629213598-c3415c0d`: login, cenário literal, screenshot, memória,
-  relatório HTML e DOCX concluídos com status `PASSOU`.
+- A sandbox neutra em `automation/qa-sandbox` valida cenário a cenário a
+  navegação, formulário, estado e download, sem depender de sistema de cliente.
 
 ## Próximas prioridades
 
-1. Repetir o plano Salvador Segura para validar criação/captura automática de
-   dados e identificar quais estados temporais dependem de suporte do sistema alvo.
+1. Executar `npm run sandbox:smoke` em cada alteração do executor.
 2. Executar pela interface um cenário já aprovado para medir a economia real
    da receita (esperado: uma chamada curta, em vez do loop de dezenas de chamadas).
 3. Persistir e exibir tokens, custo, duração e modo (`AGENT`/`APPROVED_RECIPE`)
    por cenário no dashboard.
-4. Validar os pools `PUBLIC`, `COGEL` e `SEFAZ` com concorrência real.
+4. Validar os pools de rede configurados por cada projeto com concorrência real.
 5. Publicar as alterações revisadas no GitHub.
