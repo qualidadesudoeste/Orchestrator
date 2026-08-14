@@ -29,4 +29,9 @@ describe("sanitizacao central", () => {
       safeErrorMessage(new Error("Authorization: Bearer abc.def"))
     ).not.toContain("abc.def");
   });
+
+  it("não confunde timestamp de ID de execução com telefone", () => {
+    const filepath = "C:/artifacts/web-1786741270010-f3e2c18e/exp-01-trace.json";
+    expect(sanitizeSensitiveText(filepath)).toBe(filepath);
+  });
 });
