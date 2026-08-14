@@ -3,6 +3,7 @@ import {
   approvedRecipeLearning,
   createApprovedAutomationRecipe,
   findApprovedAutomationRecipe,
+  legacyScenarioFingerprint,
   scenarioFingerprint,
 } from "./approvedAutomationService";
 import type { QaPilotResult, QaPilotTraceEvent } from "./qaPilotAgent";
@@ -51,6 +52,19 @@ describe("receitas de automação aprovadas", () => {
     expect(findApprovedAutomationRecipe([learning], `${gherkin}\nE vejo detalhes`)).toBeUndefined();
     expect(learning.fingerprint).toHaveLength(64);
     expect(recipe.scenarioFingerprint).toBe(scenarioFingerprint(gherkin));
+  });
+
+  it("mantém o fingerprint quando mudam apenas título, comentário ou ID", () => {
+    const decorated = [
+      "# observação editorial",
+      "Cenário: Outro título",
+      "Dado que estou autenticado",
+      "Quando pesquiso X",
+      "Então vejo X",
+      "# ID: CT-999 | Tipo: Regressão",
+    ].join("\n");
+    expect(scenarioFingerprint(decorated)).toBe(scenarioFingerprint(gherkin));
+    expect(legacyScenarioFingerprint(decorated)).not.toBe(legacyScenarioFingerprint(gherkin));
   });
 
   it("não aprova receita de uma execução falha", () => {

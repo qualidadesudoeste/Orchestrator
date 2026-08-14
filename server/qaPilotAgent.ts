@@ -142,6 +142,16 @@ export type QaPilotResult = {
   executionPlan?: ExecutableScenarioPlan;
 };
 
+export type ApprovedRecipeReplayOutcome =
+  | { kind: "NOT_APPLICABLE"; reason: string }
+  | { kind: "PASSED"; result: QaPilotResult }
+  | {
+      kind: "FAILED";
+      reason: string;
+      mayHaveSideEffects: boolean;
+      result: QaPilotResult;
+    };
+
 export type ToolExecution = { output: unknown; final?: QaPilotFinal };
 
 export interface QaPilotToolRuntime {
@@ -236,6 +246,46 @@ function evidenceFromTrace(trace: QaPilotTraceEvent[]): string[] {
   return trace.filter(event => event.ok && event.tool === "browser_screenshot")
     .map(event => String((event.result as { filepath?: unknown } | null)?.filepath ?? ""))
     .filter(Boolean);
+}
+
+const RECIPE_SIDE_EFFECT_TOOLS = new Set([
+  "browser_click_semantic",
+  "browser_check_semantic",
+  "browser_fill_semantic",
+  "browser_select_semantic",
+  "browser_fill_test_data_semantic",
+  "browser_click_and_download",
+  "browser_fill_visible_form",
+  "browser_submit_form",
+  "browser_search_no_match",
+  "browser_press",
+]);
+
+function recipeMayHaveSideEffects(trace: QaPilotTraceEvent[]): boolean {
+  return trace.some(event => event.ok && RECIPE_SIDE_EFFECT_TOOLS.has(event.tool));
+}
+
+function progressSignature(stepCount: number, trace: QaPilotTraceEvent[]): string {
+  const event = [...trace].reverse().find(item => item.tool !== "browser_screenshot");
+  if (!event) return `${stepCount}|NO_TRACE`;
+  const result = event.result && typeof event.result === "object" && !Array.isArray(event.result)
+    ? event.result as Record<string, unknown>
+    : { value: event.result };
+  const action = result.action && typeof result.action === "object" && !Array.isArray(result.action)
+    ? result.action as Record<string, unknown>
+    : undefined;
+  return JSON.stringify({
+    stepCount,
+    tool: event.tool,
+    ok: event.ok,
+    url: result.url,
+    title: result.title,
+    text: String(result.text ?? result.error ?? result.value ?? "").slice(0, 1_200),
+    action: action ? { type: action.type, label: action.label } : undefined,
+    downloaded: result.downloaded,
+    filename: result.filename,
+    bytes: result.bytes,
+  });
 }
 
 export function classifyObservedAbsence(step: QaScenarioStep, observed: unknown): "BLOQUEADO" | "FALHOU" | undefined {
@@ -394,14 +444,20 @@ export async function executeV2Bootstrap(input: QaPilotInput, runtime: QaPilotTo
 /**
  * Reproduz um fluxo previamente aprovado sem deixar o modelo decidir cada
  * clique. Uma chamada curta ao verificador ainda confirma o resultado atual;
- * qualquer divergência devolve undefined para que o executor use o agente.
+ * qualquer divergência produz um resultado explícito. O chamador só pode
+ * recorrer ao agente quando nenhuma ação com possível efeito colateral ocorreu.
  */
 export async function runApprovedAutomationRecipe(
   input: QaPilotInput,
   recipe: ApprovedAutomationRecipe,
   options: { llm?: LlmInvoker; runtime?: QaPilotToolRuntime } = {},
-): Promise<QaPilotResult | undefined> {
-  if (!input.environments.length || !recipe.actions.length) return undefined;
+): Promise<ApprovedRecipeReplayOutcome> {
+  if (!input.environments.length) {
+    return { kind: "NOT_APPLICABLE", reason: "Nenhum ambiente foi informado para o replay." };
+  }
+  if (!recipe.actions.length) {
+    return { kind: "NOT_APPLICABLE", reason: "A receita aprovada não contém ações." };
+  }
   const scenarioContract = parseGherkinScenarioSteps(input.gherkin);
   await fs.mkdir(input.outputDirectory, { recursive: true });
   const runtime = options.runtime ?? new PlaywrightPilotRuntime(input);
@@ -422,6 +478,48 @@ export async function runApprovedAutomationRecipe(
     requiredData: [],
     risks: ["A interface pode ter mudado desde a aprovação desta receita."],
   };
+  const failedOutcome = async (reason: string): Promise<ApprovedRecipeReplayOutcome> => {
+    const trace = runtime.getTrace();
+    const mayHaveSideEffects = recipeMayHaveSideEffects(trace);
+    const steps: QaScenarioStepResult[] = scenarioContract.map((step, index) => ({
+      ...step,
+      status: index === 0 ? "ERRO_AUTOMACAO" : "NAO_EXECUTADO",
+      observed: index === 0
+        ? `O replay aprovado foi interrompido: ${reason}`.slice(0, 2_000)
+        : "Não executado porque o replay aprovado foi interrompido.",
+      traceFrom: 0,
+      traceTo: trace.length,
+    }));
+    const result: QaPilotResult = {
+      runId: input.runId,
+      scenarioId: input.scenarioId,
+      plan,
+      scenarioContract,
+      final: {
+        status: "ERRO_AUTOMACAO",
+        summary: `Receita aprovada interrompida: ${reason}`.slice(0, 2_000),
+        evidence: evidenceFromTrace(trace),
+        missingPreconditions: [],
+        observedResult: mayHaveSideEffects
+          ? "A tentativa pode ter alterado o sistema; uma nova execução automática foi bloqueada para evitar duplicidade."
+          : "A tentativa não registrou ações com efeito colateral e pode ser retomada pelo agente.",
+        steps,
+      },
+      iterations: trace.length,
+      usage,
+      traceFile: path.join(input.outputDirectory, `${safeFilename(input.scenarioId)}-trace.json`),
+      trace,
+      executionMode: "APPROVED_RECIPE",
+      executionPlan: input.executionPlan,
+    };
+    const safeResult = safePilotResult(input, result);
+    await fs.writeFile(safeResult.traceFile, JSON.stringify({
+      ...safeResult,
+      approvedRecipe: true,
+      replayFailure: { reason, mayHaveSideEffects },
+    }, null, 2), "utf8");
+    return { kind: "FAILED", reason, mayHaveSideEffects, result: safeResult };
+  };
   try {
     let iteration = 0;
     for (const action of recipe.actions) {
@@ -429,10 +527,10 @@ export async function runApprovedAutomationRecipe(
       iteration += 1;
       await runtime.execute(action.tool, action.args, iteration);
       const last = runtime.getTrace().at(-1);
-      if (!last?.ok) return undefined;
+      if (!last?.ok) return await failedOutcome(`A ação ${action.tool} falhou.`);
     }
     await runtime.execute("browser_screenshot", {}, ++iteration);
-    if (!runtime.getTrace().at(-1)?.ok) return undefined;
+    if (!runtime.getTrace().at(-1)?.ok) return await failedOutcome("Não foi possível capturar a evidência final.");
 
     const traceBeforeFinish = runtime.getTrace();
     const lastObservation = [...traceBeforeFinish].reverse().find(event => {
@@ -455,15 +553,17 @@ export async function runApprovedAutomationRecipe(
       missingPreconditions: [],
       steps,
     }, ++iteration);
-    if (!execution.final) return undefined;
+    if (!execution.final) return await failedOutcome("O runtime não aceitou a conclusão do replay.");
     const trace = runtime.getTrace();
     let verifier: QaPilotResult["verifier"];
     try {
       verifier = await verifyFinal(input, plan, execution.final, trace, trackedLlm);
-    } catch {
-      return undefined;
+    } catch (error) {
+      return await failedOutcome(`O verificador ficou indisponível: ${safeErrorMessage(error)}`);
     }
-    if (!verifier.accepted || verifier.correctedStatus !== "PASSOU") return undefined;
+    if (!verifier.accepted || verifier.correctedStatus !== "PASSOU") {
+      return await failedOutcome(`O verificador rejeitou a aprovação: ${verifier.reason}`);
+    }
     const traceFile = path.join(input.outputDirectory, `${safeFilename(input.scenarioId)}-trace.json`);
     const result: QaPilotResult = {
       runId: input.runId,
@@ -481,7 +581,7 @@ export async function runApprovedAutomationRecipe(
     };
     const safeResult = safePilotResult(input, result);
     await fs.writeFile(traceFile, JSON.stringify({ ...safeResult, approvedRecipe: true }, null, 2), "utf8");
-    return safeResult;
+    return { kind: "PASSED", result: safeResult };
   } finally {
     await runtime.close();
   }
@@ -569,6 +669,8 @@ export async function runQaPilotAgent(
 
   let final: QaPilotFinal | undefined;
   let iterations = 0;
+  let progressStepCount = 0;
+  const seenProgressStates = new Map<string, number>();
   try {
     for (iterations = 1; iterations <= maxIterations && !final; iterations++) {
       await waitForExecutionControl(input);
@@ -712,6 +814,48 @@ export async function runQaPilotAgent(
         if (execution.final) {
           final = execution.final;
           break;
+        }
+      }
+      if (!final) {
+        if (stepResults.length !== progressStepCount) {
+          progressStepCount = stepResults.length;
+          seenProgressStates.clear();
+        }
+        const signature = progressSignature(stepResults.length, runtime.getTrace());
+        const visits = (seenProgressStates.get(signature) ?? 0) + 1;
+        seenProgressStates.set(signature, visits);
+        if (visits === 3) {
+          messages.push({
+            role: "user",
+            content: "O estado atual já se repetiu três vezes no mesmo passo. Não repita a ação: use uma estratégia diferente ou registre ERRO_AUTOMACAO/BLOQUEADO com a evidência disponível.",
+          });
+        } else if (visits >= 4) {
+          if (!runtime.getTrace().some(event => event.ok && event.tool === "browser_screenshot")) {
+            await runtime.execute("browser_screenshot", {}, iterations);
+          }
+          const current = scenarioContract[stepResults.length];
+          const stalledStep: QaScenarioStepResult[] = current ? [{
+            ...current,
+            status: "ERRO_AUTOMACAO",
+            observed: "O executor detectou repetição do mesmo estado quatro vezes sem avanço observável e interrompeu o passo.",
+            traceFrom: traceCheckpoint,
+            traceTo: runtime.getTrace().length,
+          }] : [];
+          const remaining = scenarioContract.slice(stepResults.length + stalledStep.length).map(step => ({
+            ...step,
+            status: "NAO_EXECUTADO" as const,
+            observed: "Não executado porque o passo anterior entrou em ciclo sem progresso.",
+            traceFrom: runtime.getTrace().length,
+            traceTo: runtime.getTrace().length,
+          }));
+          final = {
+            status: "ERRO_AUTOMACAO",
+            summary: "O piloto interrompeu um ciclo sem progresso antes do limite global de iterações.",
+            evidence: evidenceFromTrace(runtime.getTrace()),
+            missingPreconditions: [],
+            observedResult: "O mesmo estado observável se repetiu quatro vezes no passo atual.",
+            steps: [...stepResults, ...stalledStep, ...remaining],
+          };
         }
       }
     }

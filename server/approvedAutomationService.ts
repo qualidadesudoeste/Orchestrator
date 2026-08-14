@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type { AgentMemoryLearning, AgentMemoryScope } from "./agentMemoryService";
 import type { QaPilotResult, QaPilotTraceEvent } from "./qaPilotAgent";
+import { compileSingleGherkinScenario } from "./automation-v2";
 
 export const APPROVED_RECIPE_TITLE_PREFIX = "Receita aprovada:";
 export const APPROVED_RECIPE_VERSION = 1;
@@ -30,6 +31,15 @@ function normalized(value: string): string {
 }
 
 export function scenarioFingerprint(gherkin: string): string {
+  const scenario = compileSingleGherkinScenario(gherkin);
+  const executableContract = scenario.steps.map(step => ({
+    keyword: step.keyword,
+    text: normalized(step.text),
+  }));
+  return crypto.createHash("sha256").update(JSON.stringify(executableContract)).digest("hex");
+}
+
+export function legacyScenarioFingerprint(gherkin: string): string {
   return crypto.createHash("sha256").update(normalized(gherkin)).digest("hex");
 }
 
@@ -149,13 +159,13 @@ export function findApprovedAutomationRecipe(
   memories: Array<{ title: string; content: string; status?: string }>,
   gherkin: string,
 ): ApprovedAutomationRecipe | undefined {
-  const expected = scenarioFingerprint(gherkin);
+  const expected = new Set([scenarioFingerprint(gherkin), legacyScenarioFingerprint(gherkin)]);
   for (const memory of memories) {
     if (!memory.title.startsWith(APPROVED_RECIPE_TITLE_PREFIX)) continue;
     try {
       const recipe = JSON.parse(memory.content) as ApprovedAutomationRecipe;
       if (recipe.version === APPROVED_RECIPE_VERSION &&
-          recipe.scenarioFingerprint === expected && Array.isArray(recipe.actions)) return recipe;
+          expected.has(recipe.scenarioFingerprint) && Array.isArray(recipe.actions)) return recipe;
     } catch {
       // Memórias legadas ou corrompidas não impedem a execução inteligente.
     }

@@ -27,6 +27,7 @@ import {
   approvedRecipeLearning,
   createApprovedAutomationRecipe,
   findApprovedAutomationRecipe,
+  legacyScenarioFingerprint,
   scenarioFingerprint,
 } from "./approvedAutomationService";
 import { normalizeTestExecutionPayload } from "./testExecutionService";
@@ -34,7 +35,7 @@ import { generateReliabilityReportArtifact } from "./reliabilityReportRoutes";
 import { generateEvidenceDocxArtifact } from "./evidenceDocxRoutes";
 import type { QueuedExecutionDispatchPayload } from "./executionQueueTypes";
 import { buildAutomaticTestData } from "./automaticTestDataService";
-import { logError } from "./_core/logger";
+import { logError, logWarn } from "./_core/logger";
 import { compileGherkinScenarios, compileSingleGherkinScenario, resolveScenarioPlan } from "./automation-v2";
 
 export type DirectScenario = {
@@ -340,17 +341,49 @@ export async function runDirectQaExecution(
         },
       };
       const recipeScenarioFingerprint = scenarioFingerprint(scenario.gherkin);
-      const recipeMemory = await getAgentMemoryByFingerprint(
-        memoryScope.scopeKey,
-        approvedRecipeMemoryFingerprint(memoryScope.scopeKey, recipeScenarioFingerprint),
-      );
-      const approvedRecipe = recipeMemory
-        ? findApprovedAutomationRecipe([recipeMemory], scenario.gherkin)
+      const legacyRecipeScenarioFingerprint = legacyScenarioFingerprint(scenario.gherkin);
+      const recipeMemoryFingerprints = Array.from(new Set([
+        recipeScenarioFingerprint,
+        legacyRecipeScenarioFingerprint,
+      ])).map(fingerprint => approvedRecipeMemoryFingerprint(memoryScope.scopeKey, fingerprint));
+      const recipeMemories = (await Promise.all(recipeMemoryFingerprints.map(fingerprint =>
+        getAgentMemoryByFingerprint(memoryScope.scopeKey, fingerprint),
+      ))).filter(Boolean) as Array<{ title: string; content: string; status?: string }>;
+      const approvedRecipe = recipeMemories.length
+        ? findApprovedAutomationRecipe(recipeMemories, scenario.gherkin)
         : undefined;
-      const reusedResult = approvedRecipe
-        ? await runApprovedAutomationRecipe(pilotInput, approvedRecipe)
-        : undefined;
-      const result = reusedResult ?? await runQaPilotAgent(pilotInput);
+      let result: QaPilotResult;
+      if (!approvedRecipe) {
+        result = await runQaPilotAgent(pilotInput);
+      } else {
+        const replay = await runApprovedAutomationRecipe(pilotInput, approvedRecipe);
+        if (replay.kind === "PASSED") {
+          result = replay.result;
+        } else if (replay.kind === "FAILED" && replay.mayHaveSideEffects) {
+          logWarn("direct_qa_recipe_replay_stopped_after_side_effect", {
+            externalExecutionId,
+            scenarioId: scenario.id,
+            reason: replay.reason,
+          });
+          result = replay.result;
+        } else {
+          logWarn("direct_qa_recipe_fallback", {
+            externalExecutionId,
+            scenarioId: scenario.id,
+            reason: replay.reason,
+          });
+          const replayTrace = replay.kind === "FAILED" ? replay.result.trace : [];
+          const agentResult = await runQaPilotAgent(pilotInput);
+          result = replayTrace.length ? {
+            ...agentResult,
+            trace: [...replayTrace, ...agentResult.trace],
+            executionMode: "HYBRID_V2",
+          } : agentResult;
+          if (replayTrace.length) {
+            await fs.writeFile(result.traceFile, JSON.stringify(result, null, 2), "utf8");
+          }
+        }
+      }
       const normalizedResult = executionResult(scenario, result, Date.now() - scenarioStartedAt, environments[0]);
       results.push(normalizedResult);
       await persistScenarioMemory(externalExecutionId, body, normalizedResult);

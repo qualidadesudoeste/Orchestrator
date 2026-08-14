@@ -328,6 +328,29 @@ describe("contrato executável do cenário", () => {
     expect(result.final.steps.map(step => step.status)).toEqual(["PASSOU", "FALHOU", "NAO_EXECUTADO"]);
   });
 
+  it("interrompe repetição sem progresso antes do limite global", async () => {
+    let call = 0;
+    const llm = async () => call++ === 0
+      ? planResponse()
+      : callTool(`observe-${call}`, "browser_observe");
+    const { runtime } = runtimeDouble();
+    const result = await runQaPilotAgent({
+      runId: "no-progress",
+      scenarioId: "CT-LOOP",
+      title: "Buscar item",
+      gherkin: scenario(),
+      environments: [{ name: "Teste", url: "https://example.test" }],
+      outputDirectory: pathForTest(),
+      maxIterations: 18,
+    }, { llm, runtime, verify: false });
+    expect(result.final.status).toBe("ERRO_AUTOMACAO");
+    expect(result.final.summary).toContain("ciclo sem progresso");
+    expect(result.iterations).toBeLessThan(18);
+    expect(result.final.steps.map(step => step.status)).toEqual([
+      "ERRO_AUTOMACAO", "NAO_EXECUTADO", "NAO_EXECUTADO",
+    ]);
+  });
+
   it("encerra o processo real quando o controle solicita cancelamento", async () => {
     const { runtime } = runtimeDouble();
     await expect(runQaPilotAgent({
@@ -364,12 +387,42 @@ describe("contrato executável do cenário", () => {
       environments: [{ name: "Teste", url: "https://example.test" }],
       outputDirectory: pathForTest(),
     }, recipe, { llm, runtime });
-    expect(result?.final.status).toBe("PASSOU");
-    expect(result?.usage.calls).toBe(1);
+    expect(result.kind).toBe("PASSED");
+    if (result.kind !== "PASSED") throw new Error("Replay deveria ter sido aprovado.");
+    expect(result.result.final.status).toBe("PASSOU");
+    expect(result.result.usage.calls).toBe(1);
     expect(calls).toBe(1);
     expect(trace.map(item => item.tool)).toEqual([
       "browser_login", "browser_click_semantic", "browser_screenshot", "finish",
     ]);
+  });
+
+  it("não reinicia o agente quando o replay rejeitado pode ter produzido efeito colateral", async () => {
+    const { runtime } = runtimeDouble();
+    const recipe: ApprovedAutomationRecipe = {
+      version: 1,
+      scenarioFingerprint: "fingerprint",
+      scenarioId: "CT-EXP",
+      scenarioTitle: "Exportar",
+      sourceExecutionId: "anterior",
+      actions: [{ tool: "browser_click_and_download", args: { label: "Exportar" } }],
+    };
+    const outcome = await runApprovedAutomationRecipe({
+      runId: "replay-rejected", scenarioId: "CT-EXP", title: "Exportar", gherkin: scenario(),
+      environments: [{ name: "Teste", url: "https://example.test" }],
+      outputDirectory: pathForTest(),
+    }, recipe, {
+      runtime,
+      llm: async () => response({
+        role: "assistant",
+        content: JSON.stringify({ accepted: false, reason: "Evidência inconclusiva.", correctedStatus: "ERRO_AUTOMACAO" }),
+      }),
+    });
+    expect(outcome.kind).toBe("FAILED");
+    if (outcome.kind !== "FAILED") throw new Error("Replay deveria ter sido rejeitado.");
+    expect(outcome.mayHaveSideEffects).toBe(true);
+    expect(outcome.result.final.status).toBe("ERRO_AUTOMACAO");
+    expect(outcome.result.final.observedResult).toContain("nova execução automática foi bloqueada");
   });
 });
 
