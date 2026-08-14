@@ -33,6 +33,11 @@ Registre `node dist/worker.js` em um gerenciador de serviços Windows de sua
 preferência, com diretório de trabalho na raiz do projeto, reinício automático
 e uma conta com apenas as permissões necessárias às VPNs e aos artefatos.
 
+Para uma instalação local com o Agendador de Tarefas, use
+`run-production-process.ps1 -Mode api` e `run-production-process.ps1 -Mode worker`.
+O script fixa `NODE_ENV=production`, resolve a raiz do checkout sem depender do
+diretório atual e mantém logs separados em `artifacts/runtime`.
+
 ## Empacotamento
 
 `npm run build` produz entradas independentes:
