@@ -93,7 +93,7 @@ import {
   queuePoolForProvider,
   type QueuedExecutionDispatchPayload,
 } from "./executionQueueTypes";
-import { testQaProvisioningConnection } from "./automation-v2";
+import { normalizeGherkinStepText, testQaProvisioningConnection } from "./automation-v2";
 import { logError } from "./_core/logger";
 import {
   assertConfiguredTargetUrl,
@@ -1233,9 +1233,9 @@ ${sourceContext ? `\nÍNDICE TÉCNICO DO PROJETO:\n${sourceContext}` : ""}`;
         const executionId = `web-${Date.now()}-${randomUUID().slice(0, 8)}`;
         const scenariosGherkin = input.cases.map(testCase => [
           `Cenário: ${testCase.titulo}`,
-          `  Dado ${testCase.dado}`,
-          `  Quando ${testCase.quando}`,
-          `  Então ${testCase.entao}`,
+          `  Dado ${normalizeGherkinStepText("DADO", testCase.dado)}`,
+          `  Quando ${normalizeGherkinStepText("QUANDO", testCase.quando)}`,
+          `  Então ${normalizeGherkinStepText("ENTAO", testCase.entao)}`,
           `  # Resultado esperado: ${testCase.resultado_esperado}`,
           `  # ID: ${testCase.id} | Tipo: ${testCase.tipo} | Prioridade: ${testCase.prioridade}`,
         ].join("\n")).join("\n\n");

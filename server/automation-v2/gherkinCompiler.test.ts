@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { compileGherkinScenarios, compileSingleGherkinScenario } from "./gherkinCompiler";
+import { compileGherkinScenarios, compileSingleGherkinScenario, normalizeGherkinStepText } from "./gherkinCompiler";
 
 describe("compilador Gherkin V2", () => {
   it("usa a gramática oficial e preserva continuações e linhas", () => {
@@ -31,5 +31,12 @@ describe("compilador Gherkin V2", () => {
       "| beta  |",
     ].join("\n"));
     expect(scenarios.map(item => item.title)).toEqual(["Buscar alfa", "Buscar beta"]);
+  });
+
+  it("remove somente o prefixo Gherkin duplicado do campo correspondente", () => {
+    expect(normalizeGherkinStepText("DADO", "Dado analista autenticado")).toBe("analista autenticado");
+    expect(normalizeGherkinStepText("QUANDO", "Quando exportar")).toBe("exportar");
+    expect(normalizeGherkinStepText("ENTAO", "Então baixa o arquivo")).toBe("baixa o arquivo");
+    expect(normalizeGherkinStepText("DADO", "quando houver dados")).toBe("quando houver dados");
   });
 });

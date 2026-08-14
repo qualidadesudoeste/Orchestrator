@@ -15,6 +15,15 @@ function keywordFromType(type?: string): BddKeyword {
   return "ENTAO";
 }
 
+export function normalizeGherkinStepText(keyword: BddKeyword, value: string): string {
+  const prefix = keyword === "DADO"
+    ? /^(?:Dado|Dada|Dados|Dadas|Given)\s+/i
+    : keyword === "QUANDO"
+      ? /^(?:Quando|When)\s+/i
+      : /^(?:Então|Entao|Then)\s+/i;
+  return value.trim().replace(prefix, "").trim();
+}
+
 function inferIntent(keyword: BddKeyword, text: string): StepIntent {
   const value = text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
   if (/\b(login|autenticad|autenticar|credencia|sessao)\b/.test(value)) return "AUTHENTICATE";
