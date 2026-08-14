@@ -1,5 +1,7 @@
 import os from "node:os";
 import { decryptCredential } from "./credentialCrypto";
+import { logError } from "./_core/logger";
+import { safeErrorMessage } from "./_core/sensitiveData";
 import {
   claimExecutionJob,
   ensureLocalExecutionWorker,
@@ -12,15 +14,14 @@ import {
   returnExecutionJobToQueue,
   updateExecutionWorkerHeartbeat,
   updateVpnProfile,
-  type ExecutionQueuePool,
 } from "./db";
 import { ensureVpnConnection, VpnManualActionRequiredError } from "./vpnService";
-import {
-  runDirectQaExecution,
-  type QueuedExecutionDispatchPayload,
-} from "./directQaExecutionService";
-
-export type { QueuedExecutionDispatchPayload } from "./directQaExecutionService";
+import { runDirectQaExecution } from "./directQaExecutionService";
+import type {
+  ExecutionQueuePool,
+  QueuedExecutionDispatchPayload,
+} from "./executionQueueTypes";
+export { queuePoolForProvider } from "./executionQueueTypes";
 
 type CpuSnapshot = { idle: number; total: number };
 
@@ -44,11 +45,6 @@ async function resourceSnapshot() {
     freeMemoryMb: Math.round(os.freemem() / 1024 / 1024),
     cpuPercent: Math.max(0, Math.min(100, Math.round((1 - idleDelta / totalDelta) * 100))),
   };
-}
-
-export function queuePoolForProvider(provider: string | null | undefined): ExecutionQueuePool {
-  if (provider === "COGEL" || provider === "SEFAZ" || provider === "OUTRA") return provider;
-  return "PUBLIC";
 }
 
 export function workerCanRunPool(
@@ -82,7 +78,7 @@ async function dispatchClaimedJob(job: Awaited<ReturnType<typeof listQueuedExecu
     };
     await runDirectQaExecution(job.externalExecutionId, payload);
   } catch (error) {
-    const reason = error instanceof Error ? error.message : "Falha desconhecida ao iniciar o agente.";
+    const reason = safeErrorMessage(error || "Falha desconhecida ao iniciar o agente.");
     if (error instanceof VpnManualActionRequiredError) {
       await pauseExecutionForManualVpn(
         job.externalExecutionId,
@@ -165,7 +161,7 @@ export async function processExecutionQueueOnce() {
       cpuPercent: resources.cpuPercent,
     });
   } catch (error) {
-    console.error("[execution-queue] scheduler tick failed:", error);
+    logError("execution_queue_tick_failed", error);
   } finally {
     tickRunning = false;
   }
@@ -179,7 +175,6 @@ export function startExecutionQueueScheduler() {
   if (timer) return;
   wakeExecutionQueue();
   timer = setInterval(() => void processExecutionQueueOnce(), 5_000);
-  timer.unref();
 }
 
 export function stopExecutionQueueScheduler() {

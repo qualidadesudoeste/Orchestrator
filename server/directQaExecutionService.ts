@@ -32,14 +32,10 @@ import {
 import { normalizeTestExecutionPayload } from "./testExecutionService";
 import { generateReliabilityReportArtifact } from "./reliabilityReportRoutes";
 import { generateEvidenceDocxArtifact } from "./evidenceDocxRoutes";
-import type { VpnRequirement } from "./vpnService";
+import type { QueuedExecutionDispatchPayload } from "./executionQueueTypes";
 import { buildAutomaticTestData } from "./automaticTestDataService";
+import { logError } from "./_core/logger";
 import { compileGherkinScenarios, compileSingleGherkinScenario, resolveScenarioPlan } from "./automation-v2";
-
-export type QueuedExecutionDispatchPayload = {
-  vpnRequirement: (VpnRequirement & { globalProfileId?: number | null }) | null;
-  webhookBody: Record<string, unknown>;
-};
 
 export type DirectScenario = {
   index: number;
@@ -271,7 +267,7 @@ async function persistScenarioMemory(
     });
     await upsertAgentMemories(learnings);
   } catch (error) {
-    console.error("[direct-qa-executor] Falha nao bloqueante ao salvar memoria:", error);
+    logError("direct_qa_memory_save_failed", error);
   }
 }
 
@@ -372,7 +368,7 @@ export async function runDirectQaExecution(
             externalScenarioId: scenario.id,
           }, learnedRecipe)]);
         } catch (error) {
-          console.error("[direct-qa-executor] Falha nao bloqueante ao salvar receita aprovada:", error);
+          logError("direct_qa_recipe_save_failed", error);
         }
       }
       await updateTestExecutionProgress({
@@ -414,12 +410,12 @@ export async function runDirectQaExecution(
   try {
     persistedPayload = await generateReliabilityReportArtifact(basePayload);
   } catch (error) {
-    console.error("[direct-qa-executor] Falha não bloqueante ao gerar relatório:", error);
+    logError("direct_qa_reliability_report_failed", error);
   }
   try {
     persistedPayload = await generateEvidenceDocxArtifact(persistedPayload as Record<string, any>);
   } catch (error) {
-    console.error("[direct-qa-executor] Falha nao bloqueante ao gerar DOCX:", error);
+    logError("direct_qa_docx_failed", error);
   }
   await upsertTestExecution(normalizeTestExecutionPayload(persistedPayload));
   return { cancelled: false, results: results.length };
