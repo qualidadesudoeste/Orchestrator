@@ -1,22 +1,23 @@
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import NotFound from "@/pages/NotFound";
-import { Route, Switch } from "wouter";
+import { lazy, Suspense } from "react";
+import { Redirect, Route, Switch } from "wouter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ThemeProvider } from "./contexts/ThemeContext";
-import Home from "./pages/Home";
-import { Redirect } from "wouter";
-import WorkspacePage from "./pages/WorkspacePage";
-import HistoryPage from "./pages/HistoryPage";
-import CoordinatorPage from "./pages/CoordinatorPage";
-import UsersPage from "./pages/UsersPage";
-import TrailPage from "./pages/TrailPage";
-import LoginPage from "./pages/LoginPage";
-import QAPlannerPage from "./pages/QAPlannerPage";
-import DashboardPage from "./pages/DashboardPage";
-import ParametersPage from "./pages/ParametersPage";
-import ExecutionQueuePage from "./pages/ExecutionQueuePage";
-import SigTestQueuePage from "./pages/SigTestQueuePage";
+
+const NotFound = lazy(() => import("@/pages/NotFound"));
+const Home = lazy(() => import("./pages/Home"));
+const WorkspacePage = lazy(() => import("./pages/WorkspacePage"));
+const HistoryPage = lazy(() => import("./pages/HistoryPage"));
+const CoordinatorPage = lazy(() => import("./pages/CoordinatorPage"));
+const UsersPage = lazy(() => import("./pages/UsersPage"));
+const TrailPage = lazy(() => import("./pages/TrailPage"));
+const LoginPage = lazy(() => import("./pages/LoginPage"));
+const QAPlannerPage = lazy(() => import("./pages/QAPlannerPage"));
+const DashboardPage = lazy(() => import("./pages/DashboardPage"));
+const ParametersPage = lazy(() => import("./pages/ParametersPage"));
+const ExecutionQueuePage = lazy(() => import("./pages/ExecutionQueuePage"));
+const SigTestQueuePage = lazy(() => import("./pages/SigTestQueuePage"));
 
 function Router() {
   return (
@@ -47,7 +48,15 @@ function App() {
       <ThemeProvider defaultTheme="light">
         <TooltipProvider>
           <Toaster />
-          <Router />
+          <Suspense
+            fallback={
+              <div className="p-6 text-sm text-muted-foreground">
+                Carregando…
+              </div>
+            }
+          >
+            <Router />
+          </Suspense>
         </TooltipProvider>
       </ThemeProvider>
     </ErrorBoundary>
