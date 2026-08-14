@@ -1,11 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Code2, FolderSearch, Globe2, KeyRound, Loader2, Pencil, Plus, ShieldCheck, Trash2 } from "lucide-react";
+import { Code2, FolderSearch, Globe2, KeyRound, Loader2, Pencil, PlugZap, Plus, ShieldCheck, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 const ENVIRONMENT_TYPES = ["PORTAL", "RETAGUARDA", "SITE", "API", "OUTRO"] as const;
@@ -44,10 +44,16 @@ export default function ProjectConfigurationModal({
     sourceCodePath: project.sourceCodePath ?? "",
   });
   const [showEnvironmentForm, setShowEnvironmentForm] = useState(false);
+  const [provisioning, setProvisioning] = useState({ endpointUrl: "", token: "", isActive: false });
   const [editingEnvironmentId, setEditingEnvironmentId] = useState<number | null>(null);
   const [environmentForm, setEnvironmentForm] = useState(emptyEnvironment);
 
   const { data: environments = [], refetch: refetchEnvironments } = trpc.testEnvironments.list.useQuery({ projectId: project.id });
+  const { data: provisioningConfig, refetch: refetchProvisioning } = trpc.projects.provisioningConfig.useQuery({ projectId: project.id });
+  useEffect(() => {
+    if (!provisioningConfig) return;
+    setProvisioning(value => ({ ...value, endpointUrl: provisioningConfig.endpointUrl, isActive: provisioningConfig.isActive, token: "" }));
+  }, [provisioningConfig]);
   const { data: vpnProfiles = [] } = trpc.parameters.vpnProfiles.useQuery();
   const vpnForEnvironment = (vpnProfileId?: number | null) => vpnProfiles.find(vpn => vpn.id === vpnProfileId);
   const updateProject = trpc.projects.update.useMutation({
@@ -62,6 +68,18 @@ export default function ProjectConfigurationModal({
       onUpdated();
       toast.success(`Código analisado: ${data.analyzedFileCount} arquivos úteis.`);
     },
+    onError: error => toast.error(error.message),
+  });
+  const saveProvisioning = trpc.projects.saveProvisioningConfig.useMutation({
+    onSuccess: () => {
+      refetchProvisioning();
+      setProvisioning(value => ({ ...value, token: "" }));
+      toast.success("Ponte QA salva com credencial criptografada.");
+    },
+    onError: error => toast.error(error.message),
+  });
+  const testProvisioning = trpc.projects.testProvisioningConfig.useMutation({
+    onSuccess: data => toast.success(data.message || "Ponte QA conectada."),
     onError: error => toast.error(error.message),
   });
   const createEnvironment = trpc.testEnvironments.create.useMutation({
@@ -161,6 +179,42 @@ export default function ProjectConfigurationModal({
                   {indexSource.isPending ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <FolderSearch className="mr-1.5 h-4 w-4" />} Analisar código
                 </Button>
               </div>
+            </div>
+          </section>
+
+          <section className="rounded-xl border border-emerald-100 bg-emerald-50/40 p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-800"><PlugZap className="h-4 w-4 text-emerald-600" /> Ponte de provisionamento QA</h3>
+                <p className="mt-1 text-xs text-slate-500">Permite ao agente preparar massas complexas, estados temporais, perfis e executar rotinas por uma API segura do sistema testado.</p>
+              </div>
+              {provisioningConfig?.hasToken && <span className="rounded-full bg-emerald-100 px-2 py-1 text-xs text-emerald-700">Token protegido</span>}
+            </div>
+            <div className="mt-4 grid gap-3">
+              <div>
+                <Label className="text-xs">Endpoint da ponte QA</Label>
+                <Input className="mt-1" type="url" value={provisioning.endpointUrl} onChange={event => setProvisioning(value => ({ ...value, endpointUrl: event.target.value }))} placeholder="https://hml.sistema.gov.br/api/qa/provision" />
+              </div>
+              <div>
+                <Label className="text-xs">Token da ponte</Label>
+                <Input className="mt-1" type="password" autoComplete="new-password" value={provisioning.token} onChange={event => setProvisioning(value => ({ ...value, token: event.target.value }))} placeholder={provisioningConfig?.hasToken ? "Vazio mantém o token atual" : "Token opcional"} />
+              </div>
+              <label className="flex items-center gap-2 text-xs text-slate-700">
+                <input type="checkbox" checked={provisioning.isActive} onChange={event => setProvisioning(value => ({ ...value, isActive: event.target.checked }))} />
+                Permitir provisionamento automático durante os testes
+              </label>
+              <div className="flex flex-wrap gap-2">
+                <Button size="sm" disabled={!provisioning.endpointUrl.trim() || saveProvisioning.isPending} onClick={() => saveProvisioning.mutate({
+                  projectId: project.id,
+                  endpointUrl: provisioning.endpointUrl.trim(),
+                  ...(provisioning.token ? { token: provisioning.token } : {}),
+                  isActive: provisioning.isActive,
+                })}>{saveProvisioning.isPending && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />} Salvar ponte QA</Button>
+                <Button size="sm" variant="outline" disabled={!provisioningConfig?.isActive || testProvisioning.isPending} onClick={() => testProvisioning.mutate({ projectId: project.id })}>
+                  {testProvisioning.isPending ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <PlugZap className="mr-1.5 h-4 w-4" />} Testar conexão
+                </Button>
+              </div>
+              <p className="text-[11px] text-slate-500">A ponte recebe somente o ID do cenário e o objetivo da preparação. O token nunca é enviado para a IA nem exibido novamente.</p>
             </div>
           </section>
 

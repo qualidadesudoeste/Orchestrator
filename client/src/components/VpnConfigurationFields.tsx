@@ -124,7 +124,7 @@ export function VpnConfigurationFields({
             <input type="checkbox" checked={value.vpnAutoConnect} onChange={event => update("vpnAutoConnect", event.target.checked)} />
             Preparar e conectar automaticamente antes da automação
           </label>
-          <p className="text-[11px] text-slate-500 sm:col-span-2">O arquivo e as senhas ficam criptografados, não são enviados à IA/n8n e nunca são exibidos novamente. MFA ou aceite no FortiClient ainda podem exigir sua confirmação.</p>
+          <p className="text-[11px] text-slate-500 sm:col-span-2">O arquivo e as senhas ficam criptografados, não são enviados à IA e nunca são exibidos novamente. MFA ou aceite no FortiClient ainda podem exigir sua confirmação.</p>
         </>}
       </div>
     </div>
