@@ -21,8 +21,8 @@ O executor consolida três verificações autorizadas:
 powershell -ExecutionPolicy Bypass -File .\automation\non-functional\start-non-functional-runner.ps1
 ```
 
-O serviço fica em `http://localhost:8940`. O n8n usa
-`http://host.docker.internal:8940`.
+O serviço fica em `http://localhost:8940` e é chamado diretamente pelo
+Orchestrator.
 
 Na primeira execução, o Docker baixa as imagens fixadas do k6 e do ZAP. Os
 relatórios JSON ficam em `artifacts/non-functional/<run_id>`.
@@ -35,4 +35,4 @@ relatórios JSON ficam em `artifacts/non-functional/<run_id>`.
 - ZAP: falha quando encontra alerta de risco alto.
 - axe-core: falha quando encontra violação crítica ou séria.
 
-Os valores podem ser alterados no payload do workflow sem editar código.
+Os valores podem ser alterados no payload da execução sem editar código.

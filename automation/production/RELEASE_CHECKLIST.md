@@ -6,7 +6,7 @@
 - [ ] Domínio de produção definido e certificado HTTPS válido.
 - [ ] Proxy reverso encaminhando `Host`, `X-Forwarded-For` e
   `X-Forwarded-Proto`.
-- [ ] MySQL, n8n e Playwright MCP acessíveis apenas pela rede privada.
+- [ ] MySQL e workers Playwright acessíveis apenas pela rede privada.
 - [ ] Imagem Docker construída e identificada por versão imutável.
 
 ## Configuração
@@ -31,7 +31,7 @@
 - [ ] Auditoria de dependências de produção sem vulnerabilidade alta/crítica.
 - [ ] `/healthz` e `/readyz` respondem 200.
 - [ ] Login, Dashboard e geração de plano passaram no smoke test.
-- [ ] Fluxo n8n executou um cenário controlado.
+- [ ] Executor Playwright direto executou um cenário controlado.
 - [ ] Evidência DOCX e card Markdown foram gerados.
 - [ ] Preflight terminou com resultado `GO`.
 

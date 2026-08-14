@@ -104,7 +104,7 @@ echo "$GHCR_TOKEN" | docker login ghcr.io -u USUARIO --password-stdin
 O container publica por padrão apenas em `127.0.0.1:3000`. Use Nginx, Caddy ou
 o proxy corporativo para TLS, encaminhando `Host`, `X-Forwarded-For` e
 `X-Forwarded-Proto`. Configure `TRUST_PROXY=1` somente quando houver exatamente
-um proxy confiável. Não exponha MySQL, n8n ou Playwright MCP à internet.
+um proxy confiável. Não exponha MySQL nem os workers Playwright à internet.
 
 O arquivo `Caddyfile.example` contém a configuração mínima para HTTPS
 automático. Copie-o para `/etc/caddy/Caddyfile`, substitua o domínio e recarregue
