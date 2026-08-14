@@ -380,7 +380,7 @@ async function verifyFinal(
   const response = await llm({
     model: input.model,
     messages: [
-      { role: "system", content: "Você é um verificador independente. O Gherkin é o único contrato; o plano não pode acrescentar requisitos. Aceite conclusões sustentadas pelas observações e ações registradas. Um clique registrado no botão exato é evidência da aplicação do filtro mesmo sem aria-pressed. Erros de console ou rede só invalidam o teste quando houver relação observável com o resultado esperado. Ausência observada de funcionalidade, rota, campo, botão ou comportamento exigido pelo Gherkin é FALHOU. Ausência de massa especial ou estado temporal (registros em quantidade, vencidos, expirados, rascunhos, perfis, permissões, outro usuário ou arquivo preparado) é BLOQUEADO enquanto o provisionador não puder criá-la. Falha técnica de ferramenta que impediu a execução é ERRO_AUTOMACAO. Retorne somente JSON." },
+      { role: "system", content: "Você é um verificador independente. O Gherkin é o único contrato; o plano não pode acrescentar requisitos. Aceite conclusões sustentadas pelas observações e ações registradas. `accepted` deve ser true exatamente quando `correctedStatus` for igual ao status proposto; se corrigir o status, deve ser false. Um clique registrado no botão exato é evidência da aplicação do filtro mesmo sem aria-pressed. Erros de console ou rede só invalidam o teste quando houver relação observável com o resultado esperado. Ausência observada de funcionalidade, rota, campo, botão ou comportamento exigido pelo Gherkin é FALHOU. Ausência de massa especial ou estado temporal (registros em quantidade, vencidos, expirados, rascunhos, perfis, permissões, outro usuário ou arquivo preparado) é BLOQUEADO enquanto o provisionador não puder criá-la. Falha técnica de ferramenta que impediu a execução é ERRO_AUTOMACAO. Retorne somente JSON." },
       { role: "user", content: JSON.stringify({ gherkin: input.gherkin, proposedFinal: final, evidence, planIsAdvisoryOnly: true }) },
     ],
     maxTokens: 800,
@@ -405,6 +405,18 @@ async function verifyFinal(
   return jsonFromText<{ accepted: boolean; reason: string; correctedStatus?: QaPilotStatus }>(
     contentText(response.choices[0]?.message.content ?? ""),
   );
+}
+
+export function normalizeVerifierDecision(
+  proposedStatus: QaPilotStatus,
+  verifier: NonNullable<QaPilotResult["verifier"]>,
+): NonNullable<QaPilotResult["verifier"]> {
+  const correctedStatus = verifier.correctedStatus ?? proposedStatus;
+  return {
+    ...verifier,
+    correctedStatus,
+    accepted: correctedStatus === proposedStatus,
+  };
 }
 
 export async function executeV2Bootstrap(input: QaPilotInput, runtime: QaPilotToolRuntime): Promise<unknown[]> {
@@ -557,7 +569,10 @@ export async function runApprovedAutomationRecipe(
     const trace = runtime.getTrace();
     let verifier: QaPilotResult["verifier"];
     try {
-      verifier = await verifyFinal(input, plan, execution.final, trace, trackedLlm);
+      verifier = normalizeVerifierDecision(
+        execution.final.status,
+        await verifyFinal(input, plan, execution.final, trace, trackedLlm),
+      );
     } catch (error) {
       return await failedOutcome(`O verificador ficou indisponível: ${safeErrorMessage(error)}`);
     }
@@ -885,7 +900,10 @@ export async function runQaPilotAgent(
     let verifier: QaPilotResult["verifier"];
     if (options.verify !== false) {
       try {
-        verifier = await verifyFinal(input, plan, final, trace, trackedLlm);
+        verifier = normalizeVerifierDecision(
+          final.status,
+          await verifyFinal(input, plan, final, trace, trackedLlm),
+        );
         if (!verifier.accepted && verifier.correctedStatus && verifier.correctedStatus !== final.status) {
           final = {
             ...final,

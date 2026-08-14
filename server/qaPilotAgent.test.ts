@@ -7,6 +7,7 @@ import {
   classifyObservedAbsence,
   classifyAutomationError,
   executeV2Bootstrap,
+  normalizeVerifierDecision,
   parseGherkinScenarioSteps,
   runApprovedAutomationRecipe,
   runQaPilotAgent,
@@ -88,6 +89,19 @@ function runtimeDouble() {
 }
 
 describe("contrato executável do cenário", () => {
+  it("normaliza decisões contraditórias do verificador", () => {
+    expect(normalizeVerifierDecision("PASSOU", {
+      accepted: false,
+      correctedStatus: "PASSOU",
+      reason: "A evidência confirma o resultado.",
+    })).toMatchObject({ accepted: true, correctedStatus: "PASSOU" });
+    expect(normalizeVerifierDecision("PASSOU", {
+      accepted: true,
+      correctedStatus: "FALHOU",
+      reason: "A evidência contradiz o resultado.",
+    })).toMatchObject({ accepted: false, correctedStatus: "FALHOU" });
+  });
+
   it("distingue ausência de massa especial de funcionalidade ausente", () => {
     const step = { id: "S1", keyword: "DADO" as const, text: "listagem com mais de 2000 registros", sourceLine: "Dado listagem com mais de 2000 registros" };
     expect(classifyObservedAbsence(step, "A listagem possui somente 6 registros; massa superior a 2000 não foi encontrada.")).toBe("BLOQUEADO");

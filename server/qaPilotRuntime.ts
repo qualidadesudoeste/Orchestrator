@@ -856,7 +856,8 @@ export class PlaywrightPilotRuntime implements QaPilotToolRuntime {
         output = {
           action: { type: "download", label },
           downloaded: true,
-          filename: path.basename(filepath),
+          filename: download.suggestedFilename(),
+          artifactFilename: path.basename(filepath),
           bytes: stat.size,
           filepath,
           ...(await this.observe() as Record<string, unknown>),
