@@ -12,7 +12,7 @@ import {
   createClient, createProject, createSprint,
   deleteClient, deleteProject, deleteSprint,
   getAllChecklists, getAllUsers,
-  getChecklist, getChecklistsByAnalyst,
+  getChecklist, getChecklistById, getChecklistsByAnalyst,
   getClients, getProjects, getSprints,
   updateClient, updateProject, updateSprint,
   upsertChecklist,
@@ -29,6 +29,7 @@ import {
   listExecutionQueue,
   controlTestExecution,
   getDefectCardHistory,
+  getDefectCardByExternalId,
   updateDefectCardStatus,
   createPendingTestExecution,
   getTestExecutionProgress,
@@ -49,11 +50,13 @@ import {
   createAiProviderSetting,
   updateAiProviderSetting,
   deleteAiProviderSetting,
-  ensureLocalExecutionWorker,
   getExecutionQueueOverview,
   updateExecutionWorkerSettings,
   getProjectQaProvisioning,
   upsertProjectQaProvisioning,
+  getProjectAccess,
+  listProjectMembers,
+  replaceProjectMembers,
 } from "./db";
 import {
   getTrailProgress,
@@ -86,13 +89,62 @@ import {
 import { indexProjectSource } from "./sourceCodeService";
 import { decryptCredential, encryptCredential } from "./credentialCrypto";
 import { assertCompatibleVpnRequirements, ensureVpnConnection, type VpnRequirement } from "./vpnService";
-import { queuePoolForProvider, wakeExecutionQueue, type QueuedExecutionDispatchPayload } from "./executionQueueService";
+import {
+  queuePoolForProvider,
+  type QueuedExecutionDispatchPayload,
+} from "./executionQueueTypes";
 import { testQaProvisioningConnection } from "./automation-v2";
+import { logError } from "./_core/logger";
+import {
+  assertConfiguredTargetUrl,
+  assertSafeManualTargetUrl,
+} from "./_core/urlPolicy";
 
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
   if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Acesso restrito ao Administrador." });
   return next({ ctx });
 });
+
+async function requireProjectAccess(
+  ctx: { user: { id: number; role: string } },
+  projectId: number,
+  required: "VIEWER" | "EXECUTOR" = "VIEWER",
+): Promise<void> {
+  if (ctx.user.role === "admin") return;
+  const access = await getProjectAccess(projectId, ctx.user.id);
+  if (!access || (required === "EXECUTOR" && access.role !== "EXECUTOR")) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: required === "EXECUTOR"
+        ? "Você não possui permissão de execução neste projeto."
+        : "Você não possui acesso a este projeto.",
+    });
+  }
+}
+
+async function accessibleProjectIds(
+  ctx: { user: { id: number; role: string } },
+): Promise<Set<number> | null> {
+  if (ctx.user.role === "admin") return null;
+  const projects = await getProjects();
+  const access = await Promise.all(
+    projects.map(async project => ({
+      id: project.id,
+      allowed: Boolean(await getProjectAccess(project.id, ctx.user.id)),
+    })),
+  );
+  return new Set(access.filter(item => item.allowed).map(item => item.id));
+}
+
+async function requireSprintAccess(
+  ctx: { user: { id: number; role: string } },
+  sprintId: number,
+  required: "VIEWER" | "EXECUTOR" = "VIEWER",
+): Promise<void> {
+  const sprint = (await getSprints()).find(item => item.id === sprintId);
+  if (!sprint) throw new TRPCError({ code: "NOT_FOUND", message: "Sprint nÃ£o encontrada." });
+  await requireProjectAccess(ctx, sprint.projectId, required);
+}
 
 function decodeVpnConfig(fileName: string | null | undefined, base64: string | null | undefined): string | null {
   if (!base64) return null;
@@ -348,7 +400,6 @@ export const appRouter = router({
       } catch (error) { throw new TRPCError({ code: "PRECONDITION_FAILED", message: error instanceof Error ? error.message : "Falha ao testar VPN." }); }
     }),
     executionQueue: adminProcedure.query(async () => {
-      await ensureLocalExecutionWorker();
       const overview = await getExecutionQueueOverview();
       return {
         ...overview,
@@ -366,7 +417,6 @@ export const appRouter = router({
     })).mutation(async ({ input }) => {
       const { id, ...data } = input;
       await updateExecutionWorkerSettings(id, data);
-      wakeExecutionQueue();
       return { success: true as const };
     }),    aiProviders: adminProcedure.query(() => listAiProviderSettings()),
     createAiProvider: adminProcedure.input(z.object({ name: z.string().trim().min(1).max(120), provider: z.enum(["OPENAI", "GEMINI", "GROQ", "CUSTOM"]), apiUrl: z.string().trim().url().max(1000), model: z.string().trim().min(1).max(255), apiKey: z.string().max(1000).optional(), isActive: z.boolean().default(true) })).mutation(async ({ ctx, input }) => {
@@ -396,7 +446,15 @@ export const appRouter = router({
   projects: router({
     list: protectedProcedure
       .input(z.object({ clientId: z.number().optional() }))
-      .query(async ({ input }) => getProjects(input.clientId)),
+      .query(async ({ ctx, input }) => {
+        const all = await getProjects(input.clientId);
+        if (ctx.user.role === "admin") return all;
+        const access = await Promise.all(all.map(async project => ({
+          project,
+          access: await getProjectAccess(project.id, ctx.user.id),
+        })));
+        return access.filter(item => item.access).map(item => item.project);
+      }),
     create: adminProcedure
       .input(z.object({ name: z.string().min(1), description: z.string().optional(), clientId: z.number() }))
       .mutation(async ({ ctx, input }) => { await createProject({ ...input, createdById: ctx.user.id }); return { success: true }; }),
@@ -412,7 +470,8 @@ export const appRouter = router({
       .mutation(async ({ input }) => { const { id, ...data } = input; await updateProject(id, data); return { success: true }; }),
     provisioningConfig: protectedProcedure
       .input(z.object({ projectId: z.number().int().positive() }))
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
+        await requireProjectAccess(ctx, input.projectId);
         const config = await getProjectQaProvisioning(input.projectId);
         return config ? {
           projectId: config.projectId,
@@ -420,6 +479,26 @@ export const appRouter = router({
           isActive: Boolean(config.isActive),
           hasToken: Boolean(config.tokenEncrypted),
         } : null;
+      }),
+    members: adminProcedure
+      .input(z.object({ projectId: z.number().int().positive() }))
+      .query(({ input }) => listProjectMembers(input.projectId)),
+    replaceMembers: adminProcedure
+      .input(z.object({
+        projectId: z.number().int().positive(),
+        members: z.array(z.object({
+          userId: z.number().int().positive(),
+          role: z.enum(["VIEWER", "EXECUTOR"]),
+        })).max(500),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const unique = new Map(input.members.map(member => [member.userId, member]));
+        await replaceProjectMembers({
+          projectId: input.projectId,
+          createdById: ctx.user.id,
+          members: Array.from(unique.values()),
+        });
+        return { success: true as const };
       }),
     saveProvisioningConfig: adminProcedure
       .input(z.object({
@@ -493,7 +572,10 @@ export const appRouter = router({
   testEnvironments: router({
     list: protectedProcedure
       .input(z.object({ projectId: z.number().int().positive() }))
-      .query(({ input }) => listProjectTestEnvironments(input.projectId)),
+      .query(async ({ ctx, input }) => {
+        await requireProjectAccess(ctx, input.projectId);
+        return listProjectTestEnvironments(input.projectId);
+      }),
     create: adminProcedure
       .input(z.object({
         projectId: z.number().int().positive(),
@@ -627,7 +709,12 @@ export const appRouter = router({
   sprints: router({
     list: protectedProcedure
       .input(z.object({ projectId: z.number().optional() }))
-      .query(async ({ input }) => getSprints(input.projectId)),
+      .query(async ({ ctx, input }) => {
+        if (input.projectId) await requireProjectAccess(ctx, input.projectId);
+        if (input.projectId || ctx.user.role === "admin") return getSprints(input.projectId);
+        const allowed = await accessibleProjectIds(ctx);
+        return (await getSprints()).filter(sprint => allowed?.has(sprint.projectId));
+      }),
     create: adminProcedure
       .input(z.object({ name: z.string().min(1), description: z.string().optional(), projectId: z.number() }))
       .mutation(async ({ ctx, input }) => { await createSprint({ ...input, createdById: ctx.user.id }); return { success: true }; }),
@@ -645,7 +732,19 @@ export const appRouter = router({
         projectId: z.number().optional(),
         sprintId: z.number().optional(),
       }))
-      .query(async ({ input }) => getDashboardMetrics(input)),
+      .query(async ({ ctx, input }) => {
+        if (input.projectId) {
+          await requireProjectAccess(ctx, input.projectId);
+          return getDashboardMetrics(input);
+        }
+        if (ctx.user.role !== "admin") {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Selecione um projeto para consultar as mÃ©tricas.",
+          });
+        }
+        return getDashboardMetrics(input);
+      }),
   }),
   testExecutions: router({
     queue: protectedProcedure
@@ -680,7 +779,6 @@ export const appRouter = router({
         if (result.outcome === "TERMINAL") {
           throw new TRPCError({ code: "BAD_REQUEST", message: "Esta execução já foi finalizada e não pode mais ser alterada." });
         }
-        if (input.action === "RESUME") wakeExecutionQueue();
         return { success: true as const, ...result };
       }),
     progress: protectedProcedure
@@ -723,9 +821,13 @@ export const appRouter = router({
   defectCards: router({
     history: protectedProcedure
       .input(z.object({ externalCardId: z.string().min(1).max(64) }))
-      .query(async ({ input }) =>
-        getDefectCardHistory(input.externalCardId.toUpperCase()),
-      ),
+      .query(async ({ ctx, input }) => {
+        const externalCardId = input.externalCardId.toUpperCase();
+        const card = await getDefectCardByExternalId(externalCardId);
+        if (!card) throw new TRPCError({ code: "NOT_FOUND", message: "Card não encontrado." });
+        if (card.projectId) await requireProjectAccess(ctx, card.projectId);
+        return getDefectCardHistory(externalCardId);
+      }),
     updateStatus: protectedProcedure
       .input(z.object({
         externalCardId: z.string().min(1).max(64),
@@ -734,6 +836,9 @@ export const appRouter = router({
       }))
       .mutation(async ({ ctx, input }) => {
         try {
+          const existing = await getDefectCardByExternalId(input.externalCardId.toUpperCase());
+          if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: "Card de defeito não encontrado." });
+          if (existing.projectId) await requireProjectAccess(ctx, existing.projectId, "EXECUTOR");
           const card = await updateDefectCardStatus({
             externalCardId: input.externalCardId.toUpperCase(),
             status: input.status,
@@ -764,6 +869,7 @@ export const appRouter = router({
     get: protectedProcedure
       .input(z.object({ sprintId: z.number() }))
       .query(async ({ ctx, input }) => {
+        await requireSprintAccess(ctx, input.sprintId);
         const result = await getChecklist(input.sprintId, ctx.user.id);
         return result ?? null;
       }),
@@ -778,6 +884,7 @@ export const appRouter = router({
         responsibleUserId: z.number().int().positive().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
+        await requireSprintAccess(ctx, input.sprintId, "EXECUTOR");
         const responsibleUserId = input.responsibleUserId ?? ctx.user.id;
         if (!(await getUserById(responsibleUserId))) throw new TRPCError({ code: "BAD_REQUEST", message: "Responsável não encontrado." });
         const id = await upsertChecklist({ ...input, analystId: ctx.user.id, responsibleUserId });
@@ -785,7 +892,10 @@ export const appRouter = router({
       }),
     updateResponsible: protectedProcedure
       .input(z.object({ id: z.number().int().positive(), responsibleUserId: z.number().int().positive() }))
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
+        const checklist = await getChecklistById(input.id);
+        if (!checklist) throw new TRPCError({ code: "NOT_FOUND", message: "Checklist não encontrado." });
+        await requireSprintAccess(ctx, checklist.sprintId, "EXECUTOR");
         if (!(await getUserById(input.responsibleUserId))) throw new TRPCError({ code: "BAD_REQUEST", message: "Responsável não encontrado." });
         await updateChecklistResponsible(input.id, input.responsibleUserId);
         return { success: true };
@@ -819,6 +929,7 @@ export const appRouter = router({
         result: qaGeneratedCasesSchema,
       }))
       .mutation(async ({ ctx, input }) => {
+        await requireProjectAccess(ctx, input.projectId, "EXECUTOR");
         const project = (await getProjects()).find(item => item.id === input.projectId);
         if (!project) throw new TRPCError({ code: "NOT_FOUND", message: "Projeto não encontrado." });
         const sprint = (await getSprints(input.projectId)).find(item => item.id === input.sprintId);
@@ -844,22 +955,30 @@ export const appRouter = router({
         projectId: z.number().int().positive().optional(),
         sprintId: z.number().int().positive().optional(),
       }))
-      .query(({ input }) => listQATestPlans({
-        projectId: input.projectId,
-        sprintId: input.sprintId,
-      })),
+      .query(async ({ ctx, input }) => {
+        if (input.projectId) await requireProjectAccess(ctx, input.projectId);
+        if (input.sprintId) await requireSprintAccess(ctx, input.sprintId);
+        if (!input.projectId && !input.sprintId && ctx.user.role !== "admin") {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Selecione um projeto." });
+        }
+        return listQATestPlans({
+          projectId: input.projectId,
+          sprintId: input.sprintId,
+        });
+      }),
 
     updatePlanResponsible: protectedProcedure
       .input(z.object({
         id: z.number().int().positive(),
         responsibleUserId: z.number().int().positive(),
       }))
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
         const [plan, responsible] = await Promise.all([
           getQATestPlan(input.id),
           getUserById(input.responsibleUserId),
         ]);
         if (!plan) throw new TRPCError({ code: "NOT_FOUND", message: "Plano não encontrado." });
+        await requireProjectAccess(ctx, plan.projectId, "EXECUTOR");
         if (!responsible) throw new TRPCError({ code: "BAD_REQUEST", message: "Responsável não encontrado." });
         await updateQATestPlanResponsible(input.id, input.responsibleUserId);
         return { success: true };
@@ -870,6 +989,7 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         const plan = await getQATestPlan(input.id);
         if (!plan) throw new TRPCError({ code: "NOT_FOUND", message: "Plano não encontrado." });
+        await requireProjectAccess(ctx, plan.projectId, "EXECUTOR");
         if (plan.createdById !== ctx.user.id && ctx.user.role !== "admin") {
           throw new TRPCError({ code: "FORBIDDEN" });
         }
@@ -886,7 +1006,8 @@ export const appRouter = router({
         projectId: z.number().int().positive().optional(),
         projectContext: z.string().optional(),
       }))
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
+        if (input.projectId) await requireProjectAccess(ctx, input.projectId);
         const critMap: Record<string, string> = {
           low: "baixa",
           medium: "média",
@@ -1016,7 +1137,7 @@ ${sourceContext ? `\nÍNDICE TÉCNICO DO PROJETO:\n${sourceContext}` : ""}`;
             criticality: input.criticality,
           });
         } catch (err: any) {
-          console.error("[qaPlanner.generateCases] Error:", err?.message);
+          logError("qa_planner_generate_cases_failed", err);
           return buildRuleBasedPlan({
             userStory: input.userStory,
             systemType: input.systemType,
@@ -1050,6 +1171,7 @@ ${sourceContext ? `\nÍNDICE TÉCNICO DO PROJETO:\n${sourceContext}` : ""}`;
         })).min(1).max(100),
       }))
       .mutation(async ({ ctx, input }) => {
+        await requireProjectAccess(ctx, input.projectId, "EXECUTOR");
         const [projects, sprints, clients] = await Promise.all([
           getProjects(),
           getSprints(input.projectId),
@@ -1074,6 +1196,22 @@ ${sourceContext ? `\nÍNDICE TÉCNICO DO PROJETO:\n${sourceContext}` : ""}`;
         }
         const configuredEnvironments = environments.filter((item): item is NonNullable<typeof item> => Boolean(item));
         const primaryEnvironment = configuredEnvironments[0];
+        if (!primaryEnvironment) {
+          if (ctx.user.role !== "admin" || !ENV.allowManualTestUrls) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "Selecione um ambiente cadastrado. URLs manuais estão desativadas.",
+            });
+          }
+          try {
+            await assertSafeManualTargetUrl(input.systemUrl ?? "");
+          } catch (error) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: error instanceof Error ? error.message : "URL manual não autorizada.",
+            });
+          }
+        }
         const systemUrl = primaryEnvironment?.loginUrl ?? input.systemUrl;
         const username = primaryEnvironment?.username ?? input.username ?? "";
         const password = primaryEnvironment?.passwordEncrypted
@@ -1081,6 +1219,16 @@ ${sourceContext ? `\nÍNDICE TÉCNICO DO PROJETO:\n${sourceContext}` : ""}`;
           : input.password ?? "";
         if (!systemUrl) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "Selecione um ambiente parametrizado." });
+        }
+        if (primaryEnvironment) {
+          try {
+            assertConfiguredTargetUrl(systemUrl, configuredEnvironments.map(item => item.loginUrl));
+          } catch (error) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: error instanceof Error ? error.message : "Ambiente não autorizado.",
+            });
+          }
         }
         const executionId = `web-${Date.now()}-${randomUUID().slice(0, 8)}`;
         const scenariosGherkin = input.cases.map(testCase => [
@@ -1162,7 +1310,6 @@ ${sourceContext ? `\nÍNDICE TÉCNICO DO PROJETO:\n${sourceContext}` : ""}`;
           executionId,
           `Execucao adicionada a fila ${queuePool}. Aguardando vaga no worker.`,
         );
-        wakeExecutionQueue();
         return {
           started: true as const,
           queued: true as const,
@@ -1342,7 +1489,7 @@ Analise com rigor e retorne APENAS um JSON válido, sem markdown, com a seguinte
           if (!jsonStr) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "IA retornou formato inválido." });
           return JSON.parse(jsonStr);
         } catch (err: any) {
-          console.error("[qaPlanner.analyzeCoverage] Error:", err?.message);
+          logError("qa_planner_coverage_analysis_failed", err);
           return analyzeCoverageWithQaRules(input.userStory, input.generatedCases);
         }
       }),

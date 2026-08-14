@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Code2, FolderSearch, Globe2, KeyRound, Loader2, Pencil, PlugZap, Plus, ShieldCheck, Trash2 } from "lucide-react";
+import { Code2, FolderSearch, Globe2, KeyRound, Loader2, Pencil, PlugZap, Plus, ShieldCheck, Trash2, UsersRound } from "lucide-react";
 import { toast } from "sonner";
 
 const ENVIRONMENT_TYPES = ["PORTAL", "RETAGUARDA", "SITE", "API", "OUTRO"] as const;
@@ -47,9 +47,15 @@ export default function ProjectConfigurationModal({
   const [provisioning, setProvisioning] = useState({ endpointUrl: "", token: "", isActive: false });
   const [editingEnvironmentId, setEditingEnvironmentId] = useState<number | null>(null);
   const [environmentForm, setEnvironmentForm] = useState(emptyEnvironment);
+  const [memberRoles, setMemberRoles] = useState<Record<number, "NONE" | "VIEWER" | "EXECUTOR">>({});
 
   const { data: environments = [], refetch: refetchEnvironments } = trpc.testEnvironments.list.useQuery({ projectId: project.id });
   const { data: provisioningConfig, refetch: refetchProvisioning } = trpc.projects.provisioningConfig.useQuery({ projectId: project.id });
+  const { data: users = [] } = trpc.users.options.useQuery();
+  const { data: members = [], refetch: refetchMembers } = trpc.projects.members.useQuery({ projectId: project.id });
+  useEffect(() => {
+    setMemberRoles(Object.fromEntries(members.map(member => [member.userId, member.role])));
+  }, [members]);
   useEffect(() => {
     if (!provisioningConfig) return;
     setProvisioning(value => ({ ...value, endpointUrl: provisioningConfig.endpointUrl, isActive: provisioningConfig.isActive, token: "" }));
@@ -112,6 +118,13 @@ export default function ProjectConfigurationModal({
     onSuccess: () => {
       refetchEnvironments();
       toast.success("Ambiente removido.");
+    },
+    onError: error => toast.error(error.message),
+  });
+  const saveMembers = trpc.projects.replaceMembers.useMutation({
+    onSuccess: () => {
+      refetchMembers();
+      toast.success("Permissões do projeto atualizadas.");
     },
     onError: error => toast.error(error.message),
   });
@@ -216,6 +229,28 @@ export default function ProjectConfigurationModal({
               </div>
               <p className="text-[11px] text-slate-500">A ponte recebe somente o ID do cenário e o objetivo da preparação. O token nunca é enviado para a IA nem exibido novamente.</p>
             </div>
+          </section>
+
+          <section className="rounded-xl border border-amber-100 bg-amber-50/40 p-4">
+            <div>
+              <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-800"><UsersRound className="h-4 w-4 text-amber-700" /> Acesso ao projeto</h3>
+              <p className="mt-1 text-xs text-slate-500">Visualizadores consultam dados. Executores também podem iniciar e controlar automações.</p>
+            </div>
+            <div className="mt-3 max-h-52 space-y-2 overflow-y-auto">
+              {users.map(user => (
+                <div key={user.id} className="grid grid-cols-[1fr_150px] items-center gap-3 rounded-lg border bg-white px-3 py-2 text-xs">
+                  <div className="min-w-0"><p className="truncate font-medium text-slate-800">{user.name || user.username}</p><p className="truncate text-slate-500">{user.username}</p></div>
+                  <Select value={memberRoles[user.id] ?? "NONE"} onValueChange={role => setMemberRoles(current => ({ ...current, [user.id]: role as "NONE" | "VIEWER" | "EXECUTOR" }))}>
+                    <SelectTrigger className="h-8"><SelectValue /></SelectTrigger>
+                    <SelectContent><SelectItem value="NONE">Sem acesso</SelectItem><SelectItem value="VIEWER">Visualizador</SelectItem><SelectItem value="EXECUTOR">Executor</SelectItem></SelectContent>
+                  </Select>
+                </div>
+              ))}
+            </div>
+            <Button className="mt-3" size="sm" disabled={saveMembers.isPending} onClick={() => saveMembers.mutate({
+              projectId: project.id,
+              members: Object.entries(memberRoles).filter(([, role]) => role !== "NONE").map(([userId, role]) => ({ userId: Number(userId), role: role as "VIEWER" | "EXECUTOR" })),
+            })}>{saveMembers.isPending && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />} Salvar acessos</Button>
           </section>
 
           <section className="rounded-xl border border-blue-100 bg-blue-50/40 p-4">
