@@ -204,6 +204,13 @@
       "when": 1786718465068,
       "tag": "0028_strange_forge",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "5",
+      "when": 1786721033013,
+      "tag": "0029_natural_energizer",
+      "breakpoints": true
     }
   ]
 }

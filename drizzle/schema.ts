@@ -51,6 +51,21 @@ export const projects = mysqlTable("projects", {
 });
 export type Project = typeof projects.$inferSelect;
 
+export const projectMembers = mysqlTable("project_members", {
+  id: int("id").autoincrement().primaryKey(),
+  projectId: int("projectId").notNull(),
+  userId: int("userId").notNull(),
+  role: mysqlEnum("role", ["VIEWER", "EXECUTOR"]).notNull().default("VIEWER"),
+  createdById: int("createdById").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, table => ({
+  projectUserUnique: uniqueIndex("project_members_project_user_unique").on(table.projectId, table.userId),
+  projectIndex: index("project_members_project_idx").on(table.projectId),
+  userIndex: index("project_members_user_idx").on(table.userId),
+}));
+export type ProjectMember = typeof projectMembers.$inferSelect;
+
 export const projectQaProvisioning = mysqlTable("project_qa_provisioning", {
   id: int("id").autoincrement().primaryKey(),
   projectId: int("projectId").notNull(),
