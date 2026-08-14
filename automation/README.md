@@ -1,8 +1,8 @@
 # Automação local — executor Playwright direto
 
-O Orchestrator executa os cenários diretamente pelo backend. A fila reserva um
-worker compatível com a rede/VPN, e `server/directQaExecutionService.ts` inicia o
-agente de `server/qaPilotAgent.ts` usando Playwright.
+O Orchestrator executa os cenários em um processo Windows separado da API. A
+API persiste a solicitação; a fila reserva um worker compatível com a rede/VPN,
+e `server/directQaExecutionService.ts` inicia o agente Playwright.
 
 ## Fluxo
 
@@ -25,10 +25,13 @@ processo local e não entram no prompt, trace ou relatório.
 Na raiz do projeto:
 
 ```powershell
-npm install
+npm ci
 npm run db:push
 npm run dev
 ```
+
+Em outro terminal Windows, execute `npm run dev:worker`. Em produção, siga o
+guia dedicado em [`worker/README.md`](worker/README.md).
 
 Acesse `http://localhost:3000`, configure projeto, ambientes e VPN quando
 necessário, gere ou abra um plano e use **Iniciar testes**. A tela **Fila de
@@ -49,5 +52,6 @@ npm test
 npm run build
 ```
 
-O n8n foi removido da arquitetura ativa. Playwright MCP também não é necessário
-para o executor direto; o backend usa `playwright-core` no próprio worker.
+O n8n foi removido da arquitetura ativa. Playwright MCP também não é necessário;
+somente o worker importa `playwright-core`. A API e sua imagem Docker não iniciam
+o agendador nem dependem de um navegador instalado.

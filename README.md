@@ -11,7 +11,11 @@ detalhes ficam em [`automation/`](automation/README.md).
 - Backend: Node.js, Express e tRPC.
 - Banco: MySQL com Drizzle ORM.
 - IA: OpenAI API (`gpt-5.6-terra`) para geração e análise de cenários.
-- Automação: fila de workers, agente direto e `playwright-core`.
+- Automação: worker Windows independente, fila persistida e `playwright-core`.
+
+A API não abre navegadores nem consome a fila. O container Linux serve apenas
+frontend/API e gera DOCX; um processo separado no Windows executa Chrome, VPN e
+Playwright. Assim, reiniciar ou escalar a API não cria executores duplicados.
 
 ## Pré-requisitos
 
@@ -25,15 +29,22 @@ detalhes ficam em [`automation/`](automation/README.md).
 
 ```powershell
 Copy-Item .env.example .env
-npm install
+npm ci
 npm run check
 npm test
 npm run build
 npm run dev
 ```
 
+Em outro terminal, inicie o executor Windows:
+
+```powershell
+npm run dev:worker
+```
+
 A aplicação inicia por padrão em `http://localhost:3000`. Antes de iniciar,
-preencha no `.env` pelo menos `DATABASE_URL`, `JWT_SECRET`, `OPENAI_API_KEY`,
+preencha no `.env` pelo menos `DATABASE_URL`, `JWT_SECRET`,
+`CREDENTIAL_ENCRYPTION_KEY`, `OPENAI_API_KEY`,
 `LLM_API_URL=https://api.openai.com` e `LLM_MODEL=gpt-5.6-terra`. A assinatura
 do ChatGPT não inclui créditos da API.
 
@@ -63,7 +74,7 @@ existente.
 
 ## Executor Playwright direto
 
-Consulte [`automation/README.md`](automation/README.md) para configurar o worker,
+Consulte [`automation/worker/README.md`](automation/worker/README.md) para configurar o worker,
 executar cenários pela interface e localizar screenshots e traces.
 
 ## Testes não funcionais
@@ -92,6 +103,8 @@ também constrói a imagem Docker.
 
 - Nunca versionar `.env`, tokens, senhas ou evidências com dados pessoais.
 - Use segredos diferentes para JWT, banco e integração do agente.
+- Mantenha `ALLOW_MANUAL_TEST_URLS=false`; habilite somente em operação
+  administrada e temporária.
 - Exponha somente o proxy HTTPS; MySQL e workers Playwright devem permanecer em
   rede privada.
 - Produção deve ser somente leitura para o agente.

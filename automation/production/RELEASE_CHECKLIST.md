@@ -12,7 +12,7 @@
 ## Configuração
 
 - [ ] `.env.production` criado fora do Git.
-- [ ] `JWT_SECRET`, `QA_AGENT_API_TOKEN`, `MYSQL_PASSWORD` e
+- [ ] `JWT_SECRET`, `QA_AGENT_API_TOKEN`, `CREDENTIAL_ENCRYPTION_KEY`, `MYSQL_PASSWORD` e
   `MYSQL_ROOT_PASSWORD` são fortes, diferentes e exclusivos do ambiente.
 - [ ] `ORCHESTRATOR_PUBLIC_URL` usa o domínio HTTPS definitivo.
 - [ ] `TRUST_PROXY` representa exatamente a quantidade de proxies.
@@ -32,6 +32,8 @@
 - [ ] `/healthz` e `/readyz` respondem 200.
 - [ ] Login, Dashboard e geração de plano passaram no smoke test.
 - [ ] Executor Playwright direto executou um cenário controlado.
+- [ ] API e worker Windows estão em processos independentes; apenas o worker
+  possui acesso ao Chrome e às VPNs.
 - [ ] Evidência DOCX e card Markdown foram gerados.
 - [ ] Preflight terminou com resultado `GO`.
 
