@@ -59,13 +59,11 @@ function signature(filename: string, expires: number): string {
     .digest("hex");
 }
 
-function downloadUrl(req: Request, filename: string, expires: number): string {
-  const baseUrl =
-    ENV.orchestratorPublicUrl.replace(/\/+$/, "") ||
-    `${req.protocol}://${req.get("host")}`;
+function artifactDownloadUrl(filename: string, expires: number, baseUrl?: string): string {
+  const resolvedBase = (baseUrl || ENV.orchestratorPublicUrl || `http://localhost:${ENV.port}`).replace(/\/+$/, "");
   const url = new URL(
     `/api/qa/reliability-reports/${encodeURIComponent(filename)}`,
-    baseUrl,
+    resolvedBase,
   );
   url.searchParams.set("expires", String(expires));
   url.searchParams.set("signature", signature(filename, expires));
@@ -118,6 +116,33 @@ async function embedEvidenceImages(report: ReturnType<typeof buildReliabilityRep
     }
   }
 }
+
+export async function generateReliabilityReportArtifact(
+  payload: unknown,
+  baseUrl?: string,
+): Promise<Record<string, any>> {
+  const report = buildReliabilityReport(payload);
+  await embedEvidenceImages(report);
+  const html = renderReliabilityHtml(report);
+  await fs.mkdir(OUTPUT_DIRECTORY, { recursive: true });
+  const filename = `${slug(report.executionId)}-${crypto.randomUUID()}.html`;
+  await fs.writeFile(path.join(OUTPUT_DIRECTORY, filename), html, {
+    encoding: "utf8",
+    flag: "wx",
+  });
+  const expires = Math.floor(Date.now() / 1000) + DOWNLOAD_LIFETIME_SECONDS;
+  return {
+    ...report.enrichedPayload,
+    reliability_report: {
+      filename,
+      download_url: artifactDownloadUrl(filename, expires, baseUrl),
+      expires_at: new Date(expires * 1000).toISOString(),
+      generated_at: report.generatedAt,
+      bytes: Buffer.byteLength(html, "utf8"),
+      totals: report.totals,
+    },
+  };
+}
 export function registerReliabilityReportRoutes(app: Express): void {
   app.post("/api/qa/reliability-reports", async (req, res) => {
     try {
@@ -134,28 +159,8 @@ export function registerReliabilityReportRoutes(app: Express): void {
         return;
       }
 
-      const report = buildReliabilityReport(req.body?.json ?? req.body);
-      await embedEvidenceImages(report);
-      const html = renderReliabilityHtml(report);
-      await fs.mkdir(OUTPUT_DIRECTORY, { recursive: true });
-      const filename = `${slug(report.executionId)}-${crypto.randomUUID()}.html`;
-      await fs.writeFile(path.join(OUTPUT_DIRECTORY, filename), html, {
-        encoding: "utf8",
-        flag: "wx",
-      });
-      const expires = Math.floor(Date.now() / 1000) + DOWNLOAD_LIFETIME_SECONDS;
-
-      res.status(201).json({
-        ...report.enrichedPayload,
-        reliability_report: {
-          filename,
-          download_url: downloadUrl(req, filename, expires),
-          expires_at: new Date(expires * 1000).toISOString(),
-          generated_at: report.generatedAt,
-          bytes: Buffer.byteLength(html, "utf8"),
-          totals: report.totals,
-        },
-      });
+      const baseUrl = ENV.orchestratorPublicUrl.replace(/\/+$/, "") || `${req.protocol}://${req.get("host")}`;
+      res.status(201).json(await generateReliabilityReportArtifact(req.body?.json ?? req.body, baseUrl));
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Falha desconhecida.";

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assertCompatibleVpnRequirements, isTrustedFortinetSignature, parseFortiClientStatus, validateInstallerSettings } from "./vpnService";
+import { assertCompatibleVpnRequirements, isTrustedFortinetSignature, parseFortiClientStatus, validateInstallerSettings, VpnManualActionRequiredError } from "./vpnService";
 
 describe("vpnService", () => {
   it("identifica um túnel FortiClient conectado", () => {
@@ -9,6 +9,12 @@ describe("vpnService", () => {
 
   it("identifica versões sem suporte ao FortiVPN CLI", () => {
     expect(parseFortiClientStatus("error parsing options: Option 'cli' does not exist", "Sefaz")).toBe("UNAVAILABLE");
+  });
+
+  it("diferencia espera por acao manual de falha de automacao", () => {
+    const error = new VpnManualActionRequiredError("Conecte a VPN e retome.");
+    expect(error.name).toBe("VpnManualActionRequiredError");
+    expect(error.code).toBe("VPN_MANUAL_ACTION_REQUIRED");
   });
 
   it("permite ambientes públicos e uma única VPN na mesma execução", () => {

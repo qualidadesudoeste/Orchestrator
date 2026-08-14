@@ -51,6 +51,20 @@ export const projects = mysqlTable("projects", {
 });
 export type Project = typeof projects.$inferSelect;
 
+export const projectQaProvisioning = mysqlTable("project_qa_provisioning", {
+  id: int("id").autoincrement().primaryKey(),
+  projectId: int("projectId").notNull(),
+  endpointUrl: varchar("endpointUrl", { length: 1000 }).notNull(),
+  tokenEncrypted: text("tokenEncrypted"),
+  isActive: int("isActive").notNull().default(1),
+  createdById: int("createdById").notNull(),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
+}, table => ({
+  projectUnique: uniqueIndex("project_qa_provisioning_project_unique").on(table.projectId),
+}));
+export type ProjectQaProvisioning = typeof projectQaProvisioning.$inferSelect;
+
 export const vpnProfiles = mysqlTable("vpn_profiles", {
   id: int("id").autoincrement().primaryKey(),
   name: varchar("name", { length: 160 }).notNull(),
@@ -142,6 +156,7 @@ export const projectTestEnvironments = mysqlTable("project_test_environments", {
   projectNameUnique: uniqueIndex("project_test_environments_project_name_unique").on(table.projectId, table.name),
 }));
 export type ProjectTestEnvironment = typeof projectTestEnvironments.$inferSelect;
+
 
 // ─── Sprints ──────────────────────────────────────────────────────────────────
 export const sprints = mysqlTable("sprints", {

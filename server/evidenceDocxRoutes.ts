@@ -75,20 +75,47 @@ function signature(filename: string, expires: number): string {
 }
 
 function absoluteDownloadUrl(
-  req: Request,
   filename: string,
   expires: number,
+  baseUrl?: string,
 ): string {
-  const baseUrl =
-    ENV.orchestratorPublicUrl.replace(/\/+$/, "") ||
-    `${req.protocol}://${req.get("host")}`;
+  const resolvedBase = (baseUrl || ENV.orchestratorPublicUrl || `http://localhost:${ENV.port}`).replace(/\/+$/, "");
   const url = new URL(
     `/api/qa/evidence-docx/${encodeURIComponent(filename)}`,
-    baseUrl,
+    resolvedBase,
   );
   url.searchParams.set("expires", String(expires));
   url.searchParams.set("signature", signature(filename, expires));
   return url.toString();
+}
+
+export async function generateEvidenceDocxArtifact(
+  raw: Record<string, any>,
+  baseUrl?: string,
+): Promise<Record<string, any>> {
+  if (!Array.isArray(raw.resultados) || raw.resultados.length === 0) {
+    throw new Error("Informe o resultado consolidado com ao menos um item em 'resultados'.");
+  }
+  if (raw.resultados.length > 500) {
+    throw new Error("Uma execucao pode conter no maximo 500 cenarios.");
+  }
+  const generator = require(GENERATOR_PATH) as EvidenceGenerator;
+  const { buffer, data } = await generator.generateEvidenceDocxBuffer(raw, PROJECT_ROOT);
+  await fs.mkdir(OUTPUT_DIRECTORY, { recursive: true });
+  const filename = `${slug(data.execution_id)}-${crypto.randomUUID()}.docx`;
+  await fs.writeFile(path.join(OUTPUT_DIRECTORY, filename), buffer, { flag: "wx" });
+  const expires = Math.floor(Date.now() / 1000) + DOWNLOAD_LIFETIME_SECONDS;
+  return {
+    ...raw,
+    evidence_docx: {
+      filename,
+      download_url: absoluteDownloadUrl(filename, expires, baseUrl),
+      expires_at: new Date(expires * 1000).toISOString(),
+      bytes: buffer.length,
+      scenarios: data.resultados.length,
+      status: data.status_geral,
+    },
+  };
 }
 
 export function registerEvidenceDocxRoutes(app: Express): void {
@@ -142,7 +169,11 @@ export function registerEvidenceDocxRoutes(app: Express): void {
       const expires = Math.floor(Date.now() / 1000) + DOWNLOAD_LIFETIME_SECONDS;
       const evidenceDocx = {
         filename,
-        download_url: absoluteDownloadUrl(req, filename, expires),
+        download_url: absoluteDownloadUrl(
+          filename,
+          expires,
+          ENV.orchestratorPublicUrl || `${req.protocol}://${req.get("host")}`,
+        ),
         expires_at: new Date(expires * 1000).toISOString(),
         bytes: buffer.length,
         scenarios: data.resultados.length,

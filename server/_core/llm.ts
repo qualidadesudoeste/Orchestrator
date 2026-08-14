@@ -32,6 +32,7 @@ export type Message = {
   content: MessageContent | MessageContent[];
   name?: string;
   tool_call_id?: string;
+  tool_calls?: ToolCall[];
 };
 
 export type Tool = {
@@ -71,6 +72,7 @@ export type InvokeParams = {
   model?: string;
   thinking?: Record<string, unknown>;
   reasoning?: Record<string, unknown>;
+  reasoningEffort?: "none" | "low" | "medium" | "high" | "xhigh" | "max";
 };
 
 export type ToolCall = {
@@ -142,7 +144,7 @@ const normalizeContentPart = (
 };
 
 const normalizeMessage = (message: Message) => {
-  const { role, name, tool_call_id } = message;
+  const { role, name, tool_call_id, tool_calls } = message;
 
   if (role === "tool" || role === "function") {
     const content = ensureArray(message.content)
@@ -165,6 +167,7 @@ const normalizeMessage = (message: Message) => {
       role,
       name,
       content: contentParts[0].text,
+      ...(tool_calls?.length ? { tool_calls } : {}),
     };
   }
 
@@ -172,6 +175,7 @@ const normalizeMessage = (message: Message) => {
     role,
     name,
     content: contentParts,
+    ...(tool_calls?.length ? { tool_calls } : {}),
   };
 };
 
@@ -430,6 +434,7 @@ async function invokeProvider(
     model,
     thinking,
     reasoning,
+    reasoningEffort,
     maxTokens,
     max_tokens,
   } = params;
@@ -473,6 +478,9 @@ async function invokeProvider(
   }
   if (reasoning) {
     payload.reasoning = reasoning;
+  }
+  if (reasoningEffort) {
+    payload.reasoning_effort = reasoningEffort;
   }
 
   const normalizedResponseFormat = normalizeResponseFormat({

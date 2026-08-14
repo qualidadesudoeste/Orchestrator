@@ -52,6 +52,8 @@ import {
   ensureLocalExecutionWorker,
   getExecutionQueueOverview,
   updateExecutionWorkerSettings,
+  getProjectQaProvisioning,
+  upsertProjectQaProvisioning,
 } from "./db";
 import {
   getTrailProgress,
@@ -85,6 +87,7 @@ import { indexProjectSource } from "./sourceCodeService";
 import { decryptCredential, encryptCredential } from "./credentialCrypto";
 import { assertCompatibleVpnRequirements, ensureVpnConnection, type VpnRequirement } from "./vpnService";
 import { queuePoolForProvider, wakeExecutionQueue, type QueuedExecutionDispatchPayload } from "./executionQueueService";
+import { testQaProvisioningConnection } from "./automation-v2";
 
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
   if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Acesso restrito ao Administrador." });
@@ -407,6 +410,52 @@ export const appRouter = router({
         sourceCodePath: z.string().trim().max(1000).nullable().optional(),
       }))
       .mutation(async ({ input }) => { const { id, ...data } = input; await updateProject(id, data); return { success: true }; }),
+    provisioningConfig: protectedProcedure
+      .input(z.object({ projectId: z.number().int().positive() }))
+      .query(async ({ input }) => {
+        const config = await getProjectQaProvisioning(input.projectId);
+        return config ? {
+          projectId: config.projectId,
+          endpointUrl: config.endpointUrl,
+          isActive: Boolean(config.isActive),
+          hasToken: Boolean(config.tokenEncrypted),
+        } : null;
+      }),
+    saveProvisioningConfig: adminProcedure
+      .input(z.object({
+        projectId: z.number().int().positive(),
+        endpointUrl: z.string().trim().url().max(1000),
+        token: z.string().max(2000).optional(),
+        isActive: z.boolean(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const current = await getProjectQaProvisioning(input.projectId);
+        await upsertProjectQaProvisioning({
+          projectId: input.projectId,
+          endpointUrl: input.endpointUrl,
+          tokenEncrypted: input.token === undefined
+            ? current?.tokenEncrypted ?? null
+            : input.token ? encryptCredential(input.token) : null,
+          isActive: input.isActive ? 1 : 0,
+          createdById: current?.createdById ?? ctx.user.id,
+        });
+        return { success: true as const };
+      }),
+    testProvisioningConfig: adminProcedure
+      .input(z.object({ projectId: z.number().int().positive() }))
+      .mutation(async ({ input }) => {
+        const config = await getProjectQaProvisioning(input.projectId);
+        if (!config?.isActive) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "A ponte QA não está ativa." });
+        try {
+          return await testQaProvisioningConnection({
+            endpointUrl: config.endpointUrl,
+            token: config.tokenEncrypted ? decryptCredential(config.tokenEncrypted) : undefined,
+            projectId: input.projectId,
+          });
+        } catch (error) {
+          throw new TRPCError({ code: "PRECONDITION_FAILED", message: error instanceof Error ? error.message : "Falha ao testar a ponte QA." });
+        }
+      }),
     indexSource: adminProcedure
       .input(z.object({
         id: z.number().int().positive(),
@@ -1001,13 +1050,6 @@ ${sourceContext ? `\nÍNDICE TÉCNICO DO PROJETO:\n${sourceContext}` : ""}`;
         })).min(1).max(100),
       }))
       .mutation(async ({ ctx, input }) => {
-        if (!ENV.n8nQaWebhookUrl || !ENV.qaAgentApiToken) {
-          throw new TRPCError({
-            code: "PRECONDITION_FAILED",
-            message: "A execução automática ainda não está configurada no servidor.",
-          });
-        }
-
         const [projects, sprints, clients] = await Promise.all([
           getProjects(),
           getSprints(input.projectId),
@@ -1060,11 +1102,15 @@ ${sourceContext ? `\nÍNDICE TÉCNICO DO PROJETO:\n${sourceContext}` : ""}`;
           });
         }
         const requiredRequirement = vpnRequirements.find(item => item.provider !== "NONE") ?? null;
+        const provisioningConfig = await getProjectQaProvisioning(project.id);
         const queuePool = queuePoolForProvider(requiredRequirement?.provider);
         const dispatchPayload: QueuedExecutionDispatchPayload = {
           vpnRequirement: requiredRequirement,
           webhookBody: {
             execution_id: executionId,
+            client_id: client?.id,
+            project_id: project.id,
+            sprint_id: sprint.id,
             projeto: project.name,
             cliente: client?.name ?? "",
             sprint: sprint.name,
@@ -1089,6 +1135,11 @@ ${sourceContext ? `\nÍNDICE TÉCNICO DO PROJETO:\n${sourceContext}` : ""}`;
             repositorio_codigo: project.repositoryUrl ?? "",
             branch_repositorio: project.repositoryBranch ?? "",
             contexto_codigo_fonte: project.sourceCodeSummary?.slice(0, 14_000) ?? "",
+            qa_provisioning: provisioningConfig?.isActive ? {
+              endpointUrl: provisioningConfig.endpointUrl,
+              token: provisioningConfig.tokenEncrypted ? decryptCredential(provisioningConfig.tokenEncrypted) : undefined,
+              projectId: project.id,
+            } : undefined,
             solicitado_por: ctx.user.id,
           },
         };

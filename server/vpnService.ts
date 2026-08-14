@@ -37,6 +37,15 @@ export type VpnPreflightResult = {
   connectionMethod?: "NONE" | "CLI" | "AUTOCONNECT";
 };
 
+export class VpnManualActionRequiredError extends Error {
+  readonly code = "VPN_MANUAL_ACTION_REQUIRED";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "VpnManualActionRequiredError";
+  }
+}
+
 const PROJECT_ROOT = path.resolve(process.cwd());
 const VPN_ARTIFACTS = path.resolve(PROJECT_ROOT, "artifacts", "vpn");
 const MAX_INSTALLER_BYTES = 350 * 1024 * 1024;
@@ -282,10 +291,17 @@ export async function ensureVpnConnection(input: VpnRequirement): Promise<VpnPre
   const gui = await firstExisting(DEFAULT_FORTICLIENT_GUI_PATHS);
   if (!gui) throw new Error("O FortiClient foi detectado, mas sua interface de conexão não foi localizada.");
   launchFile(gui);
+  if (parsedStatus === "UNAVAILABLE") {
+    throw new VpnManualActionRequiredError(
+      `O FortiClient foi aberto. Conecte manualmente a VPN ${input.provider} (${input.profileName}) e depois retome esta execucao. Esta edicao do FortiClient nao oferece conexao por linha de comando.`,
+    );
+  }
   if (await waitUntilReachable(verificationUrl, 120_000)) {
     return { required: true, connected: true, connectedAutomatically: true, provider: input.provider, profileName: input.profileName, verification: "TARGET_REACHABLE", clientInstalled: true, clientInstalledNow: installation.installedNow, configurationImported, connectionMethod: "AUTOCONNECT" };
   }
-  throw new Error(`O FortiClient foi preparado e aberto, mas a VPN ${input.provider} não conectou. Conclua eventual MFA/aceite na janela do FortiClient e tente novamente.`);
+  throw new VpnManualActionRequiredError(
+    `O FortiClient foi aberto. Conclua o MFA/aceite da VPN ${input.provider} (${input.profileName}) e depois retome esta execucao.`,
+  );
 }
 
 export function assertCompatibleVpnRequirements(requirements: VpnRequirement[]): void {

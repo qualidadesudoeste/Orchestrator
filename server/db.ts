@@ -17,6 +17,7 @@ import {
   nonFunctionalFindings,
   nonFunctionalRuns,
   projects,
+  projectQaProvisioning,
   projectTestEnvironments,
   vpnProfiles,
   qaAgentMemories,
@@ -397,11 +398,30 @@ export async function updateProject(id: number, data: {
   await db.update(projects).set(data).where(eq(projects.id, id));
 }
 
+export async function getProjectQaProvisioning(projectId: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db.select().from(projectQaProvisioning)
+    .where(eq(projectQaProvisioning.projectId, projectId)).limit(1);
+  return rows[0];
+}
+
+export async function upsertProjectQaProvisioning(data: typeof projectQaProvisioning.$inferInsert) {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  await db.insert(projectQaProvisioning).values(data).onDuplicateKeyUpdate({ set: {
+    endpointUrl: data.endpointUrl,
+    tokenEncrypted: data.tokenEncrypted,
+    isActive: data.isActive,
+  } });
+}
+
 export async function deleteProject(id: number) {
   const db = await getDb();
   if (!db) throw new Error("DB unavailable");
   await db.transaction(async tx => {
     await tx.delete(projectTestEnvironments).where(eq(projectTestEnvironments.projectId, id));
+    await tx.delete(projectQaProvisioning).where(eq(projectQaProvisioning.projectId, id));
     await tx.delete(projects).where(eq(projects.id, id));
   });
 }
@@ -969,6 +989,7 @@ export async function updateTestExecutionProgress(progress: NormalizedExecutionP
       leaseExpiresAt: isFinished ? null : new Date(progress.occurredAt.getTime() + 2 * 60 * 60 * 1000),
       finishedAt: isFinished ? progress.occurredAt : execution.finishedAt,
       dispatchPayloadEncrypted: isFinished ? null : execution.dispatchPayloadEncrypted,
+      assignedWorkerId: isFinished ? null : execution.assignedWorkerId,
     }).where(eq(testExecutions.id, execution.id));
     return { executionId: execution.id, completedScenarios, progressPercent };
   });
@@ -1267,7 +1288,11 @@ export async function markExecutionJobDispatched(externalExecutionId: string) {
   ));
 }
 
-export async function returnExecutionJobToQueue(externalExecutionId: string, message: string) {
+export async function returnExecutionJobToQueue(
+  externalExecutionId: string,
+  message: string,
+  dispatchPayloadEncrypted?: string | null,
+) {
   const db = await getDb();
   if (!db) return;
   await db.update(testExecutions).set({
@@ -1278,9 +1303,36 @@ export async function returnExecutionJobToQueue(externalExecutionId: string, mes
     currentStage: "AGUARDANDO_FILA",
     progressMessage: message.slice(0, 1000),
     lastHeartbeatAt: new Date(),
+    ...(dispatchPayloadEncrypted ? { dispatchPayloadEncrypted } : {}),
   }).where(and(
     eq(testExecutions.externalExecutionId, externalExecutionId),
     eq(testExecutions.controlState, "RUN"),
+  ));
+}
+
+export async function pauseExecutionForManualVpn(
+  externalExecutionId: string,
+  message: string,
+  dispatchPayloadEncrypted?: string | null,
+) {
+  const db = await getDb();
+  if (!db) return;
+  await db.update(testExecutions).set({
+    status: "EM_ANDAMENTO",
+    executionState: "PAUSED",
+    controlState: "PAUSE",
+    controlRequestedAt: new Date(),
+    assignedWorkerId: null,
+    dispatchedAt: null,
+    leaseExpiresAt: null,
+    currentStage: "AGUARDANDO_VPN",
+    progressMessage: message.slice(0, 1000),
+    lastHeartbeatAt: new Date(),
+    rawPayload: JSON.stringify({ phase: "WAITING_FOR_VPN", reason: message.slice(0, 1000) }),
+    ...(dispatchPayloadEncrypted ? { dispatchPayloadEncrypted } : {}),
+  }).where(and(
+    eq(testExecutions.externalExecutionId, externalExecutionId),
+    eq(testExecutions.executionState, "RUNNING"),
   ));
 }
 
@@ -1459,6 +1511,9 @@ export async function upsertTestExecution(
       startedAt: data.startedAt ?? null,
       finishedAt: data.finishedAt ?? null,
       rawPayload: data.rawPayload,
+      assignedWorkerId: null,
+      dispatchPayloadEncrypted: null,
+      leaseExpiresAt: null,
     };
 
     let executionId = existingId;
@@ -1821,6 +1876,21 @@ export async function getAgentMemories(scopeKey: string, limit = 30) {
       desc(qaAgentMemories.lastSeenAt),
     )
     .limit(Math.min(50, Math.max(1, limit)));
+}
+
+export async function getAgentMemoryByFingerprint(scopeKey: string, fingerprint: string) {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  const rows = await db
+    .select()
+    .from(qaAgentMemories)
+    .where(and(
+      eq(qaAgentMemories.scopeKey, scopeKey),
+      eq(qaAgentMemories.fingerprint, fingerprint),
+      eq(qaAgentMemories.status, "ATIVA"),
+    ))
+    .limit(1);
+  return rows[0];
 }
 
 export async function upsertAgentMemories(

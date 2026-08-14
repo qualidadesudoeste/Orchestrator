@@ -1,5 +1,4 @@
 import os from "node:os";
-import { ENV } from "./_core/env";
 import { decryptCredential } from "./credentialCrypto";
 import {
   claimExecutionJob,
@@ -7,20 +6,21 @@ import {
   failExpiredExecutionJobs,
   listActiveExecutionJobs,
   listQueuedExecutionJobs,
-  markExecutionJobDispatched,
   markQueuedExecutionsWaitingForResources,
+  pauseExecutionForManualVpn,
   markTestExecutionStartFailure,
   returnExecutionJobToQueue,
   updateExecutionWorkerHeartbeat,
   updateVpnProfile,
   type ExecutionQueuePool,
 } from "./db";
-import { ensureVpnConnection, type VpnRequirement } from "./vpnService";
+import { ensureVpnConnection, VpnManualActionRequiredError } from "./vpnService";
+import {
+  runDirectQaExecution,
+  type QueuedExecutionDispatchPayload,
+} from "./directQaExecutionService";
 
-export type QueuedExecutionDispatchPayload = {
-  vpnRequirement: (VpnRequirement & { globalProfileId?: number | null }) | null;
-  webhookBody: Record<string, unknown>;
-};
+export type { QueuedExecutionDispatchPayload } from "./directQaExecutionService";
 
 type CpuSnapshot = { idle: number; total: number };
 
@@ -73,32 +73,27 @@ async function dispatchClaimedJob(job: Awaited<ReturnType<typeof listQueuedExecu
       await updateVpnProfile(requirement.globalProfileId, { configImportedAt: new Date() });
     }
 
-    const response = await fetch(ENV.n8nQaWebhookUrl, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${ENV.qaAgentApiToken}`,
-      },
-      body: JSON.stringify({
-        ...payload.webhookBody,
-        vpn: {
-          requerida: vpnResult.required,
-          provedor: vpnResult.provider,
-          perfil: vpnResult.profileName ?? "",
-          conectada_automaticamente: vpnResult.connectedAutomatically,
-          verificacao: vpnResult.verification,
-        },
-      }),
-      signal: AbortSignal.timeout(15_000),
-    });
-    if (!response.ok) throw new Error(`O agente recusou a execucao (HTTP ${response.status}).`);
-    await markExecutionJobDispatched(job.externalExecutionId);
+    payload.webhookBody.vpn = {
+      requerida: vpnResult.required,
+      provedor: vpnResult.provider,
+      perfil: vpnResult.profileName ?? "",
+      conectada_automaticamente: vpnResult.connectedAutomatically,
+      verificacao: vpnResult.verification,
+    };
+    await runDirectQaExecution(job.externalExecutionId, payload);
   } catch (error) {
     const reason = error instanceof Error ? error.message : "Falha desconhecida ao iniciar o agente.";
-    if (job.dispatchAttempts < 2) {
+    if (error instanceof VpnManualActionRequiredError) {
+      await pauseExecutionForManualVpn(
+        job.externalExecutionId,
+        reason,
+        job.dispatchPayloadEncrypted,
+      );
+    } else if (job.dispatchAttempts < 2) {
       await returnExecutionJobToQueue(
         job.externalExecutionId,
         `Tentativa ${job.dispatchAttempts + 1} falhou. Aguardando nova tentativa: ${reason}`,
+        job.dispatchPayloadEncrypted,
       );
     } else {
       await markTestExecutionStartFailure(job.externalExecutionId, reason);
@@ -107,7 +102,7 @@ async function dispatchClaimedJob(job: Awaited<ReturnType<typeof listQueuedExecu
 }
 
 export async function processExecutionQueueOnce() {
-  if (tickRunning || !ENV.n8nQaWebhookUrl || !ENV.qaAgentApiToken) return;
+  if (tickRunning) return;
   tickRunning = true;
   try {
     const worker = await ensureLocalExecutionWorker();
@@ -160,7 +155,7 @@ export async function processExecutionQueueOnce() {
       if (!(await claimExecutionJob(job.id, worker.id))) continue;
       selectedPool ??= job.queuePool;
       availableSlots -= 1;
-      await dispatchClaimedJob(job);
+      void dispatchClaimedJob(job).finally(() => wakeExecutionQueue());
       dispatchedThisTick += 1;
     }
 

@@ -7,7 +7,7 @@ import {
 describe("normalizeTestExecutionPayload", () => {
   it("separa defeitos reais de erros de automação e calcula cobertura", () => {
     const execution = normalizeTestExecutionPayload({
-      execution_id: "n8n-100",
+      execution_id: "direct-100",
       solicitado_por: 42,
       projeto: "Portal",
       sprint: "Sprint 3",
