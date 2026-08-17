@@ -7,6 +7,8 @@ export type QaCase = {
   entao: string;
   resultado_esperado: string;
   tipo: string;
+  produz?: string[];
+  consome?: string[];
 };
 
 export type QaPlan = {
@@ -59,6 +61,8 @@ const makeCase = (
   entao,
   resultado_esperado: entao,
   tipo,
+  produz: [],
+  consome: [],
 });
 
 const nextId = (plan: QaPlan) => {

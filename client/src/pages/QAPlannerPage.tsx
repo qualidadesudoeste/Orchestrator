@@ -27,6 +27,8 @@ interface TestCase {
   entao: string;
   resultado_esperado: string;
   tipo: string;
+  produz?: string[];
+  consome?: string[];
 }
 interface TestCard {
   categoria: string;

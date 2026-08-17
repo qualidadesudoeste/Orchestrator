@@ -220,6 +220,8 @@ const qaGeneratedCasesSchema = z.object({
       entao: z.string().default(""),
       resultado_esperado: z.string().default(""),
       tipo: z.string().default("funcional"),
+      produz: z.array(z.string().trim().min(1).max(80)).max(10).default([]),
+      consome: z.array(z.string().trim().min(1).max(80)).max(10).default([]),
     })).default([]),
   })).default([]),
 });
@@ -908,6 +910,7 @@ Campos de texto devem ter no máximo 120 caracteres cada.
 Quando houver um índice de código-fonte, use rotas, campos e seletores para tornar os passos concretos. Não invente comportamento ausente da HU.
 Para sistemas web, gere prioritariamente cenários E2E observáveis e executáveis pela interface. Não transforme detalhes internos como transações, rollback, escritas em banco, injeção de falha ou códigos HTTP em cenários de interface, exceto quando a HU descrever como observar esse resultado na tela.
 Cada cenário deve declarar no Dado todas as pré-condições e dados necessários. Não presuma uma segunda conta, perfil especial, processo preparado ou mecanismo de falha que não tenha sido informado na HU.
+Declare em produz apenas identificadores, códigos, referências, URLs ou arquivos que o cenário realmente cria e que serão reutilizados. Declare em consome apenas artefatos produzidos por um cenário anterior do mesmo plano. Use nomes semânticos genéricos e listas vazias quando não houver encadeamento.
 Retorne somente um objeto JSON válido, sem Markdown.`;
 
         const userMessage = `HU: ${truncatedStory}
@@ -954,8 +957,10 @@ ${sourceContext ? `\nÍNDICE TÉCNICO DO PROJETO:\n${sourceContext}` : ""}`;
                           entao: { type: "string" },
                           resultado_esperado: { type: "string" },
                           tipo: { type: "string", enum: ["funcional", "segurança", "performance", "usabilidade", "regressão"] },
+                          produz: { type: "array", items: { type: "string" }, maxItems: 10 },
+                          consome: { type: "array", items: { type: "string" }, maxItems: 10 },
                         },
-                        required: ["id", "titulo", "prioridade", "dado", "quando", "entao", "resultado_esperado", "tipo"],
+                        required: ["id", "titulo", "prioridade", "dado", "quando", "entao", "resultado_esperado", "tipo", "produz", "consome"],
                         additionalProperties: false,
                       },
                     },
@@ -1042,6 +1047,8 @@ ${sourceContext ? `\nÍNDICE TÉCNICO DO PROJETO:\n${sourceContext}` : ""}`;
           entao: z.string().min(1).max(3000),
           resultado_esperado: z.string().max(3000),
           tipo: z.string().max(80),
+          produz: z.array(z.string().trim().min(1).max(80)).max(10).default([]),
+          consome: z.array(z.string().trim().min(1).max(80)).max(10).default([]),
         })).min(1).max(100),
       }))
       .mutation(async ({ ctx, input }) => {
@@ -1110,6 +1117,8 @@ ${sourceContext ? `\nÍNDICE TÉCNICO DO PROJETO:\n${sourceContext}` : ""}`;
           `  Dado ${normalizeGherkinStepText("DADO", testCase.dado)}`,
           `  Quando ${normalizeGherkinStepText("QUANDO", testCase.quando)}`,
           `  Então ${normalizeGherkinStepText("ENTAO", testCase.entao)}`,
+          ...(testCase.produz.length ? [`  # Produz: ${testCase.produz.join(", ")}`] : []),
+          ...(testCase.consome.length ? [`  # Consome: ${testCase.consome.join(", ")}`] : []),
           `  # Resultado esperado: ${testCase.resultado_esperado}`,
           `  # ID: ${testCase.id} | Tipo: ${testCase.tipo} | Prioridade: ${testCase.prioridade}`,
         ].join("\n")).join("\n\n");

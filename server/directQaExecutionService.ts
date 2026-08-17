@@ -47,12 +47,18 @@ import { compileGherkinScenarios, compileSingleGherkinScenario, resolveScenarioP
 import { getPersistedScenarioGherkin } from "./repositories/testExecutionRepository";
 import { generateRemoteExecutionArtifacts } from "./workerArtifactClient";
 import { preflightEnvironmentAccess, type EnvironmentProbeResult } from "./environmentPreflightService";
+import {
+  hasExecutionArtifact,
+  normalizedArtifactKey,
+} from "./executionArtifactService";
 
 export type DirectScenario = {
   index: number;
   id: string;
   title: string;
   gherkin: string;
+  produces: string[];
+  consumes: string[];
 };
 
 type DirectEnvironment = QaPilotEnvironment & { type?: string };
@@ -100,6 +106,17 @@ export function splitGherkinScenarios(value: unknown): DirectScenario[] {
     throw new Error(`O plano não contém Cenário Gherkin válido: ${error instanceof Error ? error.message : String(error)}`);
   }
   const declaredIds = Array.from(source.matchAll(/^\s*#\s*ID:\s*([^|\r\n]+)/gim), match => match[1].trim());
+  const scenarioHeading = /^\s*Cen[aá]rio(?: de Exemplo| Outline)?:/im;
+  const scenarioBlocks = source
+    .split(/(?=^\s*Cen[aá]rio(?: de Exemplo| Outline)?:)/gim)
+    .filter(block => scenarioHeading.test(block));
+  const declaredArtifacts = scenarioBlocks.map(block => {
+    const parse = (label: "Produz" | "Consome") => {
+      const raw = block.match(new RegExp(`^\\s*#\\s*${label}:\\s*(.+)$`, "im"))?.[1] ?? "";
+      return Array.from(new Set(raw.split(",").map(item => item.trim()).filter(Boolean).map(normalizedArtifactKey))).slice(0, 10);
+    };
+    return { produces: parse("Produz"), consumes: parse("Consome") };
+  });
   const scenarios = compiled.map((scenario, offset) => {
     const title = scenario.title || `Cenário ${offset + 1}`;
     const gherkin = [`Cenário: ${title}`, ...scenario.steps.map(step => `  ${step.sourceLine}`)].join("\n");
@@ -109,6 +126,8 @@ export function splitGherkinScenarios(value: unknown): DirectScenario[] {
       id: declaredId || `CT-${String(offset + 1).padStart(3, "0")}-${slug(title)}`,
       title,
       gherkin,
+      produces: declaredArtifacts[offset]?.produces ?? [],
+      consumes: declaredArtifacts[offset]?.consumes ?? [],
     };
   });
   const duplicateId = scenarios.find((scenario, index) =>
@@ -386,6 +405,49 @@ export function blockedEnvironmentExecutionResult(
   };
 }
 
+export function blockedDependencyExecutionResult(
+  scenario: DirectScenario,
+  missingArtifacts: string[],
+): DirectExecutionResult {
+  const compiled = compileSingleGherkinScenario(scenario.gherkin);
+  const labels = missingArtifacts.map(normalizedArtifactKey);
+  const detail = `Artefatos necessários ainda não foram produzidos: ${labels.join(", ")}.`;
+  const steps = compiled.steps.map((step, index) => ({
+    id: step.id,
+    descricao: step.sourceLine,
+    status: index === 0 ? "BLOQUEADO" as const : "NAO_EXECUTADO" as const,
+    detalhe: index === 0
+      ? detail
+      : "Não executado porque uma dependência declarada do cenário está ausente.",
+  }));
+  return {
+    scenario_index: scenario.index,
+    scenario_id: scenario.id,
+    scenario_title: scenario.title,
+    cenario: scenario.gherkin,
+    status: "BLOQUEADO",
+    duration_ms: 0,
+    resultado_teste: {
+      status: "BLOQUEADO",
+      resumo: "Cenário não iniciado porque depende de artefatos que um cenário anterior não produziu.",
+      resultado_observado: detail,
+      precondicoes_ausentes: labels,
+      passos: steps,
+      evidencias: [],
+      falhas_reais: [],
+      falhas_automacao: [],
+      tentativas: [{ numero: 1, status: "BLOQUEADO", resumo: detail, duration_ms: 0, evidencias: [] }],
+      verificacao_independente: undefined,
+      consumo_ia: { calls: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+      resolucoes_bloqueio: [],
+      modo_execucao: "AGENT",
+      motor_automacao: { versao: 1, modo: "DEPENDENCY_CHECK" },
+      mapa_interface: [],
+      aprendizados: [],
+    },
+  };
+}
+
 export async function loadExecutionCheckpoint(
   checkpointFile: string,
   externalExecutionId: string,
@@ -537,6 +599,31 @@ export async function runDirectQaExecution(
       occurredAt: new Date(),
     });
     const scenarioStartedAt = Date.now();
+    const missingConsumedArtifacts = scenario.consumes.filter(artifact =>
+      !hasExecutionArtifact(testData, artifact),
+    );
+    if (missingConsumedArtifacts.length) {
+      const blockedResult = blockedDependencyExecutionResult(scenario, missingConsumedArtifacts);
+      results.push(blockedResult);
+      await persistExecutionCheckpoint(checkpointFile, {
+        externalExecutionId,
+        startedAt: startedAt.toISOString(),
+        results,
+      }, testData);
+      await updateTestExecutionProgress({
+        externalExecutionId,
+        event: "SCENARIO_COMPLETED",
+        scenarioIndex: scenario.index,
+        scenarioId: scenario.id,
+        scenarioTitle: scenario.title,
+        environment: environments[0].name,
+        stage: "DEPENDENCIA_AUSENTE",
+        status: "BLOQUEADO",
+        summary: blockedResult.resultado_teste.resumo,
+        occurredAt: new Date(),
+      });
+      continue;
+    }
     if (environmentPreflight.externallyBlocked) {
       const blockedResult = blockedEnvironmentExecutionResult(scenario, environmentPreflight);
       results.push(blockedResult);
@@ -577,6 +664,7 @@ export async function runDirectQaExecution(
         executionPlan,
         testData,
         provisioning,
+        artifactContract: { produces: scenario.produces, consumes: scenario.consumes },
         outputDirectory: path.join(runDirectory, slug(scenario.id)),
         headless: true,
         maxIterations: 18,
@@ -595,10 +683,10 @@ export async function runDirectQaExecution(
       const recipeMemories = (await Promise.all(recipeMemoryFingerprints.map(fingerprint =>
         getAgentMemoryByFingerprint(memoryScope.scopeKey, fingerprint),
       ))).filter(Boolean) as Array<{ title: string; content: string; status?: string }>;
-      let approvedRecipe = recipeMemories.length
+      let approvedRecipe = !scenario.produces.length && recipeMemories.length
         ? findApprovedAutomationRecipe(recipeMemories, scenario.gherkin)
         : undefined;
-      if (!approvedRecipe) {
+      if (!approvedRecipe && !scenario.produces.length) {
         for (const memory of memories) {
           const legacyRecipe = parseApprovedAutomationRecipe(memory);
           if (!legacyRecipe || legacyRecipe.scenarioId !== scenario.id) continue;

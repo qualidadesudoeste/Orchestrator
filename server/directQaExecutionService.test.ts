@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   automationErrorExecutionResult,
+  blockedDependencyExecutionResult,
   blockedEnvironmentExecutionResult,
   deriveInterfaceMap,
   loadExecutionCheckpoint,
@@ -51,6 +52,30 @@ describe("executor direto da fila", () => {
       "  Quando executo outra ação",
       "  Então vejo outro resultado",
     ].join("\n"))).toThrow(/ID de cenário duplicado: DUP-01/);
+  });
+
+  it("preserva contratos genéricos de artefatos entre cenários", () => {
+    const scenarios = splitGherkinScenarios([
+      "Cenário: Criar registro",
+      "  Dado que acesso o cadastro",
+      "  Quando concluo o cadastro",
+      "  Então vejo o identificador",
+      "  # Produz: identificador do registro, URL de consulta",
+      "Cenário: Consultar registro",
+      "  Dado que possuo o identificador criado",
+      "  Quando consulto o registro",
+      "  Então vejo seus dados",
+      "  # Consome: identificador do registro",
+    ].join("\n"));
+
+    expect(scenarios[0]).toMatchObject({
+      produces: ["IDENTIFICADOR_DO_REGISTRO", "URL_DE_CONSULTA"],
+      consumes: [],
+    });
+    expect(scenarios[1]).toMatchObject({
+      produces: [],
+      consumes: ["IDENTIFICADOR_DO_REGISTRO"],
+    });
   });
 
   it("continua somente pelos cenários ainda não concluídos", () => {
@@ -141,6 +166,20 @@ describe("executor direto da fila", () => {
     expect(result.resultado_teste.passos.map(step => step.status)).toEqual([
       "BLOQUEADO", "NAO_EXECUTADO", "NAO_EXECUTADO",
     ]);
+    expect(result.resultado_teste.consumo_ia.totalTokens).toBe(0);
+  });
+
+  it("bloqueia dependência ausente sem consumir IA", () => {
+    const scenario = splitGherkinScenarios([
+      "Cenário: Reutilizar artefato",
+      "  Dado que existe um registro anterior",
+      "  Quando consulto o registro",
+      "  Então vejo os detalhes",
+      "  # Consome: identificador do registro",
+    ].join("\n"))[0];
+    const result = blockedDependencyExecutionResult(scenario, ["identificador do registro"]);
+    expect(result.status).toBe("BLOQUEADO");
+    expect(result.resultado_teste.precondicoes_ausentes).toEqual(["IDENTIFICADOR_DO_REGISTRO"]);
     expect(result.resultado_teste.consumo_ia.totalTokens).toBe(0);
   });
   it("transforma observacoes reais em mapa de interface sem guardar valores", () => {

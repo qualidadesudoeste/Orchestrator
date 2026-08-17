@@ -18,6 +18,8 @@ type TestCase = {
   entao: string;
   resultado_esperado: string;
   tipo: string;
+  produz?: string[];
+  consome?: string[];
 };
 
 type PlanResult = {
