@@ -30,6 +30,8 @@ export const ENV = {
   port: Number(process.env.PORT || 3000),
   trustProxy: process.env.TRUST_PROXY,
   shutdownTimeoutMs: Number(process.env.SHUTDOWN_TIMEOUT_MS || 10_000),
+  llmRequestTimeoutMs: Number(process.env.LLM_REQUEST_TIMEOUT_MS || 180_000),
+  qaScenarioTimeoutMs: Number(process.env.QA_SCENARIO_TIMEOUT_MS || 900_000),
   jsonBodyLimit: process.env.JSON_BODY_LIMIT ?? "10mb",
   allowManualTestUrls: process.env.ALLOW_MANUAL_TEST_URLS === "true",
 };

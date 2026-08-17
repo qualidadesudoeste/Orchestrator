@@ -38,6 +38,9 @@ import { generateEvidenceDocxArtifact } from "./evidenceDocxRoutes";
 import type { QueuedExecutionDispatchPayload } from "./executionQueueTypes";
 import { buildAutomaticTestData } from "./automaticTestDataService";
 import { logError, logWarn } from "./_core/logger";
+import { safeErrorMessage, sanitizeSensitiveData } from "./_core/sensitiveData";
+import { decryptCredential, encryptCredential } from "./credentialCrypto";
+import { ENV } from "./_core/env";
 import { compileGherkinScenarios, compileSingleGherkinScenario, resolveScenarioPlan } from "./automation-v2";
 import { getPersistedScenarioGherkin } from "./repositories/testExecutionRepository";
 
@@ -49,6 +52,16 @@ export type DirectScenario = {
 };
 
 type DirectEnvironment = QaPilotEnvironment & { type?: string };
+
+type DirectExecutionResult = ReturnType<typeof executionResult>;
+
+type ExecutionCheckpoint = {
+  version: 1;
+  externalExecutionId: string;
+  startedAt: string;
+  results: DirectExecutionResult[];
+  testDataEncrypted?: string;
+};
 
 function text(value: unknown): string {
   return String(value ?? "").trim();
@@ -74,7 +87,7 @@ export function splitGherkinScenarios(value: unknown): DirectScenario[] {
     throw new Error(`O plano não contém Cenário Gherkin válido: ${error instanceof Error ? error.message : String(error)}`);
   }
   const declaredIds = Array.from(source.matchAll(/^\s*#\s*ID:\s*([^|\r\n]+)/gim), match => match[1].trim());
-  return compiled.map((scenario, offset) => {
+  const scenarios = compiled.map((scenario, offset) => {
     const title = scenario.title || `Cenário ${offset + 1}`;
     const gherkin = [`Cenário: ${title}`, ...scenario.steps.map(step => `  ${step.sourceLine}`)].join("\n");
     const declaredId = declaredIds[offset];
@@ -85,6 +98,19 @@ export function splitGherkinScenarios(value: unknown): DirectScenario[] {
       gherkin,
     };
   });
+  const duplicateId = scenarios.find((scenario, index) =>
+    scenarios.findIndex(candidate => candidate.id === scenario.id) !== index,
+  )?.id;
+  if (duplicateId) throw new Error(`O plano contém ID de cenário duplicado: ${duplicateId}.`);
+  return scenarios;
+}
+
+export function pendingDirectScenarios(
+  scenarios: DirectScenario[],
+  results: Array<Pick<DirectExecutionResult, "scenario_id">>,
+): DirectScenario[] {
+  const completed = new Set(results.map(result => result.scenario_id));
+  return scenarios.filter(scenario => !completed.has(scenario.id));
 }
 
 function environmentsFromBody(body: Record<string, unknown>): DirectEnvironment[] {
@@ -256,6 +282,110 @@ function executionResult(
   };
 }
 
+export function automationErrorExecutionResult(
+  scenario: DirectScenario,
+  error: unknown,
+  durationMs: number,
+): DirectExecutionResult {
+  const summary = `Erro técnico isolado no cenário: ${safeErrorMessage(error)}`.slice(0, 2_000);
+  const steps = scenario.gherkin.split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(line => /^(?:Dado|Quando|Então|Entao|E|Mas)\b/i.test(line))
+    .map((line, index) => ({
+      id: `S${index + 1}`,
+      descricao: line,
+      status: "NAO_EXECUTADO" as const,
+      detalhe: "Não executado porque o cenário encontrou um erro técnico isolado.",
+    }));
+  return {
+    scenario_index: scenario.index,
+    scenario_id: scenario.id,
+    scenario_title: scenario.title,
+    cenario: scenario.gherkin,
+    status: "ERRO_AUTOMACAO",
+    duration_ms: durationMs,
+    resultado_teste: {
+      status: "ERRO_AUTOMACAO",
+      resumo: summary,
+      resultado_observado: "O cenário foi encerrado com erro técnico; os cenários seguintes continuarão.",
+      precondicoes_ausentes: [],
+      passos: steps,
+      evidencias: [],
+      falhas_reais: [],
+      falhas_automacao: [{ descricao: summary, trace: "" }],
+      tentativas: [{
+        numero: 1,
+        status: "ERRO_AUTOMACAO",
+        resumo: summary,
+        duration_ms: durationMs,
+        evidencias: [],
+      }],
+      verificacao_independente: undefined,
+      consumo_ia: { calls: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+      resolucoes_bloqueio: [],
+      modo_execucao: "AGENT",
+      motor_automacao: { versao: 1, modo: "LEGACY" },
+      mapa_interface: [],
+      aprendizados: [],
+    },
+  };
+}
+
+export async function loadExecutionCheckpoint(
+  checkpointFile: string,
+  externalExecutionId: string,
+  scenarios: DirectScenario[],
+): Promise<{ startedAt?: Date; results: DirectExecutionResult[]; testData: Record<string, string> }> {
+  try {
+    const stat = await fs.stat(checkpointFile);
+    if (stat.size > 25_000_000) throw new Error("Checkpoint excede o limite permitido.");
+    const parsed = JSON.parse(await fs.readFile(checkpointFile, "utf8")) as Partial<ExecutionCheckpoint>;
+    if (parsed.version !== 1 || parsed.externalExecutionId !== externalExecutionId || !Array.isArray(parsed.results)) {
+      throw new Error("Checkpoint incompatível com a execução atual.");
+    }
+    const scenarioOrder = new Map(scenarios.map((scenario, index) => [scenario.id, index]));
+    const seen = new Set<string>();
+    const results = parsed.results.filter(result => {
+      const scenarioId = text(result?.scenario_id);
+      if (!scenarioOrder.has(scenarioId) || seen.has(scenarioId)) return false;
+      seen.add(scenarioId);
+      return ["PASSOU", "FALHOU", "BLOQUEADO", "ERRO_AUTOMACAO"].includes(text(result?.status));
+    }).sort((left, right) => scenarioOrder.get(left.scenario_id)! - scenarioOrder.get(right.scenario_id)!);
+    let testData: Record<string, string> = {};
+    if (parsed.testDataEncrypted) {
+      const decrypted = JSON.parse(decryptCredential(parsed.testDataEncrypted)) as Record<string, unknown>;
+      testData = Object.fromEntries(Object.entries(decrypted)
+        .map(([key, value]) => [key.slice(0, 80), String(value ?? "").slice(0, 2_000)])
+        .slice(0, 100));
+    }
+    const startedAt = parsed.startedAt && Number.isFinite(Date.parse(parsed.startedAt))
+      ? new Date(parsed.startedAt)
+      : undefined;
+    return { startedAt, results, testData };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+      logWarn("direct_qa_checkpoint_ignored", { externalExecutionId, error: safeErrorMessage(error) });
+    }
+    return { results: [], testData: {} };
+  }
+}
+
+export async function writeExecutionCheckpoint(
+  checkpointFile: string,
+  checkpoint: Omit<ExecutionCheckpoint, "version" | "testDataEncrypted">,
+  testData: Record<string, string>,
+): Promise<void> {
+  const temporaryFile = `${checkpointFile}.tmp`;
+  const payload: ExecutionCheckpoint = {
+    version: 1,
+    ...checkpoint,
+    results: sanitizeSensitiveData(checkpoint.results, { knownValues: testData }),
+    testDataEncrypted: encryptCredential(JSON.stringify(testData)),
+  };
+  await fs.writeFile(temporaryFile, JSON.stringify(payload), { encoding: "utf8", flag: "w" });
+  await fs.rename(temporaryFile, checkpointFile);
+}
+
 async function persistScenarioMemory(
   externalExecutionId: string,
   body: Record<string, unknown>,
@@ -291,7 +421,6 @@ export async function runDirectQaExecution(
   const body = payload.webhookBody;
   const scenarios = splitGherkinScenarios(body.cenarios_gherkin);
   const environments = environmentsFromBody(body);
-  const testData = { ...buildAutomaticTestData(externalExecutionId), ...testDataFromBody(body) };
   const provisioning = provisioningFromBody(body);
   if (!environments.length) throw new Error("A execução não possui ambiente com URL parametrizada.");
 
@@ -302,11 +431,18 @@ export async function runDirectQaExecution(
   );
   const runDirectory = path.resolve("artifacts", "agent-executions", externalExecutionId);
   await fs.mkdir(runDirectory, { recursive: true });
+  const checkpointFile = path.join(runDirectory, "execution-checkpoint.json");
+  const checkpoint = await loadExecutionCheckpoint(checkpointFile, externalExecutionId, scenarios);
+  const testData = {
+    ...buildAutomaticTestData(externalExecutionId),
+    ...testDataFromBody(body),
+    ...checkpoint.testData,
+  };
   await markExecutionJobDispatched(externalExecutionId);
 
-  const startedAt = new Date();
-  const results: ReturnType<typeof executionResult>[] = [];
-  for (const scenario of scenarios) {
+  const startedAt = checkpoint.startedAt ?? new Date();
+  const results: DirectExecutionResult[] = [...checkpoint.results];
+  for (const scenario of pendingDirectScenarios(scenarios, results)) {
     if (await waitUntilRunnable(externalExecutionId) === "CANCEL") {
       return { cancelled: true, results: results.length };
     }
@@ -321,6 +457,10 @@ export async function runDirectQaExecution(
       occurredAt: new Date(),
     });
     const scenarioStartedAt = Date.now();
+    const scenarioDeadline = scenarioStartedAt + Math.min(
+      3_600_000,
+      Math.max(60_000, ENV.qaScenarioTimeoutMs || 900_000),
+    );
     try {
       const compiledScenario = compileSingleGherkinScenario(scenario.gherkin);
       const executionPlan = resolveScenarioPlan({ scenario: compiledScenario, testData });
@@ -339,6 +479,7 @@ export async function runDirectQaExecution(
         headless: true,
         maxIterations: 18,
         control: async () => {
+          if (Date.now() >= scenarioDeadline) return "CANCEL";
           const checkpoint = await getTestExecutionControlCheckpoint(externalExecutionId);
           return checkpoint?.action ?? "CANCEL";
         },
@@ -412,6 +553,11 @@ export async function runDirectQaExecution(
       }
       const normalizedResult = executionResult(scenario, result, Date.now() - scenarioStartedAt, environments[0]);
       results.push(normalizedResult);
+      await writeExecutionCheckpoint(checkpointFile, {
+        externalExecutionId,
+        startedAt: startedAt.toISOString(),
+        results,
+      }, testData);
       await persistScenarioMemory(externalExecutionId, body, normalizedResult);
       const learnedRecipe = createApprovedAutomationRecipe({
         result,
@@ -444,10 +590,47 @@ export async function runDirectQaExecution(
       });
     } catch (error) {
       if (error instanceof QaExecutionCancelledError) {
-        await getTestExecutionControlCheckpoint(externalExecutionId);
-        return { cancelled: true, results: results.length };
+        if (Date.now() < scenarioDeadline) {
+          await getTestExecutionControlCheckpoint(externalExecutionId);
+          return { cancelled: true, results: results.length };
+        }
       }
-      throw error;
+      if (results.some(result => result.scenario_id === scenario.id)) {
+        // O cenário e seu checkpoint já foram concluídos. Uma falha posterior
+        // (por exemplo, ao atualizar o progresso) deve acionar a retomada sem
+        // duplicar o resultado nem repetir a ação no sistema alvo.
+        throw error;
+      }
+      const scenarioError = error instanceof QaExecutionCancelledError
+        ? new Error(`O cenário excedeu o limite de ${Math.round((scenarioDeadline - scenarioStartedAt) / 60_000)} minutos.`)
+        : error;
+      logError("direct_qa_scenario_failed_continuing_plan", scenarioError, {
+        externalExecutionId,
+        scenarioId: scenario.id,
+      });
+      const normalizedResult = automationErrorExecutionResult(
+        scenario,
+        scenarioError,
+        Date.now() - scenarioStartedAt,
+      );
+      results.push(normalizedResult);
+      await writeExecutionCheckpoint(checkpointFile, {
+        externalExecutionId,
+        startedAt: startedAt.toISOString(),
+        results,
+      }, testData);
+      await updateTestExecutionProgress({
+        externalExecutionId,
+        event: "SCENARIO_COMPLETED",
+        scenarioIndex: scenario.index,
+        scenarioId: scenario.id,
+        scenarioTitle: scenario.title,
+        environment: environments[0].name,
+        stage: "CENARIO_COM_ERRO_TECNICO",
+        status: "ERRO_AUTOMACAO",
+        summary: normalizedResult.resultado_teste.resumo,
+        occurredAt: new Date(),
+      });
     }
   }
 

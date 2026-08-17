@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { deriveInterfaceMap, splitGherkinScenarios } from "./directQaExecutionService";
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import {
+  automationErrorExecutionResult,
+  deriveInterfaceMap,
+  loadExecutionCheckpoint,
+  pendingDirectScenarios,
+  splitGherkinScenarios,
+  writeExecutionCheckpoint,
+} from "./directQaExecutionService";
 
 describe("executor direto da fila", () => {
   it("preserva cada cenário completo e o ID original do plano", () => {
@@ -25,6 +35,83 @@ describe("executor direto da fila", () => {
 
   it("recusa uma carga sem cenários Gherkin identificáveis", () => {
     expect(() => splitGherkinScenarios("texto livre")).toThrow(/Cenário/);
+  });
+
+  it("recusa IDs duplicados para permitir retomada inequívoca", () => {
+    expect(() => splitGherkinScenarios([
+      "# ID: DUP-01",
+      "Cenário: Primeiro",
+      "  Dado um estado inicial",
+      "  Quando executo a ação",
+      "  Então vejo o resultado",
+      "# ID: DUP-01",
+      "Cenário: Segundo",
+      "  Dado outro estado inicial",
+      "  Quando executo outra ação",
+      "  Então vejo outro resultado",
+    ].join("\n"))).toThrow(/ID de cenário duplicado: DUP-01/);
+  });
+
+  it("continua somente pelos cenários ainda não concluídos", () => {
+    const scenarios = splitGherkinScenarios([
+      "Cenário: Primeiro",
+      "  Dado um estado inicial",
+      "  Quando executo a ação",
+      "  Então vejo o resultado",
+      "Cenário: Segundo",
+      "  Dado outro estado inicial",
+      "  Quando executo outra ação",
+      "  Então vejo outro resultado",
+    ].join("\n"));
+    expect(pendingDirectScenarios(scenarios, [{ scenario_id: scenarios[0].id }]))
+      .toEqual([scenarios[1]]);
+  });
+
+  it("persiste checkpoint criptografado e restaura resultado e massa", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "orchestrator-checkpoint-"));
+    const checkpointFile = path.join(directory, "execution-checkpoint.json");
+    const scenarios = splitGherkinScenarios([
+      "Cenário: Cenário retomável",
+      "  Dado um estado inicial",
+      "  Quando executo a ação",
+      "  Então vejo o resultado",
+    ].join("\n"));
+    const result = automationErrorExecutionResult(scenarios[0], new Error("falha controlada"), 25);
+    result.resultado_teste.resultado_observado = "Valor usado: valor-secreto";
+    try {
+      await writeExecutionCheckpoint(checkpointFile, {
+        externalExecutionId: "exec-checkpoint",
+        startedAt: "2026-08-17T12:00:00.000Z",
+        results: [result],
+      }, { PROTOCOLO: "ABC-123", SENHA_TESTE: "valor-secreto" });
+      const raw = await fs.readFile(checkpointFile, "utf8");
+      expect(raw).not.toContain("ABC-123");
+      expect(raw).not.toContain("valor-secreto");
+      await writeExecutionCheckpoint(checkpointFile, {
+        externalExecutionId: "exec-checkpoint",
+        startedAt: "2026-08-17T12:00:00.000Z",
+        results: [result],
+      }, { PROTOCOLO: "ABC-123", SENHA_TESTE: "valor-secreto" });
+      const loaded = await loadExecutionCheckpoint(checkpointFile, "exec-checkpoint", scenarios);
+      expect(loaded.results).toHaveLength(1);
+      expect(loaded.testData).toMatchObject({ PROTOCOLO: "ABC-123", SENHA_TESTE: "valor-secreto" });
+      expect(loaded.startedAt?.toISOString()).toBe("2026-08-17T12:00:00.000Z");
+    } finally {
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("converte erro isolado sem impedir os cenários seguintes", () => {
+    const scenario = splitGherkinScenarios([
+      "Cenário: Falha técnica isolada",
+      "  Dado um estado inicial",
+      "  Quando executo a ação",
+      "  Então vejo o resultado",
+    ].join("\n"))[0];
+    const result = automationErrorExecutionResult(scenario, new Error("locator expirou"), 30);
+    expect(result.status).toBe("ERRO_AUTOMACAO");
+    expect(result.resultado_teste.passos).toHaveLength(3);
+    expect(result.resultado_teste.resumo).toContain("locator expirou");
   });
   it("transforma observacoes reais em mapa de interface sem guardar valores", () => {
     const screens = deriveInterfaceMap({
