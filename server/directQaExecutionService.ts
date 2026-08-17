@@ -46,6 +46,7 @@ import { ENV } from "./_core/env";
 import { compileGherkinScenarios, compileSingleGherkinScenario, resolveScenarioPlan } from "./automation-v2";
 import { getPersistedScenarioGherkin } from "./repositories/testExecutionRepository";
 import { generateRemoteExecutionArtifacts } from "./workerArtifactClient";
+import { preflightEnvironmentAccess, type EnvironmentProbeResult } from "./environmentPreflightService";
 
 export type DirectScenario = {
   index: number;
@@ -343,6 +344,48 @@ export function automationErrorExecutionResult(
   };
 }
 
+export function blockedEnvironmentExecutionResult(
+  scenario: DirectScenario,
+  preflight: EnvironmentProbeResult,
+): DirectExecutionResult {
+  const compiled = compileSingleGherkinScenario(scenario.gherkin);
+  const steps = compiled.steps.map((step, index) => ({
+    id: step.id,
+    descricao: step.sourceLine,
+    status: index === 0 ? "BLOQUEADO" as const : "NAO_EXECUTADO" as const,
+    detalhe: index === 0
+      ? `${preflight.detail} URL: ${preflight.url}; HTTP: ${preflight.status ?? "sem resposta"}; título: ${preflight.title || "sem título"}.`
+      : "Não executado porque o ambiente permaneceu bloqueado antes do primeiro passo.",
+  }));
+  const summary = "Cenário não iniciado porque o preflight confirmou bloqueio externo do ambiente no navegador do worker.";
+  return {
+    scenario_index: scenario.index,
+    scenario_id: scenario.id,
+    scenario_title: scenario.title,
+    cenario: scenario.gherkin,
+    status: "BLOQUEADO",
+    duration_ms: 0,
+    resultado_teste: {
+      status: "BLOQUEADO",
+      resumo: summary,
+      resultado_observado: preflight.detail,
+      precondicoes_ausentes: ["Liberação externa de acesso ao ambiente para o navegador do worker."],
+      passos: steps,
+      evidencias: [],
+      falhas_reais: [],
+      falhas_automacao: [],
+      tentativas: [{ numero: 1, status: "BLOQUEADO", resumo: summary, duration_ms: 0, evidencias: [] }],
+      verificacao_independente: undefined,
+      consumo_ia: { calls: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+      resolucoes_bloqueio: [{ categoria: "EXTERNAL", objetivo: "Acessar o ambiente pelo navegador do worker.", sucesso_tecnico: true, resultado: preflight }],
+      modo_execucao: "AGENT",
+      motor_automacao: { versao: 1, modo: "PREFLIGHT" },
+      mapa_interface: [],
+      aprendizados: [],
+    },
+  };
+}
+
 export async function loadExecutionCheckpoint(
   checkpointFile: string,
   externalExecutionId: string,
@@ -478,6 +521,7 @@ export async function runDirectQaExecution(
 
   const startedAt = checkpoint.startedAt ?? new Date();
   const results: DirectExecutionResult[] = [...checkpoint.results];
+  const environmentPreflight = await preflightEnvironmentAccess(environments[0].url);
   for (const scenario of pendingDirectScenarios(scenarios, results)) {
     if (await waitUntilRunnable(externalExecutionId) === "CANCEL") {
       return { cancelled: true, results: results.length };
@@ -493,6 +537,28 @@ export async function runDirectQaExecution(
       occurredAt: new Date(),
     });
     const scenarioStartedAt = Date.now();
+    if (environmentPreflight.externallyBlocked) {
+      const blockedResult = blockedEnvironmentExecutionResult(scenario, environmentPreflight);
+      results.push(blockedResult);
+      await persistExecutionCheckpoint(checkpointFile, {
+        externalExecutionId,
+        startedAt: startedAt.toISOString(),
+        results,
+      }, testData);
+      await updateTestExecutionProgress({
+        externalExecutionId,
+        event: "SCENARIO_COMPLETED",
+        scenarioIndex: scenario.index,
+        scenarioId: scenario.id,
+        scenarioTitle: scenario.title,
+        environment: environments[0].name,
+        stage: "AMBIENTE_BLOQUEADO",
+        status: "BLOQUEADO",
+        summary: blockedResult.resultado_teste.resumo,
+        occurredAt: new Date(),
+      });
+      continue;
+    }
     const scenarioDeadline = scenarioStartedAt + Math.min(
       3_600_000,
       Math.max(60_000, ENV.qaScenarioTimeoutMs || 900_000),

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   automationErrorExecutionResult,
+  blockedEnvironmentExecutionResult,
   deriveInterfaceMap,
   loadExecutionCheckpoint,
   pendingDirectScenarios,
@@ -120,6 +121,27 @@ describe("executor direto da fila", () => {
     expect(result.status).toBe("ERRO_AUTOMACAO");
     expect(result.resultado_teste.passos).toHaveLength(3);
     expect(result.resultado_teste.resumo).toContain("locator expirou");
+  });
+
+  it("classifica todo o contrato sem consumir IA quando o ambiente está bloqueado", () => {
+    const scenario = splitGherkinScenarios([
+      "Cenário: Ambiente protegido",
+      "  Dado que acesso o ambiente",
+      "  Quando executo a operação",
+      "  Então vejo a confirmação",
+    ].join("\n"))[0];
+    const result = blockedEnvironmentExecutionResult(scenario, {
+      url: "https://example.test/login",
+      status: 500,
+      title: "URL Bloqueada",
+      externallyBlocked: true,
+      detail: "Bloqueio externo confirmado.",
+    });
+    expect(result.status).toBe("BLOQUEADO");
+    expect(result.resultado_teste.passos.map(step => step.status)).toEqual([
+      "BLOQUEADO", "NAO_EXECUTADO", "NAO_EXECUTADO",
+    ]);
+    expect(result.resultado_teste.consumo_ia.totalTokens).toBe(0);
   });
   it("transforma observacoes reais em mapa de interface sem guardar valores", () => {
     const screens = deriveInterfaceMap({
