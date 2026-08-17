@@ -26,6 +26,7 @@ export const ENV = {
   llmFallbackModel: process.env.LLM_FALLBACK_MODEL ?? "",
   qaAgentApiToken: process.env.QA_AGENT_API_TOKEN ?? "",
   orchestratorPublicUrl: process.env.ORCHESTRATOR_PUBLIC_URL ?? "",
+  orchestratorApiUrl: process.env.ORCHESTRATOR_API_URL ?? "",
   host: process.env.HOST ?? "0.0.0.0",
   port: Number(process.env.PORT || 3000),
   trustProxy: process.env.TRUST_PROXY,

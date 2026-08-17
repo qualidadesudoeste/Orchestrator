@@ -45,6 +45,7 @@ import { decryptCredential, encryptCredential } from "./credentialCrypto";
 import { ENV } from "./_core/env";
 import { compileGherkinScenarios, compileSingleGherkinScenario, resolveScenarioPlan } from "./automation-v2";
 import { getPersistedScenarioGherkin } from "./repositories/testExecutionRepository";
+import { generateRemoteExecutionArtifacts } from "./workerArtifactClient";
 
 export type DirectScenario = {
   index: number;
@@ -684,15 +685,26 @@ export async function runDirectQaExecution(
     resultados: results,
   };
   let persistedPayload = basePayload;
-  try {
-    persistedPayload = await generateReliabilityReportArtifact(basePayload);
-  } catch (error) {
-    logError("direct_qa_reliability_report_failed", error);
+  if (ENV.orchestratorApiUrl.trim()) {
+    try {
+      persistedPayload = await generateRemoteExecutionArtifacts(basePayload);
+    } catch (error) {
+      logError("direct_qa_remote_artifacts_failed_using_local_fallback", error);
+    }
   }
-  try {
-    persistedPayload = await generateEvidenceDocxArtifact(persistedPayload as Record<string, any>);
-  } catch (error) {
-    logError("direct_qa_docx_failed", error);
+  if (!persistedPayload.reliability_report) {
+    try {
+      persistedPayload = await generateReliabilityReportArtifact(basePayload);
+    } catch (error) {
+      logError("direct_qa_reliability_report_failed", error);
+    }
+  }
+  if (!persistedPayload.evidence_docx) {
+    try {
+      persistedPayload = await generateEvidenceDocxArtifact(persistedPayload as Record<string, any>);
+    } catch (error) {
+      logError("direct_qa_docx_failed", error);
+    }
   }
   await upsertTestExecution(normalizeTestExecutionPayload(persistedPayload));
   return { cancelled: false, results: results.length };

@@ -16,6 +16,7 @@ import { registerNonFunctionalRoutes } from "../nonFunctionalRoutes";
 import { registerDefectCardRoutes } from "../defectCardRoutes";
 import { registerReliabilityReportRoutes } from "../reliabilityReportRoutes";
 import { registerAgentMemoryRoutes } from "../agentMemoryRoutes";
+import { registerWorkerArtifactRoutes } from "../workerArtifactRoutes";
 import { checkDatabaseHealth } from "../db";
 import { sdk } from "./sdk";
 import { ENV } from "./env";
@@ -91,6 +92,7 @@ async function startServer() {
   registerDefectCardRoutes(app);
   registerReliabilityReportRoutes(app);
   registerAgentMemoryRoutes(app);
+  registerWorkerArtifactRoutes(app);
 
   // ── Upload de imagens para evidências de teste ──────────────────────────────
   app.post("/api/qa-upload", async (req, res) => {

@@ -33,6 +33,12 @@ criptografado é salvo no MySQL e também em
 `artifacts/agent-executions/<execução>`. Outro worker pode retomar o plano sem
 repetir cenários já concluídos; o arquivo local funciona como redundância.
 
+Quando API e worker estiverem em máquinas diferentes, configure no `.env` do
+worker `ORCHESTRATOR_API_URL` com a URL HTTPS ou privada da API. Screenshots,
+downloads e traces serão enviados com `QA_AGENT_API_TOKEN`; a API gera e serve
+o relatório HTML e o DOCX em seu próprio volume. Deixe a variável vazia apenas
+quando API e worker compartilham o mesmo diretório `artifacts`.
+
 Inicie com `npm.cmd run start:worker`. O preflight encerra imediatamente quando
 o sistema não é Windows, o Chrome não existe ou a configuração de produção é
 inválida. Para desenvolvimento, use `npm.cmd run dev:worker`.

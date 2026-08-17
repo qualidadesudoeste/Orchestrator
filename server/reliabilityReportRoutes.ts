@@ -10,6 +10,7 @@ import {
   ReliabilityReportValidationError,
   renderReliabilityHtml,
 } from "./reliabilityReportService";
+import { resolveWorkerArtifactReference } from "./workerArtifactRoutes";
 
 const PROJECT_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -81,7 +82,10 @@ async function evidenceDataUri(value: string): Promise<string> {
   if (/^https?:\/\//i.test(value)) return value;
 
   const normalized = value.replace(/^file:\/\//i, "");
-  const candidates = path.isAbsolute(normalized)
+  const sharedArtifact = resolveWorkerArtifactReference(value);
+  const candidates = sharedArtifact
+    ? [sharedArtifact]
+    : path.isAbsolute(normalized)
     ? [path.resolve(normalized)]
     : [
         path.resolve(PROJECT_ROOT, normalized),

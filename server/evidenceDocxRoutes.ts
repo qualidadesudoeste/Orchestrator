@@ -6,6 +6,7 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { ENV } from "./_core/env";
 import { logError } from "./_core/logger";
+import { materializeWorkerArtifactReferences } from "./workerArtifactRoutes";
 
 type EvidenceDocumentData = {
   execution_id: string;
@@ -101,7 +102,8 @@ export async function generateEvidenceDocxArtifact(
     throw new Error("Uma execucao pode conter no maximo 500 cenarios.");
   }
   const generator = require(GENERATOR_PATH) as EvidenceGenerator;
-  const { buffer, data } = await generator.generateEvidenceDocxBuffer(raw, PROJECT_ROOT);
+  const materialized = materializeWorkerArtifactReferences(raw);
+  const { buffer, data } = await generator.generateEvidenceDocxBuffer(materialized, PROJECT_ROOT);
   await fs.mkdir(OUTPUT_DIRECTORY, { recursive: true });
   const filename = `${slug(data.execution_id)}-${crypto.randomUUID()}.docx`;
   await fs.writeFile(path.join(OUTPUT_DIRECTORY, filename), buffer, { flag: "wx" });
@@ -156,32 +158,10 @@ export function registerEvidenceDocxRoutes(app: Express): void {
         return;
       }
 
-      const generator = require(GENERATOR_PATH) as EvidenceGenerator;
-      const { buffer, data } = await generator.generateEvidenceDocxBuffer(
+      res.status(201).json(await generateEvidenceDocxArtifact(
         raw,
-        PROJECT_ROOT,
-      );
-
-      await fs.mkdir(OUTPUT_DIRECTORY, { recursive: true });
-      const filename = `${slug(data.execution_id)}-${crypto.randomUUID()}.docx`;
-      const filepath = path.join(OUTPUT_DIRECTORY, filename);
-      await fs.writeFile(filepath, buffer, { flag: "wx" });
-
-      const expires = Math.floor(Date.now() / 1000) + DOWNLOAD_LIFETIME_SECONDS;
-      const evidenceDocx = {
-        filename,
-        download_url: absoluteDownloadUrl(
-          filename,
-          expires,
-          ENV.orchestratorPublicUrl || `${req.protocol}://${req.get("host")}`,
-        ),
-        expires_at: new Date(expires * 1000).toISOString(),
-        bytes: buffer.length,
-        scenarios: data.resultados.length,
-        status: data.status_geral,
-      };
-
-      res.status(201).json({ ...raw, evidence_docx: evidenceDocx });
+        ENV.orchestratorPublicUrl || `${req.protocol}://${req.get("host")}`,
+      ));
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Falha desconhecida.";
