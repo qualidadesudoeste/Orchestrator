@@ -80,6 +80,12 @@ export function boundedResult(value: unknown): unknown {
       return {
         truncated: true,
         action: observation.action,
+        uploaded: observation.uploaded,
+        downloaded: observation.downloaded,
+        filename: observation.filename,
+        mimeType: observation.mimeType,
+        bytes: observation.bytes,
+        visibleConfirmation: observation.visibleConfirmation,
         url: observation.url,
         title: observation.title,
         text: String(observation.text ?? "").slice(0, MAX_OBSERVATION_TEXT),

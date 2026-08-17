@@ -255,6 +255,7 @@ const RECIPE_SIDE_EFFECT_TOOLS = new Set([
   "browser_select_semantic",
   "browser_fill_test_data_semantic",
   "browser_click_and_download",
+  "browser_upload_test_file",
   "browser_fill_visible_form",
   "browser_submit_form",
   "browser_search_no_match",
@@ -283,6 +284,7 @@ function progressSignature(stepCount: number, trace: QaPilotTraceEvent[]): strin
     text: String(result.text ?? result.error ?? result.value ?? "").slice(0, 1_200),
     action: action ? { type: action.type, label: action.label } : undefined,
     downloaded: result.downloaded,
+    uploaded: result.uploaded,
     filename: result.filename,
     bytes: result.bytes,
   });
@@ -302,6 +304,7 @@ export function classifyObservedAbsence(step: QaScenarioStep, observed: unknown)
 }
 
 import { PlaywrightPilotRuntime } from "./qaPilotRuntime";
+import { chainedTestDataGuidance } from "./scenarioTestDataService";
 export { PlaywrightPilotRuntime };
 
 const tools: Tool[] = [
@@ -325,6 +328,7 @@ const tools: Tool[] = [
   { type: "function", function: { name: "browser_capture_text_test_data", description: "Captura localmente um protocolo, identificador, contato ou outro texto visível e o guarda sob uma chave para cenários seguintes, sem revelar o valor ao modelo.", parameters: { type: "object", properties: { query: { type: "string" }, key: { type: "string" } }, required: ["query", "key"], additionalProperties: false } } },
   { type: "function", function: { name: "browser_search_no_match", description: "Executa uma busca negativa universal com termo sintético seguro. Opcionalmente aciona antes um filtro visível pelo rótulo informado. Não use para CPF, CNPJ, permissão, pagamento ou massa de negócio.", parameters: { type: "object", properties: { filterLabel: { type: "string" } }, additionalProperties: false } } },
   { type: "function", function: { name: "browser_click_and_download", description: "Clica em um controle semântico e captura o arquivo baixado, incluindo nome e tamanho. Use obrigatoriamente quando o cenário exigir download; net::ERR_ABORTED não é evidência de falha de download.", parameters: { type: "object", properties: { label: { type: "string" } }, required: ["label"], additionalProperties: false } } },
+  { type: "function", function: { name: "browser_upload_test_file", description: "Seleciona em um input de arquivo uma fixture sintética segura gerada localmente. Use quando o Gherkin exigir anexo/upload; nunca solicite caminho de arquivo ao usuário nem invente um caminho.", parameters: { type: "object", properties: { label: { type: "string" }, fixtureKind: { type: "string", enum: ["PNG", "JPEG", "PDF", "TXT"] } }, additionalProperties: false } } },
   { type: "function", function: { name: "browser_select", description: "Seleciona uma opção pelo value e retorna nova observação.", parameters: { type: "object", properties: { ref: { type: "string" }, value: { type: "string" } }, required: ["ref", "value"], additionalProperties: false } } },
   { type: "function", function: { name: "browser_press", description: "Pressiona uma tecla e retorna nova observação.", parameters: { type: "object", properties: { key: { type: "string" } }, required: ["key"], additionalProperties: false } } },
   { type: "function", function: { name: "browser_back", description: "Volta uma página e retorna nova observação.", parameters: { type: "object", properties: {}, additionalProperties: false } } },
@@ -343,6 +347,7 @@ async function createPlan(input: QaPilotInput, llm: LlmInvoker): Promise<QaPilot
         `Cenário: ${input.title}`,
         input.gherkin,
         Object.keys(input.testData ?? {}).length ? `Chaves de dados sintéticos locais disponíveis: ${Object.keys(input.testData ?? {}).join(", ")}` : "",
+        chainedTestDataGuidance(input.gherkin, Object.keys(input.testData ?? {})) ?? "",
         input.sourceContext ? `Contexto técnico:\n${input.sourceContext.slice(0, 5_000)}` : "",
         input.memoryContext ? `Conhecimento já observado:\n${input.memoryContext.slice(0, 5_000)}` : "",
       ].filter(Boolean).join("\n\n") },
@@ -643,6 +648,7 @@ export async function runQaPilotAgent(
         "Dados sintéticos básicos já são gerados automaticamente. Quando faltar uma precondição segura, tente criá-la pela interface autorizada e capture identificadores/links com browser_capture_field_test_data ou browser_capture_link_test_data para reutilização.",
         "Não bloqueie por falta de CPF, nome, e-mail, telefone, contato alternativo ou credenciais sintéticas: use as chaves automáticas disponíveis.",
         "Para downloads, use browser_click_and_download e valide downloaded, filename e bytes; net::ERR_ABORTED isolado é comportamento comum de download, não falha funcional.",
+        "Para anexos ou uploads, use browser_upload_test_file com uma fixture sintética compatível e valide uploaded, filename, bytes e a confirmação visível; nunca peça um caminho local ao usuário.",
         "Use browser_login quando precisar autenticar; credenciais não estão no contexto.",
         "Quando o cenário exigir outro usuário, escolha uma segunda conta listada em environments e use browser_new_session com seu nome.",
         "Se uma segunda conta não existir e a conta atual puder administrar usuários, crie uma conta sintética com USUARIO_SEGUNDA_CONTA/SENHA_SEGUNDA_CONTA e abra-a com browser_new_session_test_data.",
@@ -673,6 +679,7 @@ export async function runQaPilotAgent(
         },
         scenarioContract,
         availableTestDataKeys: Object.keys(input.testData ?? {}),
+        chainedTestDataGuidance: chainedTestDataGuidance(input.gherkin, Object.keys(input.testData ?? {})),
         provisioningAvailable: Boolean(input.provisioning),
         automationV2: input.executionPlan ? {
           mode: input.executionPlan.mode,

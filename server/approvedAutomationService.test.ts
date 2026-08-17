@@ -29,6 +29,7 @@ function successfulResult(): QaPilotResult {
       event("browser_click", { action: { type: "click", label: "Pesquisar" } }, { ref: "e2" }),
       event("browser_check", { action: { type: "check", label: "Aceito a LGPD" }, checked: true }, { ref: "e5" }),
       event("browser_fill", { action: { type: "fill", label: "Busca", value: "X" } }, { ref: "e3", value: "X" }),
+      event("browser_upload_test_file", { action: { type: "upload", label: "Anexos" }, uploaded: true }, { label: "Anexos", fixtureKind: "PNG" }),
       event("browser_fill", { action: { type: "fill", label: "Senha", value: "segredo" } }, { ref: "e4", value: "segredo" }),
       event("browser_screenshot", { saved: true }),
     ],
@@ -39,7 +40,7 @@ describe("receitas de automação aprovadas", () => {
   it("converte somente ações reaproveitáveis e nunca persiste senha", () => {
     const recipe = createApprovedAutomationRecipe({ result: successfulResult(), gherkin, title: "Buscar", executionId: "run-1" });
     expect(recipe?.actions.map(action => action.tool)).toEqual([
-      "browser_login", "browser_click_semantic", "browser_check_semantic", "browser_fill_semantic",
+      "browser_login", "browser_click_semantic", "browser_check_semantic", "browser_fill_semantic", "browser_upload_test_file",
     ]);
     expect(JSON.stringify(recipe)).not.toContain("segredo");
   });

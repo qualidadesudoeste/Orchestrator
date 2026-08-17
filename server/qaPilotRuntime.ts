@@ -20,6 +20,8 @@ import type {
   ToolExecution,
 } from "./qaPilotAgent";
 import { isExternalAccessBlock } from "./accessBlockPolicy";
+import { extractCreatedProtocol, scenarioCreatesBusinessRecord, storeScenarioProtocol } from "./scenarioTestDataService";
+import { createSyntheticUploadFixture, selectSyntheticFixtureKind, type SyntheticFixtureKind } from "./testFixtureService";
 
 export { isExternalAccessBlock } from "./accessBlockPolicy";
 
@@ -28,7 +30,7 @@ const UI_MUTATING_TOOLS = new Set([
   "browser_click", "browser_click_semantic", "browser_check", "browser_check_semantic",
   "browser_fill", "browser_fill_semantic", "browser_fill_test_data", "browser_fill_test_data_semantic",
   "browser_fill_visible_form", "browser_submit_form", "browser_select", "browser_select_semantic",
-  "browser_press", "browser_back", "browser_search_no_match", "browser_click_and_download",
+  "browser_press", "browser_back", "browser_search_no_match", "browser_click_and_download", "browser_upload_test_file",
 ]);
 
 const PLAYWRIGHT_KEY_NAMES: Record<string, string> = {
@@ -75,6 +77,7 @@ function isAllowedNavigation(target: string, allowedOrigins: Set<string>, curren
 
 function capturedValue(raw: string, key: string, label: string): string {
   const source = raw.replace(/\s+/g, " ").trim();
+  if (/PROTOCOLO/.test(key)) return source.match(/(?:protocolo|den[uú]ncia)\s*(?:n[ºo]?\.?\s*)?(?:[:#-]|é)?\s*([A-Z0-9][A-Z0-9./_-]{4,80})/i)?.[1] ?? source.slice(0, 200);
   if (/LINK|URL/.test(key)) return source.match(/https?:\/\/[^\s]+/i)?.[0] ?? source;
   if (/EMAIL|CONTATO/.test(key)) return source.match(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/i)?.[0] ?? source;
   if (/CPF/.test(key)) return source.match(/\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b/)?.[0] ?? source;
@@ -210,12 +213,11 @@ export class PlaywrightPilotRuntime implements QaPilotToolRuntime {
   private captureReusableObservedData(text: string) {
     // Business identifiers created by one scenario must be available to the
     // following scenarios without asking the user to copy or configure them.
-    const protocol = text.match(/(?:protocolo|n(?:u|\u00fa)mero\s+do\s+protocolo)\s*(?:n(?:\u00ba|o)?\.?\s*)?(?:[:#-]|\u00e9)?\s*([A-Z0-9][A-Z0-9./_-]{4,80})/i)?.[1];
-    if (!protocol) return;
+    const protocol = extractCreatedProtocol(text);
+    if (!protocol || !scenarioCreatesBusinessRecord(this.input.gherkin)) return;
     this.input.testData ??= {};
-    for (const key of ["PROTOCOLO", "PROTOCOLO_CRIADO", "PROTOCOL"]) {
-      this.input.testData[key] ??= protocol;
-    }
+    storeScenarioProtocol(this.input.testData, this.input.scenarioId, this.input.gherkin, protocol);
+    this.input.testData.PROTOCOL ??= protocol;
     // A public record created with the synthetic form data has a known,
     // deterministic original contact. Keep that relationship for subsequent
     // protocol-consultation scenarios in the same execution.
@@ -843,6 +845,7 @@ export class PlaywrightPilotRuntime implements QaPilotToolRuntime {
         if (!value) throw new Error("O campo indicado não possui valor capturável.");
         this.input.testData ??= {};
         this.input.testData[key] = value;
+        if (/PROTOCOLO/.test(key)) storeScenarioProtocol(this.input.testData, this.input.scenarioId, this.input.gherkin, value);
         event.arguments = { ref: args.ref, key, value: "[REDACTED]" };
         output = { captured: true, key, characters: value.length };
       } else if (name === "browser_capture_link_test_data") {
@@ -871,6 +874,7 @@ export class PlaywrightPilotRuntime implements QaPilotToolRuntime {
         if (!value) throw new Error("O texto indicado não possui valor capturável.");
         this.input.testData ??= {};
         this.input.testData[key] = value;
+        if (/PROTOCOLO/.test(key)) storeScenarioProtocol(this.input.testData, this.input.scenarioId, this.input.gherkin, value);
         event.arguments = { key, query, value: "[REDACTED]" };
         output = { captured: true, key, characters: value.length };
       } else if (name === "browser_search_no_match") {
@@ -916,6 +920,45 @@ export class PlaywrightPilotRuntime implements QaPilotToolRuntime {
           artifactFilename: path.basename(filepath),
           bytes: stat.size,
           filepath,
+          ...(await this.observe() as Record<string, unknown>),
+        };
+      } else if (name === "browser_upload_test_file") {
+        const label = String(args.label ?? "").trim().slice(0, 200);
+        const requestedKind = args.fixtureKind ? String(args.fixtureKind).toUpperCase() as SyntheticFixtureKind : undefined;
+        let input = label ? page.getByLabel(label, { exact: false }).first() : page.locator('input[type="file"]').first();
+        const labeledIsFileInput = await input.count() > 0 && await input.evaluate(element =>
+          element instanceof HTMLInputElement && element.type === "file").catch(() => false);
+        if (!labeledIsFileInput) input = page.locator('input[type="file"]').first();
+        if (!await input.count()) throw new Error("Nenhum campo de upload de arquivo foi encontrado na página.");
+        const accept = await input.getAttribute("accept") ?? "";
+        const kind = selectSyntheticFixtureKind(accept, requestedKind);
+        const fixture = await createSyntheticUploadFixture(
+          this.input.outputDirectory,
+          this.input.runId,
+          this.input.scenarioId,
+          kind,
+        );
+        await input.setInputFiles({
+          name: fixture.filename,
+          mimeType: fixture.mimeType,
+          buffer: await fs.readFile(fixture.filepath),
+        });
+        await page.waitForTimeout(500);
+        const selectedNames = await input.evaluate((element: HTMLInputElement) =>
+          Array.from(element.files ?? []).map(file => file.name));
+        const visibleConfirmation = await page.getByText(fixture.filename, { exact: false }).count() > 0;
+        if (!selectedNames.includes(fixture.filename) && !visibleConfirmation) {
+          throw new Error("A interface não confirmou a seleção do arquivo sintético.");
+        }
+        output = {
+          action: { type: "upload", label: label || "campo de arquivo" },
+          uploaded: true,
+          filename: fixture.filename,
+          mimeType: fixture.mimeType,
+          bytes: fixture.bytes,
+          fixtureKind: fixture.kind,
+          acceptedByInput: accept || undefined,
+          visibleConfirmation,
           ...(await this.observe() as Record<string, unknown>),
         };
       } else if (name === "browser_select") {

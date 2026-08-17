@@ -11,6 +11,7 @@ export type ApprovedAutomationAction = {
     "browser_check_semantic" |
     "browser_fill_semantic" | "browser_select_semantic" |
     "browser_fill_test_data_semantic" | "browser_click_and_download" |
+    "browser_upload_test_file" |
     "browser_fill_visible_form" | "browser_submit_form" |
     "browser_search_no_match" | "browser_press" | "browser_back" | "browser_wait";
   args: Record<string, string | number>;
@@ -115,6 +116,17 @@ function actionFromTrace(event: QaPilotTraceEvent): ApprovedAutomationAction | u
     case "browser_click_and_download": {
       const label = safeText(action.label ?? event.arguments.label);
       return label ? { tool: "browser_click_and_download", args: { label } } : undefined;
+    }
+    case "browser_upload_test_file": {
+      const label = safeText(action.label ?? event.arguments.label);
+      const fixtureKind = safeText(event.arguments.fixtureKind, 10);
+      return {
+        tool: "browser_upload_test_file",
+        args: {
+          ...(label ? { label } : {}),
+          ...(fixtureKind ? { fixtureKind } : {}),
+        },
+      };
     }
     case "browser_select": {
       const label = safeText(action.label);
