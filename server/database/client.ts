@@ -36,3 +36,9 @@ export async function checkDatabaseHealth() {
     };
   }
 }
+
+export async function closeDatabaseConnection(): Promise<void> {
+  if (!database) return;
+  await database.$client.end();
+  database = null;
+}

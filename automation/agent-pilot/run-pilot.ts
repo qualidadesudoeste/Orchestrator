@@ -5,6 +5,7 @@ import mysql from "mysql2/promise";
 import { decryptCredential } from "../../server/credentialCrypto";
 import { runQaPilotAgent, type QaPilotEnvironment, type QaPilotResult } from "../../server/qaPilotAgent";
 import { ensureVpnConnection, type VpnConnectionStrategy, type VpnProvider } from "../../server/vpnService";
+import { closeDatabaseConnection } from "../../server/database/client";
 
 type ExecutionRow = {
   id: number;
@@ -79,7 +80,23 @@ async function main() {
         [execution.id],
       ),
       connection.query(
-        "SELECT name,loginUrl,username,passwordEncrypted,vpnProvider,vpnProfileName,vpnUsername,vpnPasswordEncrypted,vpnAutoConnect,vpnConnectionStrategy,vpnConfigFileName,vpnConfigEncrypted,vpnConfigPasswordEncrypted,vpnConfigImportedAt,vpnInstallerUrl,vpnInstallerSha256,vpnVerificationUrl FROM project_test_environments WHERE projectId=? AND isActive=1 ORDER BY id",
+        `SELECT environment.name,environment.loginUrl,environment.username,environment.passwordEncrypted,
+          COALESCE(profile.provider,environment.vpnProvider) vpnProvider,
+          COALESCE(profile.profileName,environment.vpnProfileName) vpnProfileName,
+          COALESCE(profile.username,environment.vpnUsername) vpnUsername,
+          COALESCE(profile.passwordEncrypted,environment.vpnPasswordEncrypted) vpnPasswordEncrypted,
+          COALESCE(profile.autoConnect,environment.vpnAutoConnect) vpnAutoConnect,
+          COALESCE(profile.connectionStrategy,environment.vpnConnectionStrategy) vpnConnectionStrategy,
+          COALESCE(profile.configFileName,environment.vpnConfigFileName) vpnConfigFileName,
+          COALESCE(profile.configEncrypted,environment.vpnConfigEncrypted) vpnConfigEncrypted,
+          COALESCE(profile.configPasswordEncrypted,environment.vpnConfigPasswordEncrypted) vpnConfigPasswordEncrypted,
+          COALESCE(profile.configImportedAt,environment.vpnConfigImportedAt) vpnConfigImportedAt,
+          COALESCE(profile.installerUrl,environment.vpnInstallerUrl) vpnInstallerUrl,
+          COALESCE(profile.installerSha256,environment.vpnInstallerSha256) vpnInstallerSha256,
+          COALESCE(profile.verificationUrl,environment.vpnVerificationUrl) vpnVerificationUrl
+        FROM project_test_environments environment
+        LEFT JOIN vpn_profiles profile ON profile.id=environment.vpnProfileId AND profile.isActive=1
+        WHERE environment.projectId=? AND environment.isActive=1 ORDER BY environment.id`,
         [execution.projectId],
       ),
       connection.query("SELECT sourceCodeSummary FROM projects WHERE id=? LIMIT 1", [execution.projectId]),
@@ -171,6 +188,7 @@ async function main() {
     console.log(`Resumo do piloto: ${summaryFile}`);
   } finally {
     await connection.end();
+    await closeDatabaseConnection();
   }
 }
 
