@@ -317,25 +317,28 @@ export default function DashboardPage() {
       background: "#f3e8ff",
     },
     {
-      label: "Pass Rate",
+      label: "Testes aprovados",
       value: `${summary.passRate}%`,
-      detail: "Cenários estáveis",
+      detail: "Do total de cenários planejados",
+      tooltip: "Percentual de todos os cenários planejados que terminaram aprovados. Quanto maior, melhor.",
       icon: CheckCircle2,
       color: "#15803d",
       background: "#dcfce7",
     },
     {
-      label: "Fail Rate",
+      label: "Testes com falha",
       value: `${summary.failRate}%`,
       detail: "Falhas reais confirmadas",
+      tooltip: "Percentual de todos os cenários planejados que identificaram uma falha funcional confirmada. Quanto menor, melhor.",
       icon: XCircle,
       color: "#b91c1c",
       background: "#fee2e2",
     },
     {
-      label: "Flaky Rate",
+      label: "Testes instáveis",
       value: `${summary.flakyRate}%`,
       detail: `${summary.flakyScenarios} cenários instáveis`,
+      tooltip: "Percentual de cenários que apresentaram resultados diferentes entre execuções ou retestes. Quanto menor, melhor.",
       icon: RefreshCw,
       color: "#7c3aed",
       background: "#ede9fe",
@@ -349,12 +352,13 @@ export default function DashboardPage() {
       background: "#ffedd5",
     },
     {
-      label: "DRE",
+      label: "Detecção antecipada de defeitos",
       value: summary.dre === null ? "—" : `${summary.dre}%`,
       detail:
         summary.dre === null
           ? "Aguardando dados de defeitos"
           : "Defeitos removidos antes da produção",
+      tooltip: "Percentual dos defeitos conhecidos que foram identificados antes de chegar à produção. Quanto maior, melhor.",
       icon: ShieldCheck,
       color: "#0369a1",
       background: "#e0f2fe",
@@ -594,14 +598,16 @@ export default function DashboardPage() {
         >
           {cards.map(card => {
             const Icon = card.icon;
-            return (
+            const content = (
               <div
-                key={card.label}
+                tabIndex={card.tooltip ? 0 : undefined}
+                aria-label={card.tooltip ? `${card.label}: ${card.value}. ${card.tooltip}` : undefined}
                 style={{
                   background: "white",
                   borderRadius: 12,
                   padding: 16,
                   boxShadow: "0 1px 3px rgba(15,23,42,0.08)",
+                  cursor: card.tooltip ? "help" : undefined,
                 }}
               >
                 <div
@@ -651,6 +657,15 @@ export default function DashboardPage() {
                   {card.detail}
                 </div>
               </div>
+            );
+            if (!card.tooltip) return <Fragment key={card.label}>{content}</Fragment>;
+            return (
+              <HelpTooltip key={card.label}>
+                <HelpTooltipTrigger asChild>{content}</HelpTooltipTrigger>
+                <HelpTooltipContent side="top" sideOffset={8} className="max-w-80 leading-relaxed">
+                  {card.tooltip}
+                </HelpTooltipContent>
+              </HelpTooltip>
             );
           })}
         </div>
