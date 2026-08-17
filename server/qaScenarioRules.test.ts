@@ -37,7 +37,7 @@ describe("regras locais de cenários QA", () => {
         }],
       }],
     }, {
-      userStory: "Como usuário quero preencher um formulário e salvar os dados",
+      userStory: "Como usuário quero preencher um formulário com campos obrigatórios e salvar os dados",
       systemType: "web",
       criticality: "critical",
     });
@@ -45,6 +45,39 @@ describe("regras locais de cenários QA", () => {
     const cases = plan.cards.flatMap(card => card.casos);
     expect(cases.length).toBeLessThanOrEqual(12);
     expect(cases.some(item => /obrigatórios/i.test(item.titulo))).toBe(true);
+  });
+
+  it("não acrescenta cenários genéricos a um plano de domínio já suficiente", () => {
+    const domainCases = [
+      ["DEN-001", "Cadastrar denúncia", "cadastra a denúncia", "a denúncia é salva"],
+      ["DEN-002", "Consultar denúncia", "consulta pelo protocolo", "a denúncia é exibida"],
+      ["DEN-003", "Editar denúncia", "altera a ocorrência", "a alteração é apresentada"],
+    ].map(([id, titulo, quando, entao]) => ({
+      id, titulo, prioridade: "alta", dado: "existe uma denúncia", quando, entao,
+      resultado_esperado: entao, tipo: "funcional",
+    }));
+    const enhanced = enhancePlanWithQaRules({
+      resumo: "Fluxos de denúncia",
+      cobertura: { funcional: [], naoFuncional: [], heuristicas: [] },
+      cards: [
+        { categoria: "Denúncias", casos: domainCases },
+        { categoria: "Validações", casos: [{
+          id: "CT-004", titulo: "Validar campos obrigatórios não preenchidos", prioridade: "alta",
+          dado: "acessa um formulário", quando: "tenta prosseguir", entao: "o envio é impedido",
+          resultado_esperado: "o envio é impedido", tipo: "funcional",
+        }] },
+        { categoria: " ", casos: [] },
+      ],
+    }, {
+      userStory: "Como gestor quero manter o cadastro e acompanhar denúncias",
+      systemType: "web",
+      criticality: "high",
+    });
+
+    const cases = enhanced.cards.flatMap(card => card.casos);
+    expect(cases).toHaveLength(3);
+    expect(enhanced.cards).toHaveLength(1);
+    expect(cases.some(item => /^CT-/.test(item.id))).toBe(false);
   });
 
   it("analisa lacunas localmente", () => {

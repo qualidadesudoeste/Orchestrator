@@ -28,6 +28,15 @@ type PlanContext = {
 const normalize = (value: string) =>
   value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 
+const BOILERPLATE_TITLES = new Set([
+  "executar o fluxo principal com dados validos",
+  "validar campos obrigatorios nao preenchidos",
+  "impedir acesso com credenciais ou permissao invalida",
+  "operar o fluxo principal somente pelo teclado",
+]);
+
+const isBoilerplateCase = (item: QaCase) => BOILERPLATE_TITLES.has(normalize(item.titulo));
+
 const allCaseText = (plan: QaPlan) =>
   normalize(plan.cards.flatMap(card => card.casos).map(item =>
     `${item.titulo} ${item.dado} ${item.quando} ${item.entao}`,
@@ -71,13 +80,24 @@ const addCase = (plan: QaPlan, category: string, item: QaCase) => {
 export function enhancePlanWithQaRules(plan: QaPlan, context: PlanContext): QaPlan {
   const enhanced = structuredClone(plan);
   enhanced.cobertura ||= { funcional: [], naoFuncional: [], heuristicas: [] };
-  enhanced.cards ||= [];
+  enhanced.cards = (enhanced.cards ?? [])
+    .map(card => ({ ...card, categoria: card.categoria.trim(), casos: card.casos ?? [] }))
+    .filter(card => card.categoria && card.casos.length > 0);
+  const groundedCaseCount = enhanced.cards.flatMap(card => card.casos)
+    .filter(item => !isBoilerplateCase(item)).length;
+  if (groundedCaseCount >= 3) {
+    enhanced.cards = enhanced.cards
+      .map(card => ({ ...card, casos: card.casos.filter(item => !isBoilerplateCase(item)) }))
+      .filter(card => card.casos.length > 0);
+  }
   let text = allCaseText(enhanced);
   const story = normalize(context.userStory);
   const total = () => enhanced.cards.reduce((sum, card) => sum + card.casos.length, 0);
   const canAdd = () => total() < 12;
+  const fallbackMode = total() === 0;
 
-  if (canAdd() && !/(fluxo principal|sucesso|com sucesso|valido|válido)/.test(text)) {
+  const hasPositiveOutcome = /(fluxo principal|sucesso|com sucesso|valido|salv|cadastr|registr|criad|exibid|consult|localiz|conclu|confirm|atualiz)/.test(text);
+  if (canAdd() && (fallbackMode || total() < 2) && !hasPositiveOutcome) {
     addCase(enhanced, "Fluxo principal", makeCase(
       nextId(enhanced), "Executar o fluxo principal com dados válidos", "alta",
       "que o usuário possui dados válidos e atende às pré-condições da história",
@@ -90,7 +110,8 @@ export function enhancePlanWithQaRules(plan: QaPlan, context: PlanContext): QaPl
   }
 
   const hasInput = /(campo|formulario|formulário|preench|cadastr|login|senha|email|salvar|enviar)/.test(story);
-  if (canAdd() && hasInput && !/(obrigatorio|obrigatório|vazio|nao preench|não preench)/.test(text)) {
+  const explicitlyRequiresValidation = /(obrigat|validac|validar|vazio|nao preench|não preench|inval|formato|limite|mensagem de erro)/.test(story);
+  if (canAdd() && hasInput && (fallbackMode || explicitlyRequiresValidation) && !/(obrigatorio|obrigatório|vazio|nao preench|não preench)/.test(text)) {
     addCase(enhanced, "Validações", makeCase(
       nextId(enhanced), "Validar campos obrigatórios não preenchidos", "alta",
       "que o usuário acessou o formulário sem preencher os campos obrigatórios",
@@ -102,7 +123,7 @@ export function enhancePlanWithQaRules(plan: QaPlan, context: PlanContext): QaPl
     text = allCaseText(enhanced);
   }
 
-  const hasAccess = /(usuario|usuário|login|senha|acesso|permiss|perfil|autentic)/.test(story);
+  const hasAccess = /(login|senha|acesso|permiss|perfil|autentic|credencial|autoriz)/.test(story);
   if (canAdd() && hasAccess && !/(permiss|nao autoriz|não autoriz|acesso negado|credencial invalida|credencial inválida)/.test(text)) {
     addCase(enhanced, "Segurança", makeCase(
       nextId(enhanced), "Impedir acesso com credenciais ou permissão inválida", "alta",
@@ -116,7 +137,8 @@ export function enhancePlanWithQaRules(plan: QaPlan, context: PlanContext): QaPl
   }
 
   const needsAccessibility = ["web", "mobile"].includes(context.systemType) &&
-    ["high", "critical"].includes(context.criticality);
+    ["high", "critical"].includes(context.criticality) &&
+    (fallbackMode || /(acessibilidade|teclado|leitor de tela|foco)/.test(story));
   if (canAdd() && needsAccessibility && !/(teclado|acessibilidade|leitor de tela|foco)/.test(text)) {
     addCase(enhanced, "Usabilidade e acessibilidade", makeCase(
       nextId(enhanced), "Operar o fluxo principal somente pelo teclado", "média",
