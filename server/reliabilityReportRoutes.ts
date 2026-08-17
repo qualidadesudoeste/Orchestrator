@@ -3,12 +3,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Express, Request } from "express";
+import { logError } from "./_core/logger";
 import { ENV } from "./_core/env";
 import {
   buildReliabilityReport,
   ReliabilityReportValidationError,
   renderReliabilityHtml,
 } from "./reliabilityReportService";
+import { resolveWorkerArtifactReference } from "./workerArtifactRoutes";
 
 const PROJECT_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -19,6 +21,8 @@ const OUTPUT_DIRECTORY = path.resolve(
   "artifacts",
   "reliability-reports",
 );
+const ARTIFACTS_DIRECTORY = path.resolve(PROJECT_ROOT, "artifacts");
+const EVIDENCE_DIRECTORY = path.resolve(ARTIFACTS_DIRECTORY, "playwright-mcp");
 const DOWNLOAD_LIFETIME_SECONDS = 7 * 24 * 60 * 60;
 const SAFE_FILENAME = /^[a-z0-9][a-z0-9._-]{0,180}\.html$/i;
 
@@ -57,19 +61,93 @@ function signature(filename: string, expires: number): string {
     .digest("hex");
 }
 
-function downloadUrl(req: Request, filename: string, expires: number): string {
-  const baseUrl =
-    ENV.orchestratorPublicUrl.replace(/\/+$/, "") ||
-    `${req.protocol}://${req.get("host")}`;
+function artifactDownloadUrl(filename: string, expires: number, baseUrl?: string): string {
+  const resolvedBase = (baseUrl || ENV.orchestratorPublicUrl || `http://localhost:${ENV.port}`).replace(/\/+$/, "");
   const url = new URL(
     `/api/qa/reliability-reports/${encodeURIComponent(filename)}`,
-    baseUrl,
+    resolvedBase,
   );
   url.searchParams.set("expires", String(expires));
   url.searchParams.set("signature", signature(filename, expires));
   return url.toString();
 }
 
+function isInside(directory: string, candidate: string): boolean {
+  const relative = path.relative(directory, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+async function evidenceDataUri(value: string): Promise<string> {
+  if (value.startsWith("data:image/")) return value;
+  if (/^https?:\/\//i.test(value)) return value;
+
+  const normalized = value.replace(/^file:\/\//i, "");
+  const sharedArtifact = resolveWorkerArtifactReference(value);
+  const candidates = sharedArtifact
+    ? [sharedArtifact]
+    : path.isAbsolute(normalized)
+    ? [path.resolve(normalized)]
+    : [
+        path.resolve(PROJECT_ROOT, normalized),
+        path.resolve(EVIDENCE_DIRECTORY, normalized),
+        path.resolve(EVIDENCE_DIRECTORY, path.basename(normalized)),
+      ];
+  const mimeByExtension: Record<string, string> = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+  };
+
+  for (const candidate of candidates) {
+    if (!isInside(ARTIFACTS_DIRECTORY, candidate)) continue;
+    const mime = mimeByExtension[path.extname(candidate).toLowerCase()];
+    if (!mime) continue;
+    try {
+      const file = await fs.readFile(candidate);
+      if (file.length > 5_000_000) continue;
+      return `data:${mime};base64,${file.toString("base64")}`;
+    } catch {
+      // Tenta o próximo caminho permitido.
+    }
+  }
+  return value;
+}
+
+async function embedEvidenceImages(report: ReturnType<typeof buildReliabilityReport>): Promise<void> {
+  for (const result of report.results) {
+    for (const attempt of result.reliability.history) {
+      attempt.evidence = await Promise.all(attempt.evidence.map(evidenceDataUri));
+    }
+  }
+}
+
+export async function generateReliabilityReportArtifact(
+  payload: unknown,
+  baseUrl?: string,
+): Promise<Record<string, any>> {
+  const report = buildReliabilityReport(payload);
+  await embedEvidenceImages(report);
+  const html = renderReliabilityHtml(report);
+  await fs.mkdir(OUTPUT_DIRECTORY, { recursive: true });
+  const filename = `${slug(report.executionId)}-${crypto.randomUUID()}.html`;
+  await fs.writeFile(path.join(OUTPUT_DIRECTORY, filename), html, {
+    encoding: "utf8",
+    flag: "wx",
+  });
+  const expires = Math.floor(Date.now() / 1000) + DOWNLOAD_LIFETIME_SECONDS;
+  return {
+    ...report.enrichedPayload,
+    reliability_report: {
+      filename,
+      download_url: artifactDownloadUrl(filename, expires, baseUrl),
+      expires_at: new Date(expires * 1000).toISOString(),
+      generated_at: report.generatedAt,
+      bytes: Buffer.byteLength(html, "utf8"),
+      totals: report.totals,
+    },
+  };
+}
 export function registerReliabilityReportRoutes(app: Express): void {
   app.post("/api/qa/reliability-reports", async (req, res) => {
     try {
@@ -86,27 +164,8 @@ export function registerReliabilityReportRoutes(app: Express): void {
         return;
       }
 
-      const report = buildReliabilityReport(req.body?.json ?? req.body);
-      const html = renderReliabilityHtml(report);
-      await fs.mkdir(OUTPUT_DIRECTORY, { recursive: true });
-      const filename = `${slug(report.executionId)}-${crypto.randomUUID()}.html`;
-      await fs.writeFile(path.join(OUTPUT_DIRECTORY, filename), html, {
-        encoding: "utf8",
-        flag: "wx",
-      });
-      const expires = Math.floor(Date.now() / 1000) + DOWNLOAD_LIFETIME_SECONDS;
-
-      res.status(201).json({
-        ...report.enrichedPayload,
-        reliability_report: {
-          filename,
-          download_url: downloadUrl(req, filename, expires),
-          expires_at: new Date(expires * 1000).toISOString(),
-          generated_at: report.generatedAt,
-          bytes: Buffer.byteLength(html, "utf8"),
-          totals: report.totals,
-        },
-      });
+      const baseUrl = ENV.orchestratorPublicUrl.replace(/\/+$/, "") || `${req.protocol}://${req.get("host")}`;
+      res.status(201).json(await generateReliabilityReportArtifact(req.body?.json ?? req.body, baseUrl));
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Falha desconhecida.";
@@ -114,7 +173,7 @@ export function registerReliabilityReportRoutes(app: Express): void {
         res.status(400).json({ error: message });
         return;
       }
-      console.error("[qa-reliability-report] error:", error);
+      logError("qa_reliability_report_failed", error);
       res.status(500).json({
         error: `Falha ao gerar relatório de confiabilidade: ${message}`,
       });

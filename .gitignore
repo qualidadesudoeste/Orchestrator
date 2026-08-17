@@ -8,8 +8,7 @@ artifacts/
 !.env.production.example
 *.log
 smoke-*.png
-.manus-logs/
-.manus/
+.runtime-logs/
+.playwright-mcp/
 .git-corrupted/
 .project-config.json
-client/public/__manus__/

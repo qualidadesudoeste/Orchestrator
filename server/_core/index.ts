@@ -16,65 +16,19 @@ import { registerNonFunctionalRoutes } from "../nonFunctionalRoutes";
 import { registerDefectCardRoutes } from "../defectCardRoutes";
 import { registerReliabilityReportRoutes } from "../reliabilityReportRoutes";
 import { registerAgentMemoryRoutes } from "../agentMemoryRoutes";
+import { registerWorkerArtifactRoutes } from "../workerArtifactRoutes";
 import { checkDatabaseHealth } from "../db";
 import { sdk } from "./sdk";
 import { ENV } from "./env";
-import {
-  assertProductionEnvironment,
-  parseTrustProxy,
-} from "./envValidation";
-import {
-  registerSecurityMiddleware,
-  requestLogMiddleware,
-} from "./security";
+import { assertProductionEnvironment, parseTrustProxy } from "./envValidation";
+import { registerSecurityMiddleware, requestLogMiddleware } from "./security";
 import { COOKIE_NAME } from "@shared/const";
 import cookie from "cookie";
 import { createRequire } from "module";
+import { MultipartValidationError, parseMultipartFiles } from "./multipart";
+import { logError, logInfo, logWarn } from "./logger";
+import { safeErrorMessage } from "./sensitiveData";
 const require = createRequire(import.meta.url);
-
-// ─── Multipart upload helper (no external deps) ───────────────────────────────
-async function parseMultipartImages(req: express.Request): Promise<{ buffer: Buffer; mimetype: string; filename: string }[]> {
-  return new Promise((resolve, reject) => {
-    const boundary = (() => {
-      const ct = req.headers["content-type"] ?? "";
-      const m = ct.match(/boundary=([^\s;]+)/);
-      return m ? m[1] : null;
-    })();
-    if (!boundary) return reject(new Error("No boundary"));
-    const chunks: Buffer[] = [];
-    req.on("data", (c: Buffer) => chunks.push(c));
-    req.on("end", () => {
-      const body = Buffer.concat(chunks);
-      const sep = Buffer.from(`--${boundary}`);
-      const results: { buffer: Buffer; mimetype: string; filename: string }[] = [];
-      let start = 0;
-      while (true) {
-        const idx = body.indexOf(sep, start);
-        if (idx === -1) break;
-        start = idx + sep.length;
-        if (body.slice(start, start + 2).toString() === "--") break;
-        // skip \r\n after boundary
-        let headerStart = start + 2;
-        const headerEnd = body.indexOf(Buffer.from("\r\n\r\n"), headerStart);
-        if (headerEnd === -1) continue;
-        const headers = body.slice(headerStart, headerEnd).toString();
-        const filenameMatch = headers.match(/filename="([^"]+)"/);
-        const mimeMatch = headers.match(/Content-Type:\s*([^\r\n]+)/);
-        if (!filenameMatch || !mimeMatch) continue;
-        const filename = filenameMatch[1];
-        const mimetype = mimeMatch[1].trim();
-        const dataStart = headerEnd + 4;
-        const nextBoundary = body.indexOf(sep, dataStart);
-        const dataEnd = nextBoundary === -1 ? body.length : nextBoundary - 2;
-        const buffer = body.slice(dataStart, dataEnd);
-        results.push({ buffer, mimetype, filename });
-        start = nextBoundary === -1 ? body.length : nextBoundary;
-      }
-      resolve(results);
-    });
-    req.on("error", reject);
-  });
-}
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -98,12 +52,7 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 async function startServer() {
   const environmentValidation = assertProductionEnvironment();
   for (const warning of environmentValidation.warnings) {
-    console.warn(JSON.stringify({
-      timestamp: new Date().toISOString(),
-      level: "warn",
-      event: "configuration_warning",
-      message: warning,
-    }));
+    logWarn("configuration_warning", { message: warning });
   }
 
   const app = express();
@@ -143,6 +92,7 @@ async function startServer() {
   registerDefectCardRoutes(app);
   registerReliabilityReportRoutes(app);
   registerAgentMemoryRoutes(app);
+  registerWorkerArtifactRoutes(app);
 
   // ── Upload de imagens para evidências de teste ──────────────────────────────
   app.post("/api/qa-upload", async (req, res) => {
@@ -150,25 +100,48 @@ async function startServer() {
       // Autenticação básica
       const cookieHeader = req.headers.cookie ?? "";
       const cookies = cookie.parse(cookieHeader);
-      const token = cookies[COOKIE_NAME] ?? (req.headers.authorization?.replace("Bearer ", "") ?? "");
-      if (!token) { res.status(401).json({ error: "Não autenticado" }); return; }
+      const token =
+        cookies[COOKIE_NAME] ??
+        req.headers.authorization?.replace("Bearer ", "") ??
+        "";
+      if (!token) {
+        res.status(401).json({ error: "Não autenticado" });
+        return;
+      }
       const session = await sdk.verifySession(token).catch(() => null);
-      if (!session) { res.status(401).json({ error: "Sessão inválida" }); return; }
+      if (!session) {
+        res.status(401).json({ error: "Sessão inválida" });
+        return;
+      }
 
-      const files = await parseMultipartImages(req);
-      if (files.length === 0) { res.status(400).json({ error: "Nenhum arquivo enviado" }); return; }
+      const files = await parseMultipartFiles(req, {
+        kind: "image",
+        maxFiles: 8,
+        maxFileBytes: 10 * 1024 * 1024,
+        maxTotalBytes: 25 * 1024 * 1024,
+      });
+      if (files.length === 0) {
+        res.status(400).json({ error: "Nenhum arquivo enviado" });
+        return;
+      }
 
-      const uploaded = await Promise.all(files.map(async ({ buffer, mimetype, filename }) => {
-        const ext = filename.split(".").pop() ?? "png";
-        const key = `qa-evidence/${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
-        const { url } = await storagePut(key, buffer, mimetype);
-        return { url, key, filename };
-      }));
+      const uploaded = await Promise.all(
+        files.map(async ({ buffer, mimetype, filename, extension }) => {
+          const key = `qa-evidence/${Date.now()}_${Math.random().toString(36).slice(2)}.${extension}`;
+          const { url } = await storagePut(key, buffer, mimetype);
+          return { url, key, filename };
+        })
+      );
 
-    res.json(uploaded);
+      res.json(uploaded);
     } catch (e: any) {
-      console.error("[qa-upload] error:", e);
-      res.status(500).json({ error: e.message });
+      logError("qa_upload_failed", e);
+      res.status(e instanceof MultipartValidationError ? e.status : 500).json({
+        error:
+          e instanceof MultipartValidationError
+            ? safeErrorMessage(e)
+            : "Falha ao armazenar o arquivo.",
+      });
     }
   });
 
@@ -177,30 +150,46 @@ async function startServer() {
     try {
       const cookieHeader = req.headers.cookie ?? "";
       const cookies = cookie.parse(cookieHeader);
-      const token = cookies[COOKIE_NAME] ?? (req.headers.authorization?.replace("Bearer ", "") ?? "");
-      if (!token) { res.status(401).json({ error: "Não autenticado" }); return; }
+      const token =
+        cookies[COOKIE_NAME] ??
+        req.headers.authorization?.replace("Bearer ", "") ??
+        "";
+      if (!token) {
+        res.status(401).json({ error: "Não autenticado" });
+        return;
+      }
       const session = await sdk.verifySession(token).catch(() => null);
-      if (!session) { res.status(401).json({ error: "Sessão inválida" }); return; }
+      if (!session) {
+        res.status(401).json({ error: "Sessão inválida" });
+        return;
+      }
 
-      const files = await parseMultipartImages(req);
-      if (files.length === 0) { res.status(400).json({ error: "Nenhum arquivo enviado" }); return; }
+      const files = await parseMultipartFiles(req, {
+        kind: "document",
+        maxFiles: 1,
+        maxFileBytes: 15 * 1024 * 1024,
+        maxTotalBytes: 15 * 1024 * 1024,
+      });
+      if (files.length === 0) {
+        res.status(400).json({ error: "Nenhum arquivo enviado" });
+        return;
+      }
 
-      const { buffer, mimetype, filename } = files[0];
+      const { buffer, filename, extension } = files[0];
       let text = "";
 
-      if (mimetype === "application/pdf" || filename.toLowerCase().endsWith(".pdf")) {
+      if (extension === "pdf") {
         const pdfParse = require("pdf-parse");
         const data = await pdfParse(buffer);
         text = data.text ?? "";
-      } else if (
-        mimetype === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
-        filename.toLowerCase().endsWith(".docx")
-      ) {
+      } else if (extension === "docx") {
         const mammoth = require("mammoth");
         const result = await mammoth.extractRawText({ buffer });
         text = result.value ?? "";
       } else {
-        res.status(400).json({ error: "Formato não suportado. Use PDF ou DOCX." });
+        res
+          .status(400)
+          .json({ error: "Formato não suportado. Use PDF ou DOCX." });
         return;
       }
 
@@ -208,8 +197,13 @@ async function startServer() {
       text = text.replace(/\s+/g, " ").trim().slice(0, 8000);
       res.json({ text, filename });
     } catch (e: any) {
-      console.error("[qa-extract] error:", e);
-      res.status(500).json({ error: e.message });
+      logError("qa_extract_failed", e);
+      res.status(e instanceof MultipartValidationError ? e.status : 500).json({
+        error:
+          e instanceof MultipartValidationError
+            ? safeErrorMessage(e)
+            : "Falha ao extrair o documento.",
+      });
     }
   });
 
@@ -234,28 +228,24 @@ async function startServer() {
     : await findAvailablePort(preferredPort);
 
   if (port !== preferredPort) {
-    console.log(`Port ${preferredPort} is busy, using port ${port} instead`);
+    logWarn("preferred_port_unavailable", {
+      preferredPort,
+      selectedPort: port,
+    });
   }
 
   server.listen(port, ENV.host, () => {
-    console.log(JSON.stringify({
-      timestamp: new Date().toISOString(),
-      level: "info",
-      event: "server_started",
+    logInfo("server_started", {
       host: ENV.host,
       port,
-    }));
+    });
   });
-
   const shutdown = (signal: string) => {
     if (shuttingDown) return;
     shuttingDown = true;
-    console.log(JSON.stringify({
-      timestamp: new Date().toISOString(),
-      level: "info",
-      event: "shutdown_started",
+    logInfo("shutdown_started", {
       signal,
-    }));
+    });
     const timeout = setTimeout(() => {
       server.closeAllConnections();
       process.exit(1);
@@ -264,19 +254,10 @@ async function startServer() {
     server.close(error => {
       clearTimeout(timeout);
       if (error) {
-        console.error(JSON.stringify({
-          timestamp: new Date().toISOString(),
-          level: "error",
-          event: "shutdown_failed",
-          message: error.message,
-        }));
+        logError("shutdown_failed", error);
         process.exit(1);
       }
-      console.log(JSON.stringify({
-        timestamp: new Date().toISOString(),
-        level: "info",
-        event: "shutdown_complete",
-      }));
+      logInfo("shutdown_complete");
       process.exit(0);
     });
   };
@@ -285,11 +266,6 @@ async function startServer() {
 }
 
 startServer().catch(error => {
-  console.error(JSON.stringify({
-    timestamp: new Date().toISOString(),
-    level: "error",
-    event: "startup_failed",
-    message: error instanceof Error ? error.message : String(error),
-  }));
+  logError("startup_failed", error);
   process.exitCode = 1;
 });

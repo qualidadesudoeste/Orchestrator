@@ -5,12 +5,14 @@
 - Docker Engine ou Docker Desktop com Compose;
 - domínio HTTPS apontando para um proxy reverso;
 - backup externo ao servidor;
-- credenciais diferentes das usadas em desenvolvimento.
+- credenciais diferentes das usadas em desenvolvimento;
+- host Windows separado para Chrome/Playwright quando houver automação web.
 
 ## Primeira implantação
 
 1. Copie `.env.production.example` para `.env.production`.
-2. Gere valores aleatórios independentes para banco, JWT e agente.
+2. Gere valores aleatórios independentes para banco, JWT, agente e criptografia
+   de credenciais.
 3. Configure `ORCHESTRATOR_PUBLIC_URL` com o endereço HTTPS final.
 
 Como alternativa aos três passos acima, gere o arquivo sem expor os segredos
@@ -39,7 +41,9 @@ docker compose --env-file .env.production -f docker-compose.production.yml up -d
 ```
 
 O serviço `migrate` aplica somente migrations versionadas antes de liberar o
-container da aplicação. Não execute `db:generate` no servidor.
+container da aplicação. Não execute `db:generate` no servidor. Esse container
+é somente API/frontend; o worker Windows deve ser implantado separadamente
+conforme [`../worker/README.md`](../worker/README.md).
 
 ## Primeiro administrador
 
@@ -104,7 +108,7 @@ echo "$GHCR_TOKEN" | docker login ghcr.io -u USUARIO --password-stdin
 O container publica por padrão apenas em `127.0.0.1:3000`. Use Nginx, Caddy ou
 o proxy corporativo para TLS, encaminhando `Host`, `X-Forwarded-For` e
 `X-Forwarded-Proto`. Configure `TRUST_PROXY=1` somente quando houver exatamente
-um proxy confiável. Não exponha MySQL, n8n ou Playwright MCP à internet.
+um proxy confiável. Não exponha MySQL nem os workers Playwright à internet.
 
 O arquivo `Caddyfile.example` contém a configuração mínima para HTTPS
 automático. Copie-o para `/etc/caddy/Caddyfile`, substitua o domínio e recarregue

@@ -1,150 +1,327 @@
-import bcrypt from "bcryptjs";
+import { randomUUID } from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { COOKIE_NAME } from "@shared/const";
-import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
-import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
-import { sdk } from "./_core/sdk";
+import { sigRouter } from "./sigRouter";
+import { protectedProcedure, router } from "./_core/trpc";
+import { adminProcedure } from "./_core/authorization";
+import { authRouter } from "./routers/authRouter";
+import { usersRouter } from "./routers/usersRouter";
 import {
   createClient, createProject, createSprint,
   deleteClient, deleteProject, deleteSprint,
   getAllChecklists, getAllUsers,
-  getChecklist, getChecklistsByAnalyst,
+  getChecklist, getChecklistById, getChecklistsByAnalyst,
   getClients, getProjects, getSprints,
   updateClient, updateProject, updateSprint,
   upsertChecklist,
+  updateChecklistResponsible,
   getProgressBySprints,
-  getUserByUsername,
   getUserById,
-  createLocalUser,
-  updateLocalUser,
-  deleteUser,
-  updateLastSignedIn,
   getDashboardMetrics,
+  listTestExecutionHistory,
+  listExecutionQueue,
+  controlTestExecution,
   getDefectCardHistory,
+  getDefectCardByExternalId,
   updateDefectCardStatus,
-} from "./db";
-import {
-  getTrailProgress,
-  upsertTrailProgress,
-  getAllTrailProgress,
+  createPendingTestExecution,
+  getTestExecutionProgress,
+  markTestExecutionQueued,
+  markTestExecutionStartFailure,
+  listProjectTestEnvironments,
+  getProjectTestEnvironment,
+  createProjectTestEnvironment,
+  updateProjectTestEnvironment,
+  deleteProjectTestEnvironment,
+  listVpnProfiles,
+  getVpnProfile,
+  createVpnProfile,
+  updateVpnProfile,
+  deleteVpnProfile,
+  listAiProviderSettings,
+  getAiProviderSetting,
+  createAiProviderSetting,
+  updateAiProviderSetting,
+  deleteAiProviderSetting,
+  getExecutionQueueOverview,
+  updateExecutionWorkerSettings,
+  getProjectQaProvisioning,
+  upsertProjectQaProvisioning,
+  getProjectAccess,
+  listProjectMembers,
+  replaceProjectMembers,
 } from "./db";
 import {
   insertQAPlanDocument,
   listQAPlanDocuments,
   getQAPlanDocument,
   deleteQAPlanDocument,
+  insertQATestPlan,
+  listQATestPlans,
+  getQATestPlan,
+  deleteQATestPlan,
+  updateQATestPlanResponsible,
 } from "./db";
-import { invokeLLM } from "./_core/llm";
+import { invokeLLM, testLLMProviderConfig } from "./_core/llm";
 import { storagePut } from "./storage";
 import {
   DEFECT_CARD_STATUSES,
   DefectCardTransitionError,
 } from "./defectCardLifecycleService";
+import { ENV } from "./_core/env";
+import {
+  analyzeCoverageWithQaRules,
+  buildRuleBasedPlan,
+  enhancePlanWithQaRules,
+} from "./qaScenarioRules";
+import { indexProjectSource } from "./sourceCodeService";
+import { decryptCredential, encryptCredential } from "./credentialCrypto";
+import { assertCompatibleVpnRequirements, ensureVpnConnection, type VpnRequirement } from "./vpnService";
+import {
+  queuePoolForProvider,
+  type QueuedExecutionDispatchPayload,
+} from "./executionQueueTypes";
+import { normalizeGherkinStepText, testQaProvisioningConnection } from "./automation-v2";
+import { logError } from "./_core/logger";
+import {
+  assertConfiguredTargetUrl,
+  assertSafeManualTargetUrl,
+} from "./_core/urlPolicy";
 
-const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
-  if (ctx.user.role !== "admin") throw new TRPCError({ code: "FORBIDDEN", message: "Acesso restrito ao Administrador." });
-  return next({ ctx });
+async function requireProjectAccess(
+  ctx: { user: { id: number; role: string } },
+  projectId: number,
+  required: "VIEWER" | "EXECUTOR" = "VIEWER",
+): Promise<void> {
+  if (ctx.user.role === "admin") return;
+  const access = await getProjectAccess(projectId, ctx.user.id);
+  if (!access || (required === "EXECUTOR" && access.role !== "EXECUTOR")) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: required === "EXECUTOR"
+        ? "Você não possui permissão de execução neste projeto."
+        : "Você não possui acesso a este projeto.",
+    });
+  }
+}
+
+async function accessibleProjectIds(
+  ctx: { user: { id: number; role: string } },
+): Promise<Set<number> | null> {
+  if (ctx.user.role === "admin") return null;
+  const projects = await getProjects();
+  const access = await Promise.all(
+    projects.map(async project => ({
+      id: project.id,
+      allowed: Boolean(await getProjectAccess(project.id, ctx.user.id)),
+    })),
+  );
+  return new Set(access.filter(item => item.allowed).map(item => item.id));
+}
+
+async function requireSprintAccess(
+  ctx: { user: { id: number; role: string } },
+  sprintId: number,
+  required: "VIEWER" | "EXECUTOR" = "VIEWER",
+): Promise<void> {
+  const sprint = (await getSprints()).find(item => item.id === sprintId);
+  if (!sprint) throw new TRPCError({ code: "NOT_FOUND", message: "Sprint nÃ£o encontrada." });
+  await requireProjectAccess(ctx, sprint.projectId, required);
+}
+
+function decodeVpnConfig(fileName: string | null | undefined, base64: string | null | undefined): string | null {
+  if (!base64) return null;
+  const normalizedName = String(fileName ?? "").trim();
+  if (!/\.(?:conf|xml)$/i.test(normalizedName)) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "O arquivo da VPN deve possuir extensão .conf ou .xml." });
+  }
+  let buffer: Buffer;
+  try {
+    buffer = Buffer.from(base64, "base64");
+  } catch {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "O arquivo de configuração da VPN é inválido." });
+  }
+  if (buffer.length === 0 || buffer.length > 1024 * 1024) {
+    throw new TRPCError({ code: "PAYLOAD_TOO_LARGE", message: "O arquivo de configuração da VPN deve possuir no máximo 1 MB." });
+  }
+  return buffer.toString("base64");
+}
+
+function validateVpnInstallerPair(installerUrl?: string | null, installerSha256?: string | null): void {
+  if (Boolean(installerUrl) !== Boolean(installerSha256)) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "Informe juntos a URL oficial e o SHA-256 do instalador da VPN." });
+  }
+  if (installerUrl && !installerUrl.startsWith("https://")) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "A URL do instalador da VPN deve usar HTTPS." });
+  }
+  if (installerSha256 && !/^[a-f0-9]{64}$/i.test(installerSha256)) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "O SHA-256 do instalador deve possuir 64 caracteres hexadecimais." });
+  }
+}
+
+async function vpnRequirementForEnvironment(environment: NonNullable<Awaited<ReturnType<typeof getProjectTestEnvironment>>>): Promise<VpnRequirement & { globalProfileId: number | null }> {
+  if (environment.vpnProfileId) {
+    const profile = await getVpnProfile(environment.vpnProfileId);
+    if (!profile || !profile.isActive) {
+      throw new TRPCError({ code: "PRECONDITION_FAILED", message: `A VPN global associada ao ambiente ${environment.name} não existe ou está inativa.` });
+    }
+    return {
+      provider: profile.provider,
+      profileName: profile.profileName,
+      username: profile.username,
+      password: profile.passwordEncrypted ? decryptCredential(profile.passwordEncrypted) : null,
+      autoConnect: Boolean(profile.autoConnect),
+      targetUrl: environment.loginUrl,
+      verificationUrl: profile.verificationUrl,
+      connectionStrategy: profile.connectionStrategy,
+      configFileName: profile.configFileName,
+      configContent: profile.configEncrypted ? decryptCredential(profile.configEncrypted) : null,
+      configPassword: profile.configPasswordEncrypted ? decryptCredential(profile.configPasswordEncrypted) : null,
+      configImported: Boolean(profile.configImportedAt),
+      installerUrl: profile.installerUrl,
+      installerSha256: profile.installerSha256,
+      globalProfileId: profile.id,
+    };
+  }
+  return {
+    provider: environment.vpnProvider,
+    profileName: environment.vpnProfileName ?? "",
+    username: environment.vpnUsername,
+    password: environment.vpnPasswordEncrypted ? decryptCredential(environment.vpnPasswordEncrypted) : null,
+    autoConnect: Boolean(environment.vpnAutoConnect),
+    targetUrl: environment.loginUrl,
+    verificationUrl: environment.vpnVerificationUrl,
+    connectionStrategy: environment.vpnConnectionStrategy,
+    configFileName: environment.vpnConfigFileName,
+    configContent: environment.vpnConfigEncrypted ? decryptCredential(environment.vpnConfigEncrypted) : null,
+    configPassword: environment.vpnConfigPasswordEncrypted ? decryptCredential(environment.vpnConfigPasswordEncrypted) : null,
+    configImported: Boolean(environment.vpnConfigImportedAt),
+    installerUrl: environment.vpnInstallerUrl,
+    installerSha256: environment.vpnInstallerSha256,
+    globalProfileId: null,
+  };
+}
+const qaGeneratedCasesSchema = z.object({
+  resumo: z.string().default(""),
+  cobertura: z.object({
+    funcional: z.array(z.string()).default([]),
+    naoFuncional: z.array(z.string()).default([]),
+    heuristicas: z.array(z.string()).default([]),
+  }).default({ funcional: [], naoFuncional: [], heuristicas: [] }),
+  cards: z.array(z.object({
+    categoria: z.string().default("Casos de teste"),
+    casos: z.array(z.object({
+      id: z.string().default(""),
+      titulo: z.string().default("Caso de teste"),
+      prioridade: z.string().default("média"),
+      dado: z.string().default(""),
+      quando: z.string().default(""),
+      entao: z.string().default(""),
+      resultado_esperado: z.string().default(""),
+      tipo: z.string().default("funcional"),
+      produz: z.array(z.string().trim().min(1).max(80)).max(10).default([]),
+      consome: z.array(z.string().trim().min(1).max(80)).max(10).default([]),
+    })).default([]),
+  })).default([]),
 });
 
 export const appRouter = router({
   system: systemRouter,
-  auth: router({
-    login: publicProcedure
-      .input(z.object({ username: z.string().min(1), password: z.string().min(1) }))
-      .mutation(async ({ ctx, input }) => {
-        const user = await getUserByUsername(input.username);
-        if (!user || !user.passwordHash) {
-          throw new TRPCError({ code: "UNAUTHORIZED", message: "Usuário ou senha inválidos." });
-        }
-        const valid = await bcrypt.compare(input.password, user.passwordHash);
-        if (!valid) {
-          throw new TRPCError({ code: "UNAUTHORIZED", message: "Usuário ou senha inválidos." });
-        }
-        // Criar sessão JWT com userId como identificador
-        const token = await sdk.signSession(
-          { openId: `local:${user.id}`, appId: "qa-local", name: user.name ?? user.username ?? "" },
-          { expiresInMs: 365 * 24 * 60 * 60 * 1000 }
-        );
-        const cookieOptions = getSessionCookieOptions(ctx.req);
-        ctx.res.cookie(COOKIE_NAME, token, cookieOptions);
-        await updateLastSignedIn(user.id);
-        // Retornar usuário sem passwordHash
-        const { passwordHash: _, ...safeUser } = user;
-        return { success: true, user: safeUser };
-      }),
-    me: publicProcedure.query(opts => {
-      if (!opts.ctx.user) return null;
-      const { passwordHash: _, ...safeUser } = opts.ctx.user as any;
-      return safeUser;
+  sig: sigRouter,
+  auth: authRouter,
+  users: usersRouter,
+  parameters: router({
+    vpnProfiles: adminProcedure.query(() => listVpnProfiles()),
+    createVpnProfile: adminProcedure.input(z.object({
+      name: z.string().trim().min(1).max(160), provider: z.enum(["COGEL", "SEFAZ", "OUTRA"]),
+      profileName: z.string().trim().min(1).max(160), username: z.string().trim().max(320).optional(), password: z.string().max(512).optional(),
+      autoConnect: z.boolean().default(true), connectionStrategy: z.enum(["AUTO", "CLI", "AUTOCONNECT"]).default("AUTO"),
+      configFileName: z.string().trim().max(255).optional(), configBase64: z.string().max(1_500_000).optional(), configPassword: z.string().max(512).optional(),
+      installerUrl: z.string().trim().url().max(2000).optional(), installerSha256: z.string().trim().max(64).optional(),
+      verificationUrl: z.string().trim().url().max(1000).optional(), isActive: z.boolean().default(true),
+    })).mutation(async ({ ctx, input }) => {
+      const { password, configBase64, configPassword, autoConnect, isActive, ...data } = input;
+      const configContent = decodeVpnConfig(data.configFileName, configBase64);
+      validateVpnInstallerPair(data.installerUrl, data.installerSha256);
+      const id = await createVpnProfile({ ...data, username: data.username || null, passwordEncrypted: password ? encryptCredential(password) : null,
+        autoConnect: autoConnect ? 1 : 0, configEncrypted: configContent ? encryptCredential(configContent) : null,
+        configPasswordEncrypted: configPassword ? encryptCredential(configPassword) : null, installerUrl: data.installerUrl || null,
+        installerSha256: data.installerSha256?.toLowerCase() || null, verificationUrl: data.verificationUrl || null,
+        isActive: isActive ? 1 : 0, createdById: ctx.user.id });
+      return { success: true as const, id };
     }),
-    logout: publicProcedure.mutation(({ ctx }) => {
-      const cookieOptions = getSessionCookieOptions(ctx.req);
-      ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
-      return { success: true } as const;
+    updateVpnProfile: adminProcedure.input(z.object({
+      id: z.number().int().positive(), name: z.string().trim().min(1).max(160).optional(), provider: z.enum(["COGEL", "SEFAZ", "OUTRA"]).optional(),
+      profileName: z.string().trim().min(1).max(160).optional(), username: z.string().trim().max(320).nullable().optional(), password: z.string().max(512).nullable().optional(),
+      autoConnect: z.boolean().optional(), connectionStrategy: z.enum(["AUTO", "CLI", "AUTOCONNECT"]).optional(),
+      configFileName: z.string().trim().max(255).nullable().optional(), configBase64: z.string().max(1_500_000).nullable().optional(), configPassword: z.string().max(512).nullable().optional(), clearConfig: z.boolean().optional(),
+      installerUrl: z.string().trim().url().max(2000).nullable().optional(), installerSha256: z.string().trim().max(64).nullable().optional(),
+      verificationUrl: z.string().trim().url().max(1000).nullable().optional(), isActive: z.boolean().optional(),
+    })).mutation(async ({ input }) => {
+      const { id, password, configBase64, configPassword, clearConfig, autoConnect, isActive, ...data } = input;
+      const configContent = configBase64 ? decodeVpnConfig(data.configFileName, configBase64) : null;
+      validateVpnInstallerPair(data.installerUrl, data.installerSha256);
+      await updateVpnProfile(id, { ...data,
+        ...(password === undefined ? {} : { passwordEncrypted: password ? encryptCredential(password) : null }),
+        ...(autoConnect === undefined ? {} : { autoConnect: autoConnect ? 1 : 0 }),
+        ...(configBase64 === undefined ? {} : { configFileName: data.configFileName || null, configEncrypted: configContent ? encryptCredential(configContent) : null, configImportedAt: null }),
+        ...(configPassword === undefined ? {} : { configPasswordEncrypted: configPassword ? encryptCredential(configPassword) : null }),
+        ...(clearConfig ? { configFileName: null, configEncrypted: null, configPasswordEncrypted: null, configImportedAt: null } : {}),
+        ...(data.installerSha256 === undefined ? {} : { installerSha256: data.installerSha256?.toLowerCase() || null }),
+        ...(isActive === undefined ? {} : { isActive: isActive ? 1 : 0 }),
+      }); return { success: true as const };
     }),
-  }),
-  users: router({
-    list: adminProcedure.query(async () => {
-      const all = await getAllUsers();
-      return all.map(({ passwordHash: _, ...u }) => u);
+    deleteVpnProfile: adminProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ input }) => {
+      try { await deleteVpnProfile(input.id); return { success: true as const }; }
+      catch (error) { throw new TRPCError({ code: "CONFLICT", message: error instanceof Error ? error.message : "Não foi possível excluir a VPN." }); }
     }),
-    create: adminProcedure
-      .input(z.object({
-        username: z.string().min(3).max(64),
-        password: z.string().min(6),
-        name: z.string().min(1),
-        email: z.string().email().optional(),
-        role: z.enum(["user", "admin"]),
-      }))
-      .mutation(async ({ input }) => {
-        const existing = await getUserByUsername(input.username);
-        if (existing) throw new TRPCError({ code: "CONFLICT", message: "Nome de usuário já existe." });
-        const passwordHash = await bcrypt.hash(input.password, 12);
-        await createLocalUser({ ...input, passwordHash });
-        return { success: true };
-      }),
-    update: adminProcedure
-      .input(z.object({
-        userId: z.number(),
-        name: z.string().min(1).optional(),
-        email: z.string().email().optional(),
-        role: z.enum(["user", "admin"]).optional(),
-      }))
-      .mutation(async ({ input }) => {
-        const { userId, ...data } = input;
-        // Proteger: não rebaixar o último admin
-        if (data.role === "user") {
-          const allUsers = await getAllUsers();
-          const admins = allUsers.filter(u => u.role === "admin" && u.id !== userId);
-          if (admins.length === 0) throw new TRPCError({ code: "BAD_REQUEST", message: "Não é possível rebaixar o único administrador do sistema." });
-        }
-        await updateLocalUser(userId, data);
-        return { success: true };
-      }),
-    resetPassword: adminProcedure
-      .input(z.object({ userId: z.number(), newPassword: z.string().min(6) }))
-      .mutation(async ({ input }) => {
-        const passwordHash = await bcrypt.hash(input.newPassword, 12);
-        await updateLocalUser(input.userId, { passwordHash });
-        return { success: true };
-      }),
-    delete: adminProcedure
-      .input(z.object({ userId: z.number() }))
-      .mutation(async ({ ctx, input }) => {
-        if (input.userId === ctx.user.id) throw new TRPCError({ code: "BAD_REQUEST", message: "Você não pode remover sua própria conta." });
-        const target = await getUserById(input.userId);
-        if (target?.role === "admin") {
-          const allUsers = await getAllUsers();
-          const admins = allUsers.filter(u => u.role === "admin");
-          if (admins.length <= 1) throw new TRPCError({ code: "BAD_REQUEST", message: "Não é possível remover o único administrador do sistema." });
-        }
-        await deleteUser(input.userId);
-        return { success: true };
-      }),
-  }),
-  clients: router({
+    testVpnProfile: adminProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ input }) => {
+      const profile = await getVpnProfile(input.id); if (!profile) throw new TRPCError({ code: "NOT_FOUND", message: "VPN não encontrada." });
+      if (!profile.verificationUrl) throw new TRPCError({ code: "BAD_REQUEST", message: "Informe a URL interna de validação antes de testar esta VPN." });
+      try {
+        const result = await ensureVpnConnection({ provider: profile.provider, profileName: profile.profileName, username: profile.username,
+          password: profile.passwordEncrypted ? decryptCredential(profile.passwordEncrypted) : null, autoConnect: true,
+          verificationUrl: profile.verificationUrl, targetUrl: profile.verificationUrl, connectionStrategy: profile.connectionStrategy,
+          configFileName: profile.configFileName, configContent: profile.configEncrypted ? decryptCredential(profile.configEncrypted) : null,
+          configPassword: profile.configPasswordEncrypted ? decryptCredential(profile.configPasswordEncrypted) : null,
+          configImported: Boolean(profile.configImportedAt), installerUrl: profile.installerUrl, installerSha256: profile.installerSha256 });
+        if (result.configurationImported) await updateVpnProfile(profile.id, { configImportedAt: new Date() }); return result;
+      } catch (error) { throw new TRPCError({ code: "PRECONDITION_FAILED", message: error instanceof Error ? error.message : "Falha ao testar VPN." }); }
+    }),
+    executionQueue: adminProcedure.query(async () => {
+      const overview = await getExecutionQueueOverview();
+      return {
+        ...overview,
+        workers: overview.workers.map(({ apiTokenEncrypted: _secret, ...worker }) => worker),
+      };
+    }),
+    updateExecutionWorker: adminProcedure.input(z.object({
+      id: z.number().int().positive(),
+      name: z.string().trim().min(1).max(160).optional(),
+      status: z.enum(["ONLINE", "OFFLINE", "PAUSED"]).optional(),
+      networkPool: z.enum(["ANY", "PUBLIC", "COGEL", "SEFAZ", "OUTRA"]).optional(),
+      maxConcurrency: z.number().int().min(1).max(20).optional(),
+      minFreeMemoryMb: z.number().int().min(1024).max(131072).optional(),
+      maxCpuPercent: z.number().int().min(20).max(95).optional(),
+    })).mutation(async ({ input }) => {
+      const { id, ...data } = input;
+      await updateExecutionWorkerSettings(id, data);
+      return { success: true as const };
+    }),    aiProviders: adminProcedure.query(() => listAiProviderSettings()),
+    createAiProvider: adminProcedure.input(z.object({ name: z.string().trim().min(1).max(120), provider: z.enum(["OPENAI", "GEMINI", "GROQ", "CUSTOM"]), apiUrl: z.string().trim().url().max(1000), model: z.string().trim().min(1).max(255), apiKey: z.string().max(1000).optional(), isActive: z.boolean().default(true) })).mutation(async ({ ctx, input }) => {
+      const { apiKey, isActive, ...data } = input; const id = await createAiProviderSetting({ ...data, apiKeyEncrypted: apiKey ? encryptCredential(apiKey) : null, isActive: isActive ? 1 : 0, createdById: ctx.user.id }); return { success: true as const, id };
+    }),
+    updateAiProvider: adminProcedure.input(z.object({ id: z.number().int().positive(), name: z.string().trim().min(1).max(120).optional(), provider: z.enum(["OPENAI", "GEMINI", "GROQ", "CUSTOM"]).optional(), apiUrl: z.string().trim().url().max(1000).optional(), model: z.string().trim().min(1).max(255).optional(), apiKey: z.string().max(1000).nullable().optional(), isActive: z.boolean().optional() })).mutation(async ({ input }) => {
+      const { id, apiKey, isActive, ...data } = input; await updateAiProviderSetting(id, { ...data, ...(apiKey === undefined ? {} : { apiKeyEncrypted: apiKey ? encryptCredential(apiKey) : null }), ...(isActive === undefined ? {} : { isActive: isActive ? 1 : 0 }) }); return { success: true as const };
+    }),
+    deleteAiProvider: adminProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ input }) => { await deleteAiProviderSetting(input.id); return { success: true as const }; }),
+    testAiProvider: adminProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ input }) => {
+      const setting = await getAiProviderSetting(input.id); if (!setting) throw new TRPCError({ code: "NOT_FOUND", message: "Provedor não encontrado." });
+      try { return await testLLMProviderConfig({ apiUrl: setting.apiUrl, apiKey: setting.apiKeyEncrypted ? decryptCredential(setting.apiKeyEncrypted) : "", model: setting.model }); }
+      catch (error) { throw new TRPCError({ code: "PRECONDITION_FAILED", message: error instanceof Error ? error.message : "Falha ao testar API." }); }
+    }),
+  }),  clients: router({
     list: protectedProcedure.query(async () => getClients()),
     create: adminProcedure
       .input(z.object({ name: z.string().min(1), description: z.string().optional() }))
@@ -159,21 +336,275 @@ export const appRouter = router({
   projects: router({
     list: protectedProcedure
       .input(z.object({ clientId: z.number().optional() }))
-      .query(async ({ input }) => getProjects(input.clientId)),
+      .query(async ({ ctx, input }) => {
+        const all = await getProjects(input.clientId);
+        if (ctx.user.role === "admin") return all;
+        const access = await Promise.all(all.map(async project => ({
+          project,
+          access: await getProjectAccess(project.id, ctx.user.id),
+        })));
+        return access.filter(item => item.access).map(item => item.project);
+      }),
     create: adminProcedure
       .input(z.object({ name: z.string().min(1), description: z.string().optional(), clientId: z.number() }))
       .mutation(async ({ ctx, input }) => { await createProject({ ...input, createdById: ctx.user.id }); return { success: true }; }),
     update: adminProcedure
-      .input(z.object({ id: z.number(), name: z.string().min(1).optional(), description: z.string().optional() }))
+      .input(z.object({
+        id: z.number(),
+        name: z.string().min(1).optional(),
+        description: z.string().optional(),
+        repositoryUrl: z.string().trim().url().max(1000).nullable().optional(),
+        repositoryBranch: z.string().trim().max(255).nullable().optional(),
+        sourceCodePath: z.string().trim().max(1000).nullable().optional(),
+      }))
       .mutation(async ({ input }) => { const { id, ...data } = input; await updateProject(id, data); return { success: true }; }),
+    provisioningConfig: protectedProcedure
+      .input(z.object({ projectId: z.number().int().positive() }))
+      .query(async ({ ctx, input }) => {
+        await requireProjectAccess(ctx, input.projectId);
+        const config = await getProjectQaProvisioning(input.projectId);
+        return config ? {
+          projectId: config.projectId,
+          endpointUrl: config.endpointUrl,
+          isActive: Boolean(config.isActive),
+          hasToken: Boolean(config.tokenEncrypted),
+        } : null;
+      }),
+    members: adminProcedure
+      .input(z.object({ projectId: z.number().int().positive() }))
+      .query(({ input }) => listProjectMembers(input.projectId)),
+    replaceMembers: adminProcedure
+      .input(z.object({
+        projectId: z.number().int().positive(),
+        members: z.array(z.object({
+          userId: z.number().int().positive(),
+          role: z.enum(["VIEWER", "EXECUTOR"]),
+        })).max(500),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const unique = new Map(input.members.map(member => [member.userId, member]));
+        await replaceProjectMembers({
+          projectId: input.projectId,
+          createdById: ctx.user.id,
+          members: Array.from(unique.values()),
+        });
+        return { success: true as const };
+      }),
+    saveProvisioningConfig: adminProcedure
+      .input(z.object({
+        projectId: z.number().int().positive(),
+        endpointUrl: z.string().trim().url().max(1000),
+        token: z.string().max(2000).optional(),
+        isActive: z.boolean(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const current = await getProjectQaProvisioning(input.projectId);
+        await upsertProjectQaProvisioning({
+          projectId: input.projectId,
+          endpointUrl: input.endpointUrl,
+          tokenEncrypted: input.token === undefined
+            ? current?.tokenEncrypted ?? null
+            : input.token ? encryptCredential(input.token) : null,
+          isActive: input.isActive ? 1 : 0,
+          createdById: current?.createdById ?? ctx.user.id,
+        });
+        return { success: true as const };
+      }),
+    testProvisioningConfig: adminProcedure
+      .input(z.object({ projectId: z.number().int().positive() }))
+      .mutation(async ({ input }) => {
+        const config = await getProjectQaProvisioning(input.projectId);
+        if (!config?.isActive) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "A ponte QA não está ativa." });
+        try {
+          return await testQaProvisioningConnection({
+            endpointUrl: config.endpointUrl,
+            token: config.tokenEncrypted ? decryptCredential(config.tokenEncrypted) : undefined,
+            projectId: input.projectId,
+          });
+        } catch (error) {
+          throw new TRPCError({ code: "PRECONDITION_FAILED", message: error instanceof Error ? error.message : "Falha ao testar a ponte QA." });
+        }
+      }),
+    indexSource: adminProcedure
+      .input(z.object({
+        id: z.number().int().positive(),
+        sourceCodePath: z.string().trim().min(1).max(1000),
+      }))
+      .mutation(async ({ input }) => {
+        const project = (await getProjects()).find(item => item.id === input.id);
+        if (!project) throw new TRPCError({ code: "NOT_FOUND", message: "Projeto não encontrado." });
+        try {
+          const index = await indexProjectSource(input.sourceCodePath);
+          await updateProject(input.id, {
+            sourceCodePath: index.absolutePath,
+            sourceCodeSummary: index.summary,
+            sourceCodeFileCount: index.fileCount,
+            sourceCodeIndexedAt: index.indexedAt,
+          });
+          return {
+            success: true as const,
+            sourceCodePath: index.absolutePath,
+            fileCount: index.fileCount,
+            analyzedFileCount: index.analyzedFileCount,
+            indexedAt: index.indexedAt,
+          };
+        } catch (error) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: error instanceof Error ? error.message : "Não foi possível analisar o código-fonte.",
+          });
+        }
+      }),
     delete: adminProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ input }) => { await deleteProject(input.id); return { success: true }; }),
   }),
+  testEnvironments: router({
+    list: protectedProcedure
+      .input(z.object({ projectId: z.number().int().positive() }))
+      .query(async ({ ctx, input }) => {
+        await requireProjectAccess(ctx, input.projectId);
+        return listProjectTestEnvironments(input.projectId);
+      }),
+    create: adminProcedure
+      .input(z.object({
+        projectId: z.number().int().positive(),
+        name: z.string().trim().min(1).max(120),
+        type: z.enum(["PORTAL", "RETAGUARDA", "SITE", "API", "OUTRO"]),
+        loginUrl: z.string().trim().url().max(1000),
+        username: z.string().trim().max(320).optional(),
+        password: z.string().max(512).optional(),
+        vpnProfileId: z.number().int().positive().nullable().optional(),
+        vpnProvider: z.enum(["NONE", "COGEL", "SEFAZ", "OUTRA"]).default("NONE"),
+        vpnProfileName: z.string().trim().max(160).optional(),
+        vpnUsername: z.string().trim().max(320).optional(),
+        vpnPassword: z.string().max(512).optional(),
+        vpnAutoConnect: z.boolean().default(true),
+        vpnConnectionStrategy: z.enum(["AUTO", "CLI", "AUTOCONNECT"]).default("AUTO"),
+        vpnConfigFileName: z.string().trim().max(255).optional(),
+        vpnConfigBase64: z.string().max(1_500_000).optional(),
+        vpnConfigPassword: z.string().max(512).optional(),
+        vpnInstallerUrl: z.string().trim().url().max(2000).optional(),
+        vpnInstallerSha256: z.string().trim().max(64).optional(),
+        vpnVerificationUrl: z.string().trim().url().max(1000).optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const { password, vpnPassword, vpnAutoConnect, vpnConfigBase64, vpnConfigPassword, ...data } = input;
+        const vpnConfigContent = decodeVpnConfig(data.vpnConfigFileName, vpnConfigBase64);
+        validateVpnInstallerPair(data.vpnInstallerUrl, data.vpnInstallerSha256);
+        if (data.vpnProvider !== "NONE" && !data.vpnProfileName) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Informe o nome do perfil configurado no FortiClient." });
+        }
+        const id = await createProjectTestEnvironment({
+          ...data,
+          username: data.username || null,
+          passwordEncrypted: password ? encryptCredential(password) : null,
+          vpnProfileName: data.vpnProvider === "NONE" ? null : data.vpnProfileName || null,
+          vpnUsername: data.vpnProvider === "NONE" ? null : data.vpnUsername || null,
+          vpnPasswordEncrypted: data.vpnProvider !== "NONE" && vpnPassword ? encryptCredential(vpnPassword) : null,
+          vpnAutoConnect: vpnAutoConnect ? 1 : 0,
+          vpnConfigEncrypted: data.vpnProvider !== "NONE" && vpnConfigContent ? encryptCredential(vpnConfigContent) : null,
+          vpnConfigPasswordEncrypted: data.vpnProvider !== "NONE" && vpnConfigPassword ? encryptCredential(vpnConfigPassword) : null,
+          vpnConfigImportedAt: null,
+          vpnInstallerUrl: data.vpnProvider === "NONE" ? null : data.vpnInstallerUrl || null,
+          vpnInstallerSha256: data.vpnProvider === "NONE" ? null : data.vpnInstallerSha256?.toLowerCase() || null,
+          vpnVerificationUrl: data.vpnProvider === "NONE" ? null : data.vpnVerificationUrl || null,
+          createdById: ctx.user.id,
+        });
+        return { success: true as const, id };
+      }),
+    update: adminProcedure
+      .input(z.object({
+        id: z.number().int().positive(),
+        name: z.string().trim().min(1).max(120).optional(),
+        type: z.enum(["PORTAL", "RETAGUARDA", "SITE", "API", "OUTRO"]).optional(),
+        loginUrl: z.string().trim().url().max(1000).optional(),
+        username: z.string().trim().max(320).nullable().optional(),
+        password: z.string().max(512).nullable().optional(),
+        vpnProfileId: z.number().int().positive().nullable().optional(),
+        vpnProvider: z.enum(["NONE", "COGEL", "SEFAZ", "OUTRA"]).optional(),
+        vpnProfileName: z.string().trim().max(160).nullable().optional(),
+        vpnUsername: z.string().trim().max(320).nullable().optional(),
+        vpnPassword: z.string().max(512).nullable().optional(),
+        vpnAutoConnect: z.boolean().optional(),
+        vpnConnectionStrategy: z.enum(["AUTO", "CLI", "AUTOCONNECT"]).optional(),
+        vpnConfigFileName: z.string().trim().max(255).nullable().optional(),
+        vpnConfigBase64: z.string().max(1_500_000).nullable().optional(),
+        vpnConfigPassword: z.string().max(512).nullable().optional(),
+        clearVpnConfig: z.boolean().optional(),
+        vpnInstallerUrl: z.string().trim().url().max(2000).nullable().optional(),
+        vpnInstallerSha256: z.string().trim().max(64).nullable().optional(),
+        vpnVerificationUrl: z.string().trim().url().max(1000).nullable().optional(),
+        isActive: z.boolean().optional(),
+      }))
+      .mutation(async ({ input }) => {
+        const { id, password, vpnPassword, vpnAutoConnect, vpnConfigBase64, vpnConfigPassword, clearVpnConfig, isActive, ...data } = input;
+        const vpnConfigContent = vpnConfigBase64 ? decodeVpnConfig(data.vpnConfigFileName, vpnConfigBase64) : null;
+        validateVpnInstallerPair(data.vpnInstallerUrl, data.vpnInstallerSha256);
+        const disablingVpn = data.vpnProvider === "NONE";
+        await updateProjectTestEnvironment(id, {
+          ...data,
+          ...(password === undefined ? {} : { passwordEncrypted: password ? encryptCredential(password) : null }),
+          ...(vpnPassword === undefined ? {} : { vpnPasswordEncrypted: vpnPassword ? encryptCredential(vpnPassword) : null }),
+          ...(vpnAutoConnect === undefined ? {} : { vpnAutoConnect: vpnAutoConnect ? 1 : 0 }),
+          ...(vpnConfigBase64 === undefined ? {} : {
+            vpnConfigFileName: data.vpnConfigFileName || null,
+            vpnConfigEncrypted: vpnConfigContent ? encryptCredential(vpnConfigContent) : null,
+            vpnConfigImportedAt: null,
+          }),
+          ...(vpnConfigPassword === undefined ? {} : { vpnConfigPasswordEncrypted: vpnConfigPassword ? encryptCredential(vpnConfigPassword) : null }),
+          ...(clearVpnConfig ? { vpnConfigFileName: null, vpnConfigEncrypted: null, vpnConfigPasswordEncrypted: null, vpnConfigImportedAt: null } : {}),
+          ...(data.vpnInstallerSha256 === undefined ? {} : { vpnInstallerSha256: data.vpnInstallerSha256?.toLowerCase() || null }),
+          ...(isActive === undefined ? {} : { isActive: isActive ? 1 : 0 }),
+          ...(disablingVpn ? {
+            vpnProfileName: null,
+            vpnUsername: null,
+            vpnPasswordEncrypted: null,
+            vpnConnectionStrategy: "AUTO",
+            vpnConfigFileName: null,
+            vpnConfigEncrypted: null,
+            vpnConfigPasswordEncrypted: null,
+            vpnConfigImportedAt: null,
+            vpnInstallerUrl: null,
+            vpnInstallerSha256: null,
+            vpnVerificationUrl: null,
+          } : {}),
+        });
+        return { success: true as const };
+      }),
+    prepareVpn: adminProcedure
+      .input(z.object({ id: z.number().int().positive() }))
+      .mutation(async ({ input }) => {
+        const environment = await getProjectTestEnvironment(input.id);
+        if (!environment) throw new TRPCError({ code: "NOT_FOUND", message: "Ambiente não encontrado." });
+        const requirement = await vpnRequirementForEnvironment(environment);
+        if (requirement.provider === "NONE") throw new TRPCError({ code: "BAD_REQUEST", message: "Este ambiente não utiliza VPN." });
+        try {
+          const result = await ensureVpnConnection(requirement);
+          if (result.configurationImported) {
+            if (requirement.globalProfileId) await updateVpnProfile(requirement.globalProfileId, { configImportedAt: new Date() });
+            else await updateProjectTestEnvironment(environment.id, { vpnConfigImportedAt: new Date() });
+          }
+          return result;
+        } catch (error) {
+          throw new TRPCError({ code: "PRECONDITION_FAILED", message: error instanceof Error ? error.message : "Não foi possível preparar a VPN." });
+        }
+      }),    delete: adminProcedure
+      .input(z.object({ id: z.number().int().positive() }))
+      .mutation(async ({ input }) => {
+        await deleteProjectTestEnvironment(input.id);
+        return { success: true as const };
+      }),
+  }),
   sprints: router({
     list: protectedProcedure
       .input(z.object({ projectId: z.number().optional() }))
-      .query(async ({ input }) => getSprints(input.projectId)),
+      .query(async ({ ctx, input }) => {
+        if (input.projectId) await requireProjectAccess(ctx, input.projectId);
+        if (input.projectId || ctx.user.role === "admin") return getSprints(input.projectId);
+        const allowed = await accessibleProjectIds(ctx);
+        return (await getSprints()).filter(sprint => allowed?.has(sprint.projectId));
+      }),
     create: adminProcedure
       .input(z.object({ name: z.string().min(1), description: z.string().optional(), projectId: z.number() }))
       .mutation(async ({ ctx, input }) => { await createSprint({ ...input, createdById: ctx.user.id }); return { success: true }; }),
@@ -191,14 +622,102 @@ export const appRouter = router({
         projectId: z.number().optional(),
         sprintId: z.number().optional(),
       }))
-      .query(async ({ input }) => getDashboardMetrics(input)),
+      .query(async ({ ctx, input }) => {
+        if (input.projectId) {
+          await requireProjectAccess(ctx, input.projectId);
+          return getDashboardMetrics(input);
+        }
+        if (ctx.user.role !== "admin") {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Selecione um projeto para consultar as mÃ©tricas.",
+          });
+        }
+        return getDashboardMetrics(input);
+      }),
+  }),
+  testExecutions: router({
+    queue: protectedProcedure
+      .input(z.object({
+        state: z.enum(["ALL", "QUEUED", "RUNNING", "PAUSED", "FINISHED", "FAILED", "CANCELLED"]).default("ALL"),
+        pool: z.enum(["PUBLIC", "COGEL", "SEFAZ", "OUTRA"]).optional(),
+        limit: z.number().int().min(1).max(200).default(100),
+      }))
+      .query(({ ctx, input }) => listExecutionQueue({
+        userId: ctx.user.id,
+        isAdmin: ctx.user.role === "admin",
+        state: input.state,
+        pool: input.pool,
+        limit: input.limit,
+      })),    control: protectedProcedure
+      .input(z.object({
+        externalExecutionId: z.string().trim().min(1).max(128),
+        action: z.enum(["PAUSE", "RESUME", "CANCEL"]),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const result = await controlTestExecution({
+          ...input,
+          userId: ctx.user.id,
+          isAdmin: ctx.user.role === "admin",
+        });
+        if (result.outcome === "NOT_FOUND") {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Execução não encontrada." });
+        }
+        if (result.outcome === "FORBIDDEN") {
+          throw new TRPCError({ code: "FORBIDDEN", message: "Somente quem iniciou a execução ou um administrador pode controlá-la." });
+        }
+        if (result.outcome === "TERMINAL") {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Esta execução já foi finalizada e não pode mais ser alterada." });
+        }
+        return { success: true as const, ...result };
+      }),
+    progress: protectedProcedure
+      .input(z.object({ externalExecutionId: z.string().trim().min(1).max(128) }))
+      .query(async ({ ctx, input }) => {
+        const progress = await getTestExecutionProgress({
+          externalExecutionId: input.externalExecutionId,
+          userId: ctx.user.id,
+          isAdmin: ctx.user.role === "admin",
+        });
+        if (!progress) throw new TRPCError({ code: "NOT_FOUND", message: "Execução não encontrada." });
+        return progress;
+      }),
+    history: protectedProcedure
+      .input(z.object({
+        clientId: z.number().int().positive().optional(),
+        projectId: z.number().int().positive().optional(),
+        dateFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        dateTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+        limit: z.number().int().min(1).max(200).default(100),
+      }))
+      .query(async ({ ctx, input }) => {
+        const dateFrom = input.dateFrom
+          ? new Date(`${input.dateFrom}T00:00:00`)
+          : undefined;
+        const dateTo = input.dateTo
+          ? new Date(`${input.dateTo}T23:59:59.999`)
+          : undefined;
+        return listTestExecutionHistory({
+          userId: ctx.user.id,
+          isAdmin: ctx.user.role === "admin",
+          clientId: input.clientId,
+          projectId: input.projectId,
+          dateFrom,
+          dateTo,
+          limit: input.limit,
+        });
+      }),
   }),
   defectCards: router({
     history: protectedProcedure
       .input(z.object({ externalCardId: z.string().min(1).max(64) }))
-      .query(async ({ input }) =>
-        getDefectCardHistory(input.externalCardId.toUpperCase()),
-      ),
+      .query(async ({ ctx, input }) => {
+        const externalCardId = input.externalCardId.toUpperCase();
+        const card = await getDefectCardByExternalId(externalCardId);
+        if (!card) throw new TRPCError({ code: "NOT_FOUND", message: "Card não encontrado." });
+        if (card.projectId) await requireProjectAccess(ctx, card.projectId);
+        return getDefectCardHistory(externalCardId);
+      }),
     updateStatus: protectedProcedure
       .input(z.object({
         externalCardId: z.string().min(1).max(64),
@@ -207,6 +726,9 @@ export const appRouter = router({
       }))
       .mutation(async ({ ctx, input }) => {
         try {
+          const existing = await getDefectCardByExternalId(input.externalCardId.toUpperCase());
+          if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: "Card de defeito não encontrado." });
+          if (existing.projectId) await requireProjectAccess(ctx, existing.projectId, "EXECUTOR");
           const card = await updateDefectCardStatus({
             externalCardId: input.externalCardId.toUpperCase(),
             status: input.status,
@@ -237,6 +759,7 @@ export const appRouter = router({
     get: protectedProcedure
       .input(z.object({ sprintId: z.number() }))
       .query(async ({ ctx, input }) => {
+        await requireSprintAccess(ctx, input.sprintId);
         const result = await getChecklist(input.sprintId, ctx.user.id);
         return result ?? null;
       }),
@@ -248,39 +771,119 @@ export const appRouter = router({
         completedItems: z.number(),
         status: z.enum(["in_progress", "completed"]),
         completedAt: z.date().optional().nullable(),
+        responsibleUserId: z.number().int().positive().optional(),
       }))
       .mutation(async ({ ctx, input }) => {
-        const id = await upsertChecklist({ ...input, analystId: ctx.user.id });
+        await requireSprintAccess(ctx, input.sprintId, "EXECUTOR");
+        const responsibleUserId = input.responsibleUserId ?? ctx.user.id;
+        if (!(await getUserById(responsibleUserId))) throw new TRPCError({ code: "BAD_REQUEST", message: "Responsável não encontrado." });
+        const id = await upsertChecklist({ ...input, analystId: ctx.user.id, responsibleUserId });
         return { success: true, id };
+      }),
+    updateResponsible: protectedProcedure
+      .input(z.object({ id: z.number().int().positive(), responsibleUserId: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        const checklist = await getChecklistById(input.id);
+        if (!checklist) throw new TRPCError({ code: "NOT_FOUND", message: "Checklist não encontrado." });
+        await requireSprintAccess(ctx, checklist.sprintId, "EXECUTOR");
+        if (!(await getUserById(input.responsibleUserId))) throw new TRPCError({ code: "BAD_REQUEST", message: "Responsável não encontrado." });
+        await updateChecklistResponsible(input.id, input.responsibleUserId);
+        return { success: true };
       }),
     myHistory: protectedProcedure.query(async ({ ctx }) => getChecklistsByAnalyst(ctx.user.id)),
     allHistory: adminProcedure.query(async () => getAllChecklists()),
     progressBySprints: protectedProcedure.query(async ({ ctx }) => getProgressBySprints(ctx.user.id)),
   }),
-  trail: router({
-    myProgress: protectedProcedure.query(async ({ ctx }) => {
-      const result = await getTrailProgress(ctx.user.id);
-      return result ?? null;
-    }),
-    saveProgress: protectedProcedure
-      .input(z.object({ completedTopics: z.array(z.string()) }))
+  qaPlanner: router({
+    savePlan: protectedProcedure
+      .input(z.object({
+        projectId: z.number().int().positive(),
+        sprintId: z.number().int().positive(),
+        userStory: z.string().min(10).max(2_000_000, "A História de Usuário deve possuir no máximo 2 milhões de caracteres."),
+        systemType: z.string().trim().min(1).max(80),
+        criticality: z.enum(["low", "medium", "high", "critical"]),
+        result: qaGeneratedCasesSchema,
+      }))
       .mutation(async ({ ctx, input }) => {
-        await upsertTrailProgress(ctx.user.id, input.completedTopics);
+        await requireProjectAccess(ctx, input.projectId, "EXECUTOR");
+        const project = (await getProjects()).find(item => item.id === input.projectId);
+        if (!project) throw new TRPCError({ code: "NOT_FOUND", message: "Projeto não encontrado." });
+        const sprint = (await getSprints(input.projectId)).find(item => item.id === input.sprintId);
+        if (!sprint) throw new TRPCError({ code: "BAD_REQUEST", message: "A sprint não pertence ao projeto selecionado." });
+        const firstLine = input.userStory.split(/\r?\n/).map(line => line.trim()).find(Boolean) ?? "Plano de testes";
+        const id = await insertQATestPlan({
+          clientId: project.clientId,
+          projectId: project.id,
+          sprintId: sprint.id,
+          createdById: ctx.user.id,
+          responsibleUserId: ctx.user.id,
+          title: firstLine.replace(/^#+\s*/, "").slice(0, 255),
+          userStory: input.userStory,
+          systemType: input.systemType,
+          criticality: input.criticality,
+          resultJson: JSON.stringify(input.result),
+        });
+        return { id, projectId: project.id, sprintId: sprint.id };
+      }),
+
+    listPlans: protectedProcedure
+      .input(z.object({
+        projectId: z.number().int().positive().optional(),
+        sprintId: z.number().int().positive().optional(),
+      }))
+      .query(async ({ ctx, input }) => {
+        if (input.projectId) await requireProjectAccess(ctx, input.projectId);
+        if (input.sprintId) await requireSprintAccess(ctx, input.sprintId);
+        if (!input.projectId && !input.sprintId && ctx.user.role !== "admin") {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Selecione um projeto." });
+        }
+        return listQATestPlans({
+          projectId: input.projectId,
+          sprintId: input.sprintId,
+        });
+      }),
+
+    updatePlanResponsible: protectedProcedure
+      .input(z.object({
+        id: z.number().int().positive(),
+        responsibleUserId: z.number().int().positive(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const [plan, responsible] = await Promise.all([
+          getQATestPlan(input.id),
+          getUserById(input.responsibleUserId),
+        ]);
+        if (!plan) throw new TRPCError({ code: "NOT_FOUND", message: "Plano não encontrado." });
+        await requireProjectAccess(ctx, plan.projectId, "EXECUTOR");
+        if (!responsible) throw new TRPCError({ code: "BAD_REQUEST", message: "Responsável não encontrado." });
+        await updateQATestPlanResponsible(input.id, input.responsibleUserId);
         return { success: true };
       }),
-    allProgress: adminProcedure.query(async () => getAllTrailProgress()),
-  }),
 
-  qaPlanner: router({
+    deletePlan: protectedProcedure
+      .input(z.object({ id: z.number().int().positive() }))
+      .mutation(async ({ ctx, input }) => {
+        const plan = await getQATestPlan(input.id);
+        if (!plan) throw new TRPCError({ code: "NOT_FOUND", message: "Plano não encontrado." });
+        await requireProjectAccess(ctx, plan.projectId, "EXECUTOR");
+        if (plan.createdById !== ctx.user.id && ctx.user.role !== "admin") {
+          throw new TRPCError({ code: "FORBIDDEN" });
+        }
+        await deleteQATestPlan(input.id);
+        return { success: true };
+      }),
+
     // ── Gerar casos de teste via IA ───────────────────────────────────────────
     generateCases: protectedProcedure
       .input(z.object({
         userStory: z.string().min(10),
         systemType: z.string().default("web"),
         criticality: z.enum(["low", "medium", "high", "critical"]).default("medium"),
+        projectId: z.number().int().positive().optional(),
         projectContext: z.string().optional(),
       }))
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
+        if (input.projectId) await requireProjectAccess(ctx, input.projectId);
         const critMap: Record<string, string> = {
           low: "baixa",
           medium: "média",
@@ -293,12 +896,29 @@ export const appRouter = router({
           ? input.userStory.substring(0, MAX_HU_CHARS) + "\n\n[... HU truncada para processamento. Gere casos com base no contexto acima.]"
           : input.userStory;
 
+        const project = input.projectId
+          ? (await getProjects()).find(item => item.id === input.projectId)
+          : undefined;
+        const projectEnvironments = project
+          ? await listProjectTestEnvironments(project.id)
+          : [];
+        const sourceContext = project?.sourceCodeSummary?.slice(0, 12_000) ?? "";
+
         const systemPrompt = `Você é um especialista em Quality Assurance. Analise a História de Usuário e gere casos de teste BDD (Dado/Quando/Então).
 Seja conciso: máximo 3 categorias, máximo 4 casos por categoria (total máximo: 12 casos).
-Campos de texto devem ter no máximo 120 caracteres cada.`;
+Campos de texto devem ter no máximo 120 caracteres cada.
+Quando houver um índice de código-fonte, use rotas, campos e seletores para tornar os passos concretos. Não invente comportamento ausente da HU.
+Para sistemas web, gere prioritariamente cenários E2E observáveis e executáveis pela interface. Não transforme detalhes internos como transações, rollback, escritas em banco, injeção de falha ou códigos HTTP em cenários de interface, exceto quando a HU descrever como observar esse resultado na tela.
+Cada cenário deve declarar no Dado todas as pré-condições e dados necessários. Não presuma uma segunda conta, perfil especial, processo preparado ou mecanismo de falha que não tenha sido informado na HU.
+Declare em produz apenas identificadores, códigos, referências, URLs ou arquivos que o cenário realmente cria e que serão reutilizados. Declare em consome apenas artefatos produzidos por um cenário anterior do mesmo plano. Use nomes semânticos genéricos e listas vazias quando não houver encadeamento.
+Retorne somente um objeto JSON válido, sem Markdown.`;
 
         const userMessage = `HU: ${truncatedStory}
-Sistema: ${input.systemType} | Criticidade: ${critMap[input.criticality] || input.criticality}${input.projectContext ? ` | Contexto: ${input.projectContext}` : ""}`;
+Sistema: ${input.systemType} | Criticidade: ${critMap[input.criticality] || input.criticality}${input.projectContext ? ` | Contexto: ${input.projectContext}` : ""}
+${sourceContext ? `\nÍNDICE TÉCNICO DO PROJETO:\n${sourceContext}` : ""}`;
+        const environmentContext = projectEnvironments.length
+          ? `\nAMBIENTES DISPONÍVEIS: ${projectEnvironments.map(item => `${item.name} (${item.type})`).join(", ")}. Quando um cenário depender de mais de um ambiente, mencione explicitamente o nome do ambiente em cada passo.`
+          : "";
 
         // Schema JSON estruturado para garantir saída válida sem markdown
         const outputSchema = {
@@ -337,8 +957,10 @@ Sistema: ${input.systemType} | Criticidade: ${critMap[input.criticality] || inpu
                           entao: { type: "string" },
                           resultado_esperado: { type: "string" },
                           tipo: { type: "string", enum: ["funcional", "segurança", "performance", "usabilidade", "regressão"] },
+                          produz: { type: "array", items: { type: "string" }, maxItems: 10 },
+                          consome: { type: "array", items: { type: "string" }, maxItems: 10 },
                         },
-                        required: ["id", "titulo", "prioridade", "dado", "quando", "entao", "resultado_esperado", "tipo"],
+                        required: ["id", "titulo", "prioridade", "dado", "quando", "entao", "resultado_esperado", "tipo", "produz", "consome"],
                         additionalProperties: false,
                       },
                     },
@@ -355,12 +977,14 @@ Sistema: ${input.systemType} | Criticidade: ${critMap[input.criticality] || inpu
 
         try {
           const response = await invokeLLM({
-            model: "gpt-5-mini",
+            model: ENV.llmModel,
             messages: [
               { role: "system", content: systemPrompt },
-              { role: "user", content: userMessage },
+              { role: "user", content: userMessage + environmentContext },
             ],
-            maxTokens: 8192,
+            // O plano possui no máximo 12 casos concisos. Esse limite reduz
+            // latência e mantém a chamada dentro das cotas gratuitas usuais.
+            maxTokens: 4096,
             response_format: {
               type: "json_schema",
               json_schema: outputSchema,
@@ -375,15 +999,209 @@ Sistema: ${input.systemType} | Criticidade: ${critMap[input.criticality] || inpu
           const stripped = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "").trim();
           const jsonStr = stripped.startsWith("{") ? stripped : (stripped.match(/(\{[\s\S]*\})/)?.[1] ?? "");
           if (!jsonStr) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "IA retornou resposta inválida. Tente novamente." });
-          return JSON.parse(jsonStr);
+          const parsed = qaGeneratedCasesSchema.parse(JSON.parse(jsonStr));
+          const totalCases = parsed.cards.reduce(
+            (total, card) => total + card.casos.length,
+            0
+          );
+          if (totalCases === 0) {
+            throw new TRPCError({
+              code: "INTERNAL_SERVER_ERROR",
+              message: "A IA não retornou casos de teste no formato esperado. Tente gerar novamente.",
+            });
+          }
+          return enhancePlanWithQaRules(parsed, {
+            userStory: input.userStory,
+            systemType: input.systemType,
+            criticality: input.criticality,
+          });
         } catch (err: any) {
-          if (err instanceof TRPCError) throw err;
-          console.error("[qaPlanner.generateCases] Error:", err?.message);
-          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Erro ao gerar casos de teste. Tente novamente." });
+          logError("qa_planner_generate_cases_failed", err);
+          return buildRuleBasedPlan({
+            userStory: input.userStory,
+            systemType: input.systemType,
+            criticality: input.criticality,
+          });
         }
       }),
 
     // ── Gerar documento LaTeX/PDF de evidências ───────────────────────────────
+    startAutomatedTests: protectedProcedure
+      .input(z.object({
+        projectId: z.number().int().positive(),
+        sprintId: z.number().int().positive(),
+        environmentId: z.number().int().positive().optional(),
+        environmentIds: z.array(z.number().int().positive()).min(1).max(5).optional(),
+        systemUrl: z.string().trim().url().max(2048).refine(
+          value => value.startsWith("http://") || value.startsWith("https://"),
+          "A URL deve começar com http:// ou https://.",
+        ).optional(),
+        username: z.string().trim().min(1).max(256).optional(),
+        password: z.string().min(1).max(512).optional(),
+        cases: z.array(z.object({
+          id: z.string().max(120),
+          titulo: z.string().min(1).max(500),
+          prioridade: z.string().max(30),
+          dado: z.string().min(1).max(3000),
+          quando: z.string().min(1).max(3000),
+          entao: z.string().min(1).max(3000),
+          resultado_esperado: z.string().max(3000),
+          tipo: z.string().max(80),
+          produz: z.array(z.string().trim().min(1).max(80)).max(10).default([]),
+          consome: z.array(z.string().trim().min(1).max(80)).max(10).default([]),
+        })).min(1).max(100),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        await requireProjectAccess(ctx, input.projectId, "EXECUTOR");
+        const [projects, sprints, clients] = await Promise.all([
+          getProjects(),
+          getSprints(input.projectId),
+          getClients(),
+        ]);
+        const project = projects.find(item => item.id === input.projectId);
+        const sprint = sprints.find(item => item.id === input.sprintId);
+        if (!project || !sprint || sprint.projectId !== project.id) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Projeto ou sprint inválidos.",
+          });
+        }
+        const client = clients.find(item => item.id === project.clientId);
+        const requestedEnvironmentIds = input.environmentIds ?? (input.environmentId ? [input.environmentId] : []);
+        const environments = await Promise.all(requestedEnvironmentIds.map(id => getProjectTestEnvironment(id)));
+        if (environments.some(item => !item || item.projectId !== project.id)) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Um dos ambientes não pertence ao projeto selecionado." });
+        }
+        if (environments.some(item => !item?.isActive)) {
+          throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Um dos ambientes selecionados está inativo." });
+        }
+        const configuredEnvironments = environments.filter((item): item is NonNullable<typeof item> => Boolean(item));
+        const primaryEnvironment = configuredEnvironments[0];
+        if (!primaryEnvironment) {
+          if (ctx.user.role !== "admin" || !ENV.allowManualTestUrls) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "Selecione um ambiente cadastrado. URLs manuais estão desativadas.",
+            });
+          }
+          try {
+            await assertSafeManualTargetUrl(input.systemUrl ?? "");
+          } catch (error) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: error instanceof Error ? error.message : "URL manual não autorizada.",
+            });
+          }
+        }
+        const systemUrl = primaryEnvironment?.loginUrl ?? input.systemUrl;
+        const username = primaryEnvironment?.username ?? input.username ?? "";
+        const password = primaryEnvironment?.passwordEncrypted
+          ? decryptCredential(primaryEnvironment.passwordEncrypted)
+          : input.password ?? "";
+        if (!systemUrl) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Selecione um ambiente parametrizado." });
+        }
+        if (primaryEnvironment) {
+          try {
+            assertConfiguredTargetUrl(systemUrl, configuredEnvironments.map(item => item.loginUrl));
+          } catch (error) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: error instanceof Error ? error.message : "Ambiente não autorizado.",
+            });
+          }
+        }
+        const executionId = `web-${Date.now()}-${randomUUID().slice(0, 8)}`;
+        const scenariosGherkin = input.cases.map(testCase => [
+          `Cenário: ${testCase.titulo}`,
+          `  Dado ${normalizeGherkinStepText("DADO", testCase.dado)}`,
+          `  Quando ${normalizeGherkinStepText("QUANDO", testCase.quando)}`,
+          `  Então ${normalizeGherkinStepText("ENTAO", testCase.entao)}`,
+          ...(testCase.produz.length ? [`  # Produz: ${testCase.produz.join(", ")}`] : []),
+          ...(testCase.consome.length ? [`  # Consome: ${testCase.consome.join(", ")}`] : []),
+          `  # Resultado esperado: ${testCase.resultado_esperado}`,
+          `  # ID: ${testCase.id} | Tipo: ${testCase.tipo} | Prioridade: ${testCase.prioridade}`,
+        ].join("\n")).join("\n\n");
+
+        const vpnRequirements = await Promise.all(configuredEnvironments.map(vpnRequirementForEnvironment));
+        try {
+          assertCompatibleVpnRequirements(vpnRequirements);
+        } catch (error) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: error instanceof Error ? error.message : "Os ambientes exigem VPNs incompativeis.",
+          });
+        }
+        const requiredRequirement = vpnRequirements.find(item => item.provider !== "NONE") ?? null;
+        const provisioningConfig = await getProjectQaProvisioning(project.id);
+        const queuePool = queuePoolForProvider(requiredRequirement?.provider);
+        const dispatchPayload: QueuedExecutionDispatchPayload = {
+          vpnRequirement: requiredRequirement,
+          webhookBody: {
+            execution_id: executionId,
+            client_id: client?.id,
+            project_id: project.id,
+            sprint_id: sprint.id,
+            projeto: project.name,
+            cliente: client?.name ?? "",
+            sprint: sprint.name,
+            ambiente: primaryEnvironment?.name ?? "Manual",
+            ambiente_tipo: primaryEnvironment?.type ?? "OUTRO",
+            ambiente_sem_autenticacao: !username || !password,
+            ambientes: configuredEnvironments.map((item, index) => ({
+              id: item.id,
+              nome: item.name,
+              tipo: item.type,
+              url: item.loginUrl,
+              usuario: item.username ?? "",
+              senha: item.passwordEncrypted ? decryptCredential(item.passwordEncrypted) : "",
+              sem_autenticacao: !item.username || !item.passwordEncrypted,
+              vpn_provedor: vpnRequirements[index]?.provider ?? "NONE",
+              vpn_perfil: vpnRequirements[index]?.profileName ?? "",
+            })),
+            sistema_url: systemUrl,
+            login_usuario: username,
+            login_senha: password,
+            cenarios_gherkin: scenariosGherkin,
+            repositorio_codigo: project.repositoryUrl ?? "",
+            branch_repositorio: project.repositoryBranch ?? "",
+            contexto_codigo_fonte: project.sourceCodeSummary?.slice(0, 14_000) ?? "",
+            qa_provisioning: provisioningConfig?.isActive ? {
+              endpointUrl: provisioningConfig.endpointUrl,
+              token: provisioningConfig.tokenEncrypted ? decryptCredential(provisioningConfig.tokenEncrypted) : undefined,
+              projectId: project.id,
+            } : undefined,
+            solicitado_por: ctx.user.id,
+          },
+        };
+
+        await createPendingTestExecution({
+          externalExecutionId: executionId,
+          createdById: ctx.user.id,
+          clientId: client?.id,
+          projectId: project.id,
+          sprintId: sprint.id,
+          clientName: client?.name,
+          projectName: project.name,
+          sprintName: sprint.name,
+          systemUrl,
+          totalScenarios: input.cases.length,
+          queuePool,
+          dispatchPayloadEncrypted: encryptCredential(JSON.stringify(dispatchPayload)),
+        });
+        await markTestExecutionQueued(
+          executionId,
+          `Execucao adicionada a fila ${queuePool}. Aguardando vaga no worker.`,
+        );
+        return {
+          started: true as const,
+          queued: true as const,
+          queuePool,
+          executionId,
+          totalScenarios: input.cases.length,
+        };
+      }),
+
     generateDocument: protectedProcedure
       .input(z.object({
         projectName: z.string().min(1),
@@ -539,7 +1357,7 @@ Analise com rigor e retorne APENAS um JSON válido, sem markdown, com a seguinte
 
         try {
           const response = await invokeLLM({
-            model: "gpt-4o",
+            model: ENV.llmModel,
             messages: [
               { role: "system", content: systemPrompt },
               { role: "user", content: userMessage },
@@ -554,9 +1372,8 @@ Analise com rigor e retorne APENAS um JSON válido, sem markdown, com a seguinte
           if (!jsonStr) throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "IA retornou formato inválido." });
           return JSON.parse(jsonStr);
         } catch (err: any) {
-          if (err instanceof TRPCError) throw err;
-          console.error("[qaPlanner.analyzeCoverage] Error:", err?.message);
-          throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Erro ao analisar cobertura. Tente novamente." });
+          logError("qa_planner_coverage_analysis_failed", err);
+          return analyzeCoverageWithQaRules(input.userStory, input.generatedCases);
         }
       }),
 

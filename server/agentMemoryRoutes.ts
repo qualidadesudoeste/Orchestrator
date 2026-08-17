@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type { Express, Request, Response } from "express";
 import { ENV } from "./_core/env";
+import { logError } from "./_core/logger";
 import {
   AgentMemoryValidationError,
   extractAgentMemoryLearnings,
@@ -57,7 +58,7 @@ function handleError(
     });
     return;
   }
-  console.error(`[qa-agent-memory:${operation}] error:`, error);
+  logError("qa_agent_memory_failed", error, { operation });
   res.status(500).json({
     error: `Falha ao processar memória do agente: ${message}`,
   });

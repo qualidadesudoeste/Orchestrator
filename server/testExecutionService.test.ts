@@ -7,7 +7,8 @@ import {
 describe("normalizeTestExecutionPayload", () => {
   it("separa defeitos reais de erros de automação e calcula cobertura", () => {
     const execution = normalizeTestExecutionPayload({
-      execution_id: "n8n-100",
+      execution_id: "direct-100",
+      solicitado_por: 42,
       projeto: "Portal",
       sprint: "Sprint 3",
       status_geral: "FALHOU",
@@ -41,6 +42,7 @@ describe("normalizeTestExecutionPayload", () => {
     });
 
     expect(execution.totalScenarios).toBe(3);
+    expect(execution.createdById).toBe(42);
     expect(execution.coveragePercent).toBe(67);
     expect(execution.defectsFound).toBe(1);
     expect(execution.criticalDefects).toBe(1);
@@ -58,6 +60,7 @@ describe("normalizeTestExecutionPayload", () => {
   it("retira flaky do total de falhas confiáveis", () => {
     const execution = normalizeTestExecutionPayload({
       execution_id: "exec-flaky",
+      solicitado_por: 42,
       resultados: [
         {
           scenario_id: "CT-001",
@@ -82,5 +85,33 @@ describe("normalizeTestExecutionPayload", () => {
       passedAttempts: 1,
       realDefects: 0,
     });
+  });
+
+  it("exige o usuário solicitante", () => {
+    expect(() =>
+      normalizeTestExecutionPayload({
+        execution_id: "exec-sem-usuario",
+        resultados: [{ scenario_id: "CT-001", status: "PASSOU" }],
+      }),
+    ).toThrowError("Informe solicitado_por");
+  });
+
+  it("remove segredos e contexto repetido do payload persistido", () => {
+    const execution = normalizeTestExecutionPayload({
+      execution_id: "exec-compacto",
+      solicitado_por: 42,
+      login_senha: "segredo",
+      contexto_codigo_fonte: "índice muito grande",
+      resultados: [{
+        scenario_id: "CT-001",
+        status: "PASSOU",
+        contexto_codigo_fonte: "índice muito grande",
+        resultado_teste: { codigo_regressao: "código extenso" },
+      }],
+    });
+    expect(execution.rawPayload).not.toContain("segredo");
+    expect(execution.rawPayload).not.toContain("índice muito grande");
+    expect(execution.rawPayload).not.toContain("código extenso");
+    expect(execution.rawPayload).toContain("exec-compacto");
   });
 });

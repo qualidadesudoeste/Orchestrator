@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type { Express, Request } from "express";
+import { logError } from "./_core/logger";
 import { ENV } from "./_core/env";
 import { upsertNonFunctionalRun } from "./db";
 import {
@@ -65,7 +66,7 @@ export function registerNonFunctionalRoutes(app: Express): void {
         });
         return;
       }
-      console.error("[qa-non-functional-runs] error:", error);
+      logError("qa_non_functional_run_failed", error);
       res.status(500).json({
         error: `Falha ao persistir teste não funcional: ${message}`,
       });

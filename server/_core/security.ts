@@ -19,9 +19,34 @@ function origin(value: string): string | null {
   }
 }
 
+function isStateChanging(method: string): boolean {
+  return !["GET", "HEAD", "OPTIONS"].includes(method.toUpperCase());
+}
+
+export function isAllowedRequestOrigin(req: Request): boolean {
+  const supplied = req.get("origin");
+  if (!supplied) return true;
+  const suppliedOrigin = origin(supplied);
+  if (!suppliedOrigin) return false;
+  const configuredOrigin = origin(ENV.orchestratorPublicUrl);
+  const requestOrigin = origin(`${req.protocol}://${req.get("host") ?? ""}`);
+  return [configuredOrigin, requestOrigin]
+    .filter(Boolean)
+    .includes(suppliedOrigin);
+}
+
 export function registerSecurityMiddleware(app: Express): void {
   const analyticsOrigin = origin(process.env.VITE_ANALYTICS_ENDPOINT ?? "");
   app.disable("x-powered-by");
+  app.use("/api", (req, res, next) => {
+    if (isStateChanging(req.method) && !isAllowedRequestOrigin(req)) {
+      res
+        .status(403)
+        .json({ error: "Origem da requisiÃ§Ã£o nÃ£o autorizada." });
+      return;
+    }
+    next();
+  });
   app.use(
     helmet({
       crossOriginEmbedderPolicy: false,
@@ -49,7 +74,7 @@ export function registerSecurityMiddleware(app: Express): void {
         },
       },
       referrerPolicy: { policy: "no-referrer" },
-    }),
+    })
   );
 
   const apiLimiter = rateLimit({
@@ -57,7 +82,9 @@ export function registerSecurityMiddleware(app: Express): void {
     limit: Number(process.env.RATE_LIMIT_API_MAX || 600),
     standardHeaders: "draft-8",
     legacyHeaders: false,
-    message: { error: "Muitas requisições. Aguarde antes de tentar novamente." },
+    message: {
+      error: "Muitas requisições. Aguarde antes de tentar novamente.",
+    },
   });
   const loginLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
@@ -74,7 +101,7 @@ export function registerSecurityMiddleware(app: Express): void {
 export function requestLogMiddleware(
   req: Request,
   res: Response,
-  next: NextFunction,
+  next: NextFunction
 ): void {
   const startedAt = performance.now();
   const requestId = safeRequestId(req.headers["x-request-id"]);

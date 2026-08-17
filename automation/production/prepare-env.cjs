@@ -75,6 +75,7 @@ function main() {
   const rootPassword = secret(24);
   const jwtSecret = secret();
   const agentToken = secret();
+  const credentialEncryptionKey = secret();
   const envFileReference = basename(outputPath);
 
   const lines = [
@@ -90,10 +91,16 @@ function main() {
     "",
     `JWT_SECRET=${jwtSecret}`,
     `QA_AGENT_API_TOKEN=${agentToken}`,
+    `CREDENTIAL_ENCRYPTION_KEY=${credentialEncryptionKey}`,
     `ORCHESTRATOR_PUBLIC_URL=${url.toString().replace(/\/$/, "")}`,
+    "ALLOW_MANUAL_TEST_URLS=false",
     "",
     "BUILT_IN_FORGE_API_URL=https://api.openai.com",
     "BUILT_IN_FORGE_API_KEY=",
+    "OPENAI_API_KEY=",
+    "LLM_API_URL=https://api.openai.com",
+    "LLM_API_KEY=",
+    "LLM_MODEL=gpt-5.6-terra",
     "",
     `TRUST_PROXY=${loopback ? "false" : "1"}`,
     "JSON_BODY_LIMIT=10mb",
