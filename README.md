@@ -1,6 +1,6 @@
 # Orchestrator — Plataforma de Qualidade
 
-Hub web para planejamento, execução e acompanhamento das atividades de QA. A plataforma reúne clientes, projetos, sprints, checklist do POP, trilha de conhecimento, geração de cenários por IA e análise de cobertura.
+Hub web para planejamento, execução e acompanhamento das atividades de QA. A plataforma reúne clientes, projetos, sprints, checklist do POP, geração de cenários por IA, execução automatizada e análise de cobertura.
 
 O agente de execução usa Playwright diretamente no worker da plataforma. Os
 detalhes ficam em [`automation/`](automation/README.md).
