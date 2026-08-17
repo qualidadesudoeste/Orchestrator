@@ -48,6 +48,7 @@ export type QaPilotInput = {
   executionPlan?: ExecutableScenarioPlan;
   testData?: Record<string, string>;
   provisioning?: QaProvisioningConfig;
+  artifactContract?: ExecutionArtifactContract;
   outputDirectory: string;
   headless?: boolean;
   maxIterations?: number;
@@ -304,7 +305,11 @@ export function classifyObservedAbsence(step: QaScenarioStep, observed: unknown)
 }
 
 import { PlaywrightPilotRuntime } from "./qaPilotRuntime";
-import { chainedTestDataGuidance } from "./scenarioTestDataService";
+import {
+  executionArtifactGuidance,
+  hasScenarioArtifact,
+  type ExecutionArtifactContract,
+} from "./executionArtifactService";
 export { PlaywrightPilotRuntime };
 
 const tools: Tool[] = [
@@ -347,7 +352,7 @@ async function createPlan(input: QaPilotInput, llm: LlmInvoker): Promise<QaPilot
         `Cenário: ${input.title}`,
         input.gherkin,
         Object.keys(input.testData ?? {}).length ? `Chaves de dados sintéticos locais disponíveis: ${Object.keys(input.testData ?? {}).join(", ")}` : "",
-        chainedTestDataGuidance(input.gherkin, Object.keys(input.testData ?? {})) ?? "",
+        executionArtifactGuidance(input.gherkin, Object.keys(input.testData ?? {}), input.artifactContract) ?? "",
         input.sourceContext ? `Contexto técnico:\n${input.sourceContext.slice(0, 5_000)}` : "",
         input.memoryContext ? `Conhecimento já observado:\n${input.memoryContext.slice(0, 5_000)}` : "",
       ].filter(Boolean).join("\n\n") },
@@ -646,6 +651,7 @@ export async function runQaPilotAgent(
         "Para dados parametrizados, use browser_fill_test_data com uma chave de availableTestDataKeys; nunca peça nem revele o valor.",
         "Para checkbox, radio, aceite, consentimento, LGPD ou termo, use obrigatoriamente browser_check; browser_click pode desmarcar um controle já marcado.",
         "Dados sintéticos básicos já são gerados automaticamente. Quando faltar uma precondição segura, tente criá-la pela interface autorizada e capture identificadores/links com browser_capture_field_test_data ou browser_capture_link_test_data para reutilização.",
+        "Quando um cenário produzir qualquer identificador, código, referência, URL ou outro valor necessário depois, capture-o explicitamente antes de concluir. O runtime criará automaticamente uma chave ARTEFATO_<CENARIO>_<TIPO>; não use nomes de sistema fixos no motor.",
         "Não bloqueie por falta de CPF, nome, e-mail, telefone, contato alternativo ou credenciais sintéticas: use as chaves automáticas disponíveis.",
         "Para downloads, use browser_click_and_download e valide downloaded, filename e bytes; net::ERR_ABORTED isolado é comportamento comum de download, não falha funcional.",
         "Para anexos ou uploads, use browser_upload_test_file com uma fixture sintética compatível e valide uploaded, filename, bytes e a confirmação visível; nunca peça um caminho local ao usuário.",
@@ -679,7 +685,8 @@ export async function runQaPilotAgent(
         },
         scenarioContract,
         availableTestDataKeys: Object.keys(input.testData ?? {}),
-        chainedTestDataGuidance: chainedTestDataGuidance(input.gherkin, Object.keys(input.testData ?? {})),
+        executionArtifactGuidance: executionArtifactGuidance(input.gherkin, Object.keys(input.testData ?? {}), input.artifactContract),
+        executionArtifactContract: input.artifactContract,
         provisioningAvailable: Boolean(input.provisioning),
         automationV2: input.executionPlan ? {
           mode: input.executionPlan.mode,
@@ -815,10 +822,20 @@ export async function runQaPilotAgent(
         } else if (call.function.name === "finish") {
           const missing = scenarioContract.slice(stepResults.length);
           const hasScreenshot = runtime.getTrace().some(event => event.ok && event.tool === "browser_screenshot");
+          const missingProducedArtifacts = (input.artifactContract?.produces ?? []).filter(artifact =>
+            !hasScenarioArtifact(input.testData ?? {}, input.scenarioId, artifact),
+          );
           if (missing.length) {
             execution = { output: { error: "Conclusão rejeitada: existem passos sem resultado.", missing } };
           } else if (!hasScreenshot) {
             execution = { output: { error: "Conclusão rejeitada: capture uma screenshot final." } };
+          } else if (deriveScenarioStatus(stepResults) === "PASSOU" && missingProducedArtifacts.length) {
+            execution = {
+              output: {
+                error: "Conclusão rejeitada: capture todos os artefatos declarados como produzidos pelo cenário.",
+                missingProducedArtifacts,
+              },
+            };
           } else {
             execution = await runtime.execute("finish", {
               ...args,

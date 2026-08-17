@@ -20,7 +20,7 @@ import type {
   ToolExecution,
 } from "./qaPilotAgent";
 import { isExternalAccessBlock } from "./accessBlockPolicy";
-import { extractCreatedProtocol, scenarioCreatesBusinessRecord, storeScenarioProtocol } from "./scenarioTestDataService";
+import { storeExecutionArtifact } from "./executionArtifactService";
 import { createSyntheticUploadFixture, selectSyntheticFixtureKind, type SyntheticFixtureKind } from "./testFixtureService";
 
 export { isExternalAccessBlock } from "./accessBlockPolicy";
@@ -77,13 +77,17 @@ function isAllowedNavigation(target: string, allowedOrigins: Set<string>, curren
 
 function capturedValue(raw: string, key: string, label: string): string {
   const source = raw.replace(/\s+/g, " ").trim();
-  if (/PROTOCOLO/.test(key)) return source.match(/(?:protocolo|den[uú]ncia)\s*(?:n[ºo]?\.?\s*)?(?:[:#-]|é)?\s*([A-Z0-9][A-Z0-9./_-]{4,80})/i)?.[1] ?? source.slice(0, 200);
-  if (/LINK|URL/.test(key)) return source.match(/https?:\/\/[^\s]+/i)?.[0] ?? source;
-  if (/EMAIL|CONTATO/.test(key)) return source.match(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/i)?.[0] ?? source;
-  if (/CPF/.test(key)) return source.match(/\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b/)?.[0] ?? source;
-  if (/TELEFONE/.test(key)) return source.match(/\(?\d{2}\)?\s?\d{4,5}-?\d{4}/)?.[0] ?? source;
+  const normalizedKey = key.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+  if (/LINK|URL/.test(normalizedKey)) return source.match(/https?:\/\/[^\s]+/i)?.[0] ?? source;
+  if (/EMAIL|CONTATO/.test(normalizedKey)) return source.match(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/i)?.[0] ?? source;
+  if (/CPF/.test(normalizedKey)) return source.match(/\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b/)?.[0] ?? source;
+  if (/TELEFONE/.test(normalizedKey)) return source.match(/\(?\d{2}\)?\s?\d{4,5}-?\d{4}/)?.[0] ?? source;
   const escaped = label.replace(/[.*+?^$()|[\]\\{}]/g, "\\$&");
-  return source.replace(new RegExp("^.*?" + escaped + "\\s*[:#-]?\\s*", "i"), "").trim().slice(0, 2_000) || source.slice(0, 2_000);
+  const afterLabel = source.replace(new RegExp("^.*?" + escaped + "\\s*[:#-]?\\s*", "i"), "").trim();
+  if (/\b(?:ID|IDENTIFICADOR|IDENTIFIER|CODIGO|CODE|NUMERO|NUMBER|REFERENCIA|REFERENCE|PROTOCOLO)\b/.test(normalizedKey)) {
+    return afterLabel.match(/[A-Z0-9][A-Z0-9./_-]{3,160}/i)?.[0] ?? afterLabel.slice(0, 200);
+  }
+  return afterLabel.slice(0, 2_000) || source.slice(0, 2_000);
 }
 
 export class PlaywrightPilotRuntime implements QaPilotToolRuntime {
@@ -190,7 +194,6 @@ export class PlaywrightPilotRuntime implements QaPilotToolRuntime {
         elements
       };
     })()` ) as { title: string; text: string; elements: unknown[] };
-    this.captureReusableObservedData(rawSnapshot.text);
     for (const raw of rawSnapshot.elements) {
       const element = raw as { ref?: unknown; name?: unknown; context?: unknown; role?: unknown; tag?: unknown; type?: unknown };
       const ref = String(element.ref ?? "");
@@ -208,26 +211,6 @@ export class PlaywrightPilotRuntime implements QaPilotToolRuntime {
       console: this.consoleMessages.slice(-10),
       networkFailures: this.networkFailures.slice(-10),
     });
-  }
-
-  private captureReusableObservedData(text: string) {
-    // Business identifiers created by one scenario must be available to the
-    // following scenarios without asking the user to copy or configure them.
-    const protocol = extractCreatedProtocol(text);
-    if (!protocol || !scenarioCreatesBusinessRecord(this.input.gherkin)) return;
-    this.input.testData ??= {};
-    storeScenarioProtocol(this.input.testData, this.input.scenarioId, this.input.gherkin, protocol);
-    this.input.testData.PROTOCOL ??= protocol;
-    // A public record created with the synthetic form data has a known,
-    // deterministic original contact. Keep that relationship for subsequent
-    // protocol-consultation scenarios in the same execution.
-    if (this.input.testData.EMAIL_TESTE) {
-      this.input.testData.CONTATO_ORIGINAL ??= this.input.testData.EMAIL_TESTE;
-      this.input.testData.CONTATO_ORIGINAL_EMAIL ??= this.input.testData.EMAIL_TESTE;
-    }
-    if (this.input.testData.TELEFONE_TESTE) {
-      this.input.testData.CONTATO_ORIGINAL_TELEFONE ??= this.input.testData.TELEFONE_TESTE;
-    }
   }
 
   private locatorForRef(page: Page, ref: unknown) {
@@ -844,10 +827,9 @@ export class PlaywrightPilotRuntime implements QaPilotToolRuntime {
         const value = String(await locator.getAttribute("value") || await locator.textContent() || "").trim().slice(0, 2_000);
         if (!value) throw new Error("O campo indicado não possui valor capturável.");
         this.input.testData ??= {};
-        this.input.testData[key] = value;
-        if (/PROTOCOLO/.test(key)) storeScenarioProtocol(this.input.testData, this.input.scenarioId, this.input.gherkin, value);
+        const storedKeys = storeExecutionArtifact(this.input.testData, this.input.scenarioId, key, value);
         event.arguments = { ref: args.ref, key, value: "[REDACTED]" };
-        output = { captured: true, key, characters: value.length };
+        output = { captured: true, key, storedKeys, characters: value.length };
       } else if (name === "browser_capture_link_test_data") {
         const key = String(args.key ?? "").trim().slice(0, 80);
         const label = String(args.label ?? "").trim().slice(0, 200);
@@ -858,9 +840,9 @@ export class PlaywrightPilotRuntime implements QaPilotToolRuntime {
         const resolved = new URL(href, page.url()).toString();
         if (!isAllowedNavigation(resolved, this.allowedOrigins, page.url())) throw new Error("Link capturado fora dos ambientes autorizados.");
         this.input.testData ??= {};
-        this.input.testData[key] = resolved;
+        const storedKeys = storeExecutionArtifact(this.input.testData, this.input.scenarioId, key, resolved);
         event.arguments = { key, label, href: "[REDACTED]" };
-        output = { captured: true, key, label };
+        output = { captured: true, key, storedKeys, label };
       } else if (name === "browser_capture_text_test_data") {
         const key = String(args.key ?? "").trim().slice(0, 80);
         const query = String(args.query ?? "").trim().slice(0, 200);
@@ -873,10 +855,9 @@ export class PlaywrightPilotRuntime implements QaPilotToolRuntime {
         const value = capturedValue(raw, key, query);
         if (!value) throw new Error("O texto indicado não possui valor capturável.");
         this.input.testData ??= {};
-        this.input.testData[key] = value;
-        if (/PROTOCOLO/.test(key)) storeScenarioProtocol(this.input.testData, this.input.scenarioId, this.input.gherkin, value);
+        const storedKeys = storeExecutionArtifact(this.input.testData, this.input.scenarioId, key, value);
         event.arguments = { key, query, value: "[REDACTED]" };
-        output = { captured: true, key, characters: value.length };
+        output = { captured: true, key, storedKeys, characters: value.length };
       } else if (name === "browser_search_no_match") {
         const filterLabel = String(args.filterLabel ?? "").trim();
         if (filterLabel) {

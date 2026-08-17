@@ -18,6 +18,7 @@ import {
 import { compileSingleGherkinScenario, resolveScenarioPlan } from "./automation-v2";
 import type { ApprovedAutomationRecipe } from "./approvedAutomationService";
 import type { InvokeParams, InvokeResult } from "./_core/llm";
+import { storeExecutionArtifact } from "./executionArtifactService";
 
 function response(message: InvokeResult["choices"][number]["message"]): InvokeResult {
   return {
@@ -286,6 +287,43 @@ describe("contrato executável do cenário", () => {
     expect(result.final.status).toBe("BLOQUEADO");
     expect(result.final.steps).toHaveLength(3);
     expect(trace.some(event => event.tool === "resolve_blocker" && event.arguments.category === "PERMISSION")).toBe(true);
+  });
+
+  it("só aprova cenário produtor depois de capturar o artefato declarado", async () => {
+    const testData: Record<string, string> = {};
+    const scripted = [
+      callTool("observe-1-artifact", "browser_observe"),
+      callTool("step-1-artifact", "complete_step", { stepId: "S1", status: "PASSOU", observed: "A tela de busca foi aberta corretamente." }),
+      callTool("observe-2-artifact", "browser_observe"),
+      callTool("step-2-artifact", "complete_step", { stepId: "S2", status: "PASSOU", observed: "A busca do item foi executada corretamente." }),
+      callTool("observe-3-artifact", "browser_observe"),
+      callTool("step-3-artifact", "complete_step", { stepId: "S3", status: "PASSOU", observed: "O identificador ficou visível na tela." }),
+      callTool("screenshot-artifact", "browser_screenshot"),
+      callTool("finish-missing-artifact", "finish", { summary: "Concluído.", observedResult: "Registro visível.", missingPreconditions: [] }),
+      callTool("finish-with-artifact", "finish", { summary: "Concluído.", observedResult: "Registro visível.", missingPreconditions: [] }),
+    ];
+    let call = 0;
+    let index = 0;
+    const llm = async () => {
+      if (call++ === 0) return planResponse();
+      if (index === scripted.length - 1) {
+        storeExecutionArtifact(testData, "CT-PRODUCER", "identificador do registro", "ABC-123");
+      }
+      return scripted[index++];
+    };
+    const { runtime } = runtimeDouble();
+    const result = await runQaPilotAgent({
+      runId: "producer-test",
+      scenarioId: "CT-PRODUCER",
+      title: "Produzir identificador",
+      gherkin: scenario(),
+      environments: [{ name: "Teste", url: "https://example.test" }],
+      outputDirectory: pathForTest(),
+      testData,
+      artifactContract: { produces: ["identificador do registro"], consumes: [] },
+    }, { llm, runtime, verify: false });
+    expect(result.final.status).toBe("PASSOU");
+    expect(testData.ARTEFATO_CT_PRODUCER_IDENTIFICADOR_DO_REGISTRO).toBe("ABC-123");
   });
 
   it("tenta recuperar erro de automação antes de aceitar o status", async () => {
