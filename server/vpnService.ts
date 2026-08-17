@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { connect } from "node:net";
 import path from "node:path";
+import { preflightEnvironmentAccess } from "./environmentPreflightService";
 
 export type VpnProvider = "NONE" | "COGEL" | "SEFAZ" | "OUTRA";
 export type VpnConnectionStrategy = "AUTO" | "CLI" | "AUTOCONNECT";
@@ -243,11 +244,20 @@ async function importVpnConfiguration(input: VpnRequirement): Promise<boolean> {
   }
 }
 
-async function waitUntilReachable(targetUrl: string, timeoutMs: number): Promise<boolean> {
+async function isBrowserTargetAccessible(targetUrl: string): Promise<boolean> {
+  try {
+    const result = await preflightEnvironmentAccess(targetUrl, { attempts: 1 });
+    return !result.externallyBlocked;
+  } catch {
+    return false;
+  }
+}
+
+async function waitUntilBrowserAccessible(targetUrl: string, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (await isTargetReachable(targetUrl)) return true;
-    await new Promise(resolve => setTimeout(resolve, 2_000));
+    if (await isBrowserTargetAccessible(targetUrl)) return true;
+    await new Promise(resolve => setTimeout(resolve, 5_000));
   }
   return false;
 }
@@ -263,18 +273,26 @@ export async function ensureVpnConnection(input: VpnRequirement): Promise<VpnPre
   }
   validateRequirement(input);
   const verificationUrl = input.verificationUrl?.trim() || input.targetUrl;
-  if (await isTargetReachable(verificationUrl)) {
+  if (await isBrowserTargetAccessible(verificationUrl)) {
     return { required: true, connected: true, connectedAutomatically: false, provider: input.provider, profileName: input.profileName, verification: "TARGET_REACHABLE", clientInstalled: true, connectionMethod: "NONE" };
   }
 
-  if (!input.autoConnect) throw new Error(`Conecte manualmente a VPN ${input.provider} (${input.profileName}) antes de iniciar os testes.`);
+  if (!input.autoConnect) {
+    throw new VpnManualActionRequiredError(
+      `Conecte manualmente a VPN ${input.provider} (${input.profileName}) e depois retome esta execucao.`,
+    );
+  }
   const installation = await ensureFortiClientInstalled(input);
   const configurationImported = await importVpnConfiguration(input);
   const strategy = input.connectionStrategy ?? "AUTO";
   const status = await runFortiVpn(["--cli", "--status", "--tunnel", input.profileName]);
   const parsedStatus = parseFortiClientStatus(status.output, input.profileName);
   if (parsedStatus === "CONNECTED") {
-    return { required: true, connected: true, connectedAutomatically: false, provider: input.provider, profileName: input.profileName, verification: "CLIENT_STATUS", clientInstalled: true, clientInstalledNow: installation.installedNow, configurationImported, connectionMethod: "CLI" };
+    const gui = await firstExisting(DEFAULT_FORTICLIENT_GUI_PATHS);
+    if (gui) launchFile(gui);
+    throw new VpnManualActionRequiredError(
+      `A VPN ${input.provider} (${input.profileName}) aparece conectada, mas o navegador do worker ainda recebe um bloqueio de acesso. Reconecte a VPN e depois retome esta execucao.`,
+    );
   }
 
   if (parsedStatus !== "UNAVAILABLE" && strategy !== "AUTOCONNECT") {
@@ -282,7 +300,7 @@ export async function ensureVpnConnection(input: VpnRequirement): Promise<VpnPre
     if (input.username) args.push("--username", input.username);
     if (input.password) args.push("--password", input.password);
     await runFortiVpn(args, 60_000);
-    if (await waitUntilReachable(verificationUrl, 45_000)) {
+    if (await waitUntilBrowserAccessible(verificationUrl, 45_000)) {
       return { required: true, connected: true, connectedAutomatically: true, provider: input.provider, profileName: input.profileName, verification: "TARGET_REACHABLE", clientInstalled: true, clientInstalledNow: installation.installedNow, configurationImported, connectionMethod: "CLI" };
     }
   }
@@ -295,9 +313,6 @@ export async function ensureVpnConnection(input: VpnRequirement): Promise<VpnPre
     throw new VpnManualActionRequiredError(
       `O FortiClient foi aberto. Conecte manualmente a VPN ${input.provider} (${input.profileName}) e depois retome esta execucao. Esta edicao do FortiClient nao oferece conexao por linha de comando.`,
     );
-  }
-  if (await waitUntilReachable(verificationUrl, 120_000)) {
-    return { required: true, connected: true, connectedAutomatically: true, provider: input.provider, profileName: input.profileName, verification: "TARGET_REACHABLE", clientInstalled: true, clientInstalledNow: installation.installedNow, configurationImported, connectionMethod: "AUTOCONNECT" };
   }
   throw new VpnManualActionRequiredError(
     `O FortiClient foi aberto. Conclua o MFA/aceite da VPN ${input.provider} (${input.profileName}) e depois retome esta execucao.`,

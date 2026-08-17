@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { assertCompatibleVpnRequirements, isTrustedFortinetSignature, parseFortiClientStatus, validateInstallerSettings, VpnManualActionRequiredError } from "./vpnService";
+import { describe, expect, it, vi } from "vitest";
+
+const preflightEnvironmentAccess = vi.hoisted(() => vi.fn());
+vi.mock("./environmentPreflightService", () => ({ preflightEnvironmentAccess }));
+
+import { assertCompatibleVpnRequirements, ensureVpnConnection, isTrustedFortinetSignature, parseFortiClientStatus, validateInstallerSettings, VpnManualActionRequiredError } from "./vpnService";
 
 describe("vpnService", () => {
   it("identifica um túnel FortiClient conectado", () => {
@@ -15,6 +19,26 @@ describe("vpnService", () => {
     const error = new VpnManualActionRequiredError("Conecte a VPN e retome.");
     expect(error.name).toBe("VpnManualActionRequiredError");
     expect(error.code).toBe("VPN_MANUAL_ACTION_REQUIRED");
+  });
+
+  it("nao confunde uma porta HTTPS aberta com VPN pronta para o navegador", async () => {
+    preflightEnvironmentAccess.mockResolvedValue({ externallyBlocked: true });
+    await expect(ensureVpnConnection({
+      provider: "COGEL",
+      profileName: "Cogel",
+      autoConnect: false,
+      targetUrl: "https://sistema.interno",
+    })).rejects.toBeInstanceOf(VpnManualActionRequiredError);
+  });
+
+  it("libera a execucao quando o navegador realmente alcanca o sistema", async () => {
+    preflightEnvironmentAccess.mockResolvedValue({ externallyBlocked: false });
+    await expect(ensureVpnConnection({
+      provider: "COGEL",
+      profileName: "Cogel",
+      autoConnect: false,
+      targetUrl: "https://sistema.interno",
+    })).resolves.toMatchObject({ connected: true, verification: "TARGET_REACHABLE" });
   });
 
   it("permite ambientes públicos e uma única VPN na mesma execução", () => {

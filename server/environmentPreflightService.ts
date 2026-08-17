@@ -1,5 +1,5 @@
 import { chromium } from "playwright-core";
-import { isExternalAccessBlock } from "./qaPilotRuntime";
+import { isExternalAccessBlock } from "./accessBlockPolicy";
 
 export type EnvironmentProbeResult = {
   url: string;

@@ -19,6 +19,9 @@ import type {
   QaScenarioStepResult,
   ToolExecution,
 } from "./qaPilotAgent";
+import { isExternalAccessBlock } from "./accessBlockPolicy";
+
+export { isExternalAccessBlock } from "./accessBlockPolicy";
 
 const DESTRUCTIVE_ACTION = /\b(excluir|remover|apagar|deletar|delete|remove|encerrar processo|cancelar processo)\b/i;
 const UI_MUTATING_TOOLS = new Set([
@@ -58,11 +61,6 @@ export function normalizePlaywrightKey(value: unknown): string {
     const token = part.trim();
     return PLAYWRIGHT_KEY_NAMES[token.toUpperCase()] ?? token;
   }).join("+");
-}
-
-export function isExternalAccessBlock(value: unknown): boolean {
-  const text = String(value ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-  return /url bloqueada|pagina bloqueada|bloquead[ao] por politica de seguranca|access denied|request blocked|web application firewall|forbidden/.test(text);
 }
 
 function safeFilename(value: string): string {
