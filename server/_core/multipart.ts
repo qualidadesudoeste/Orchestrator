@@ -138,8 +138,10 @@ export async function parseMultipartFiles(
         limits: {
           files: policy.maxFiles,
           fileSize: policy.maxFileBytes,
-          fields: 0,
-          parts: policy.maxFiles,
+          // Browsers and proxies may add harmless textual multipart parts.
+          // Files remain constrained independently; extra fields are ignored.
+          fields: 4,
+          parts: policy.maxFiles + 4,
         },
       });
     } catch {

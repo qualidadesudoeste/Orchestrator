@@ -28,6 +28,43 @@ const UI_MUTATING_TOOLS = new Set([
   "browser_press", "browser_back", "browser_search_no_match", "browser_click_and_download",
 ]);
 
+const PLAYWRIGHT_KEY_NAMES: Record<string, string> = {
+  ALT: "Alt",
+  ARROWDOWN: "ArrowDown",
+  ARROWLEFT: "ArrowLeft",
+  ARROWRIGHT: "ArrowRight",
+  ARROWUP: "ArrowUp",
+  BACKSPACE: "Backspace",
+  CONTROL: "Control",
+  CTRL: "Control",
+  DELETE: "Delete",
+  END: "End",
+  ENTER: "Enter",
+  ESC: "Escape",
+  ESCAPE: "Escape",
+  HOME: "Home",
+  INSERT: "Insert",
+  META: "Meta",
+  PAGEDOWN: "PageDown",
+  PAGEUP: "PageUp",
+  SHIFT: "Shift",
+  SPACE: "Space",
+  TAB: "Tab",
+};
+
+export function normalizePlaywrightKey(value: unknown): string {
+  const raw = String(value ?? "Enter").trim() || "Enter";
+  return raw.split("+").map(part => {
+    const token = part.trim();
+    return PLAYWRIGHT_KEY_NAMES[token.toUpperCase()] ?? token;
+  }).join("+");
+}
+
+export function isExternalAccessBlock(value: unknown): boolean {
+  const text = String(value ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  return /url bloqueada|pagina bloqueada|bloquead[ao] por politica de seguranca|access denied|request blocked|web application firewall|forbidden/.test(text);
+}
+
 function safeFilename(value: string): string {
   return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "")
     .toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 80) || "cenario";
@@ -57,7 +94,7 @@ export class PlaywrightPilotRuntime implements QaPilotToolRuntime {
   private readonly consoleMessages: string[] = [];
   private readonly networkFailures: string[] = [];
   private readonly authenticatedOrigins = new Set<string>();
-  private readonly refDescriptors = new Map<string, { name: string; role: string; tag: string; type: string }>();
+  private readonly refDescriptors = new Map<string, { name: string; context: string; role: string; tag: string; type: string }>();
   private final?: QaPilotFinal;
   private readonly allowedOrigins: Set<string>;
 
@@ -138,7 +175,7 @@ export class PlaywrightPilotRuntime implements QaPilotToolRuntime {
           role: element.getAttribute("role") || "",
           type: element.type || "",
           name: label || (element.innerText || "").trim().slice(0, 120) || element.placeholder || element.name || "",
-          context: ((element.parentElement && element.parentElement.innerText) || "").replace(/\\s+/g, " ").trim().slice(0, 100),
+          context: (((element.closest("tr,[role=row],li") || element.parentElement) && (element.closest("tr,[role=row],li") || element.parentElement).innerText) || "").replace(/\\s+/g, " ").trim().slice(0, 160),
           value: element.type === "password" ? "[REDACTED]" : String(element.value || "").slice(0, 160),
           disabled: Boolean(element.disabled) || element.getAttribute("aria-disabled") === "true",
           checked: element.type === "checkbox" || element.type === "radio"
@@ -154,10 +191,11 @@ export class PlaywrightPilotRuntime implements QaPilotToolRuntime {
     })()` ) as { title: string; text: string; elements: unknown[] };
     this.captureReusableObservedData(rawSnapshot.text);
     for (const raw of rawSnapshot.elements) {
-      const element = raw as { ref?: unknown; name?: unknown; role?: unknown; tag?: unknown; type?: unknown };
+      const element = raw as { ref?: unknown; name?: unknown; context?: unknown; role?: unknown; tag?: unknown; type?: unknown };
       const ref = String(element.ref ?? "");
       if (ref) this.refDescriptors.set(ref, {
         name: String(element.name ?? "").trim(),
+        context: String(element.context ?? "").trim(),
         role: String(element.role ?? "").trim(),
         tag: String(element.tag ?? "").trim(),
         type: String(element.type ?? "").trim(),
@@ -513,6 +551,7 @@ export class PlaywrightPilotRuntime implements QaPilotToolRuntime {
     const after = `${activePage.url()}|${(await activePage.locator("body").innerText().catch(() => "")).slice(0, 2_000)}`;
     const changed = before !== after;
     const successfulAttempt = attempts.some(item => item.ok);
+    const blockedAfter = isExternalAccessBlock(after);
     return {
       category,
       objective: objective.slice(0, 500),
@@ -520,11 +559,11 @@ export class PlaywrightPilotRuntime implements QaPilotToolRuntime {
       attempts,
       attempted: attempts.some(item => item.strategy !== "REPORT_EXTERNAL_DEPENDENCY"),
       changed,
-      resolved: category !== "EXTERNAL" && successfulAttempt && (
+      resolved: category !== "EXTERNAL" && !blockedAfter && successfulAttempt && (
         changed || category === "AUTH_SESSION" || category === "NETWORK" || category === "SIMPLE_DATA"
       ),
-      external: category === "EXTERNAL",
-      requiresStepRetry: category !== "EXTERNAL",
+      external: category === "EXTERNAL" || blockedAfter,
+      requiresStepRetry: category !== "EXTERNAL" && !blockedAfter,
       ...(await this.observe() as Record<string, unknown>),
     };
   }
@@ -586,9 +625,20 @@ export class PlaywrightPilotRuntime implements QaPilotToolRuntime {
     if (!submit) throw new Error("Botão de login não encontrado.");
     await submit.click();
     await page.waitForLoadState("domcontentloaded", { timeout: 30_000 }).catch(() => undefined);
-    await page.waitForTimeout(1_000);
+    await page.waitForFunction(
+      loginPath => {
+        const field = document.querySelector('input[type="password"]');
+        const visible = field instanceof HTMLElement && Boolean(field.offsetWidth || field.offsetHeight || field.getClientRects().length);
+        return location.pathname !== loginPath || !visible;
+      },
+      loginUrl.pathname,
+      { timeout: 15_000 },
+    ).catch(() => undefined);
     const passwordStillVisible = await password.isVisible().catch(() => false);
-    if (passwordStillVisible) throw new Error("O formulário de login permaneceu visível após o envio.");
+    const currentAfterSubmit = new URL(page.url());
+    if (passwordStillVisible && currentAfterSubmit.pathname === loginUrl.pathname) {
+      throw new Error("O formulário de login permaneceu visível após o envio.");
+    }
     this.authenticatedOrigins.add(loginUrl.origin);
     return { authenticated: true, url: page.url(), title: await page.title() };
   }
@@ -650,10 +700,12 @@ export class PlaywrightPilotRuntime implements QaPilotToolRuntime {
         output = await this.deterministicLogin(args.environmentName, username, password);
       } else if (name === "browser_click") {
         const locator = await this.locatorWithSemanticRecovery(page, args.ref);
-        const label = await locator.getAttribute("aria-label") || await locator.evaluate(element => {
+        const descriptor = this.refDescriptors.get(String(args.ref ?? ""));
+        const directLabel = await locator.getAttribute("aria-label") || await locator.getAttribute("title") || await locator.evaluate(element => {
           const input = element as HTMLInputElement;
           return input.labels?.[0]?.innerText || element.textContent || "";
         }).catch(() => "");
+        const label = directLabel || descriptor?.context || "";
         if (DESTRUCTIVE_ACTION.test(label)) throw new Error("Ação destrutiva bloqueada pelo piloto.");
         const type = await locator.getAttribute("type");
         const role = await locator.getAttribute("role");
@@ -667,7 +719,13 @@ export class PlaywrightPilotRuntime implements QaPilotToolRuntime {
           if (await locator.getAttribute("aria-checked") !== "true") await locator.click({ timeout: 15_000 });
           actionType = "check";
         } else {
+          const beforeClick = `${page.url()}|${(await page.locator("body").innerText().catch(() => "")).slice(0, 4_000)}`;
           await this.clickWithUiRecovery(page, locator);
+          await page.waitForTimeout(800);
+          const afterClick = `${page.url()}|${(await page.locator("body").innerText().catch(() => "")).slice(0, 4_000)}`;
+          if (!String(directLabel).trim() && beforeClick === afterClick) {
+            throw new Error("Clique em controle sem identificação não produziu mudança observável. Reobserve a tela e escolha um controle com rótulo ou contexto de linha.");
+          }
         }
         await page.waitForTimeout(400);
         output = { action: { type: actionType, label: String(label).trim().slice(0, 160) }, ...(await this.observe() as Record<string, unknown>) };
@@ -884,7 +942,9 @@ export class PlaywrightPilotRuntime implements QaPilotToolRuntime {
         await locator.selectOption(value, { timeout: 15_000 });
         output = { action: { type: "select", label, value }, ...(await this.observe() as Record<string, unknown>) };
       } else if (name === "browser_press") {
-        await page.keyboard.press(String(args.key ?? "Enter"));
+        const key = normalizePlaywrightKey(args.key);
+        event.arguments = { key };
+        await page.keyboard.press(key);
         await page.waitForTimeout(300);
         output = await this.observe();
       } else if (name === "browser_back") {

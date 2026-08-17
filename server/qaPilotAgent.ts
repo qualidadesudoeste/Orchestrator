@@ -293,6 +293,8 @@ export function classifyObservedAbsence(step: QaScenarioStep, observed: unknown)
   const businessData = /(?:REGISTRO|MASSA|USUARIO|CONTA|PERFIL|PERMISSAO|AUTORIZACAO|MANIFESTACAO|CONTEUDO|ARQUIVO|LINK).*(?:INEXISTENTE|AUSENTE|NAO (?:(?:FOI|ESTA) )?(?:ENCONTRAD|DISPONIVEL|COMPROVAD|OBSERVAD|LOCALIZAD))/.test(text)
     || /(?:VENCID|EXPIRAD|RASCUNHO|INATIV|DESCARTAD|MAIS DE \d+|SUPERIOR A \d+|\>\s*\d+|OUTRO ANALISTA|SEGUNDO USUARIO|EXCLUSIVAMENTE.*VISUALIZACAO)/.test(text);
   if (step.keyword === "DADO" && businessData) return "BLOQUEADO";
+  const unreachablePrecondition = /(?:FORMULARIO|PAGINA|TELA|FLUXO).*(?:NAO FOI POSSIVEL (?:ACESSAR|ABRIR|LOCALIZAR|IDENTIFICAR)|NAO (?:FOI )?ACESSAD[AO])/.test(text);
+  if (step.keyword === "DADO" && unreachablePrecondition && !/404|NOT FOUND/.test(text)) return "BLOQUEADO";
   const missingFunctionality = /(?:ROTA|PAGINA|TELA|BOTAO|CAMPO|CONTROLE|FUNCIONALIDADE|COMPORTAMENTO).*(?:404|NAO (?:EXISTE|FOI ENCONTRAD|ESTA DISPONIVEL)|AUSENTE|INEXISTENTE)/.test(text)
     || /404 NOT FOUND/.test(text);
   if (missingFunctionality) return "FALHOU";

@@ -342,6 +342,13 @@ describe("contrato executável do cenário", () => {
     expect(result.final.steps.map(step => step.status)).toEqual(["PASSOU", "FALHOU", "NAO_EXECUTADO"]);
   });
 
+  it("classifica formulário inacessível em passo Dado como bloqueio, não defeito", () => {
+    expect(classifyObservedAbsence(
+      { id: "S1", keyword: "DADO", text: "que o usuário acessou o formulário", sourceLine: "Dado que o usuário acessou o formulário" },
+      "Não foi possível acessar o formulário pela navegação disponível.",
+    )).toBe("BLOQUEADO");
+  });
+
   it("interrompe repetição sem progresso antes do limite global", async () => {
     let call = 0;
     const llm = async () => call++ === 0
