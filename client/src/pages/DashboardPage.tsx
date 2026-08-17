@@ -4,6 +4,11 @@ import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { toast } from "sonner";
 import {
+  Tooltip as HelpTooltip,
+  TooltipContent as HelpTooltipContent,
+  TooltipTrigger as HelpTooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
   Area,
   AreaChart,
   CartesianGrid,
@@ -357,39 +362,43 @@ export default function DashboardPage() {
   ];
   const nonFunctionalCards = [
     {
-      label: "Performance p95",
+      label: "Tempo de resposta",
       value:
         nonFunctional.summary.latestP95Ms === null
           ? "—"
           : `${nonFunctional.summary.latestP95Ms} ms`,
       detail: "Última execução k6",
+      tooltip: "Tempo máximo em que 95% das requisições foram concluídas (p95). Quanto menor, melhor.",
       icon: Timer,
       color: "#7c3aed",
       background: "#f3e8ff",
     },
     {
-      label: "Taxa de erro HTTP",
+      label: "Falhas de comunicação",
       value:
         nonFunctional.summary.latestFailureRatePercent === null
           ? "—"
           : `${nonFunctional.summary.latestFailureRatePercent}%`,
       detail: `${nonFunctional.summary.totalRuns} execuções não funcionais`,
+      tooltip: "Percentual de requisições HTTP que falharam por erro do servidor, resposta inválida, timeout ou problema de conexão. Quanto menor, melhor.",
       icon: Activity,
       color: "#0369a1",
       background: "#e0f2fe",
     },
     {
-      label: "Riscos ZAP",
+      label: "Segurança",
       value: nonFunctional.summary.zapHigh.toLocaleString("pt-BR"),
       detail: `${nonFunctional.summary.zapMedium} alertas médios`,
+      tooltip: "Alertas de segurança identificados pela análise passiva do OWASP ZAP. Cada alerta deve ser analisado antes de ser considerado uma vulnerabilidade confirmada.",
       icon: ShieldAlert,
       color: "#b91c1c",
       background: "#fee2e2",
     },
     {
-      label: "Violações axe",
+      label: "Acessibilidade",
       value: nonFunctional.summary.axeCritical.toLocaleString("pt-BR"),
       detail: `${nonFunctional.summary.axeSerious} violações sérias`,
+      tooltip: "Problemas de acessibilidade encontrados automaticamente pelo axe-core, como campos sem rótulo, contraste inadequado ou elementos incompatíveis com leitores de tela.",
       icon: Accessibility,
       color: "#c2410c",
       background: "#ffedd5",
@@ -960,61 +969,56 @@ export default function DashboardPage() {
             {nonFunctionalCards.map(card => {
               const Icon = card.icon;
               return (
-                <div
-                  key={card.label}
-                  style={{
-                    background: "white",
-                    borderRadius: 12,
-                    padding: 15,
-                    boxShadow: "0 1px 3px rgba(15,23,42,0.08)",
-                  }}
-                >
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      marginBottom: 10,
-                    }}
-                  >
-                    <span
+                <HelpTooltip key={card.label}>
+                  <HelpTooltipTrigger asChild>
+                    <div
+                      tabIndex={0}
+                      aria-label={`${card.label}: ${card.value}. ${card.tooltip}`}
                       style={{
-                        color: "#64748b",
-                        fontSize: 11,
-                        fontWeight: 700,
+                        background: "white",
+                        borderRadius: 12,
+                        padding: 15,
+                        boxShadow: "0 1px 3px rgba(15,23,42,0.08)",
+                        cursor: "help",
                       }}
                     >
-                      {card.label}
-                    </span>
-                    <span
-                      style={{
-                        display: "grid",
-                        placeItems: "center",
-                        width: 29,
-                        height: 29,
-                        borderRadius: 8,
-                        color: card.color,
-                        background: card.background,
-                      }}
-                    >
-                      <Icon size={16} />
-                    </span>
-                  </div>
-                  <div
-                    style={{
-                      color: "#0f172a",
-                      fontSize: 24,
-                      fontWeight: 800,
-                    }}
-                  >
-                    {card.value}
-                  </div>
-                  <div
-                    style={{ color: "#94a3b8", fontSize: 10, marginTop: 4 }}
-                  >
-                    {card.detail}
-                  </div>
-                </div>
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          marginBottom: 10,
+                        }}
+                      >
+                        <span style={{ color: "#64748b", fontSize: 11, fontWeight: 700 }}>
+                          {card.label}
+                        </span>
+                        <span
+                          style={{
+                            display: "grid",
+                            placeItems: "center",
+                            width: 29,
+                            height: 29,
+                            borderRadius: 8,
+                            color: card.color,
+                            background: card.background,
+                          }}
+                        >
+                          <Icon size={16} />
+                        </span>
+                      </div>
+                      <div style={{ color: "#0f172a", fontSize: 24, fontWeight: 800 }}>
+                        {card.value}
+                      </div>
+                      <div style={{ color: "#94a3b8", fontSize: 10, marginTop: 4 }}>
+                        {card.detail}
+                      </div>
+                    </div>
+                  </HelpTooltipTrigger>
+                  <HelpTooltipContent side="top" sideOffset={8} className="max-w-80 leading-relaxed">
+                    {card.tooltip}
+                  </HelpTooltipContent>
+                </HelpTooltip>
               );
             })}
           </div>
@@ -1033,7 +1037,7 @@ export default function DashboardPage() {
               <table style={tableStyle}>
                 <thead>
                   <tr>
-                    {["Execução", "Projeto", "Status", "k6 p95", "ZAP", "axe"].map(
+                    {["Execução", "Projeto", "Status", "Tempo de resposta", "Segurança", "Acessibilidade"].map(
                       heading => (
                         <th key={heading} style={headerCellStyle}>
                           {heading}
