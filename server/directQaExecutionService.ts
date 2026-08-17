@@ -3,8 +3,10 @@ import { promises as fs } from "node:fs";
 import {
   getAgentMemories,
   getAgentMemoryByFingerprint,
+  getExecutionCheckpoint,
   getTestExecutionControlCheckpoint,
   markExecutionJobDispatched,
+  saveExecutionCheckpoint,
   updateTestExecutionProgress,
   upsertAgentMemories,
   upsertTestExecution,
@@ -56,10 +58,19 @@ type DirectEnvironment = QaPilotEnvironment & { type?: string };
 type DirectExecutionResult = ReturnType<typeof executionResult>;
 
 type ExecutionCheckpoint = {
-  version: 1;
+  version: 2;
   externalExecutionId: string;
   startedAt: string;
   results: DirectExecutionResult[];
+  testData: Record<string, string>;
+};
+
+type ParsedExecutionCheckpoint = {
+  version?: number;
+  externalExecutionId?: string;
+  startedAt?: string;
+  results?: DirectExecutionResult[];
+  testData?: Record<string, unknown>;
   testDataEncrypted?: string;
 };
 
@@ -335,12 +346,18 @@ export async function loadExecutionCheckpoint(
   checkpointFile: string,
   externalExecutionId: string,
   scenarios: DirectScenario[],
+  sharedCheckpointEncrypted?: string | null,
 ): Promise<{ startedAt?: Date; results: DirectExecutionResult[]; testData: Record<string, string> }> {
   try {
-    const stat = await fs.stat(checkpointFile);
-    if (stat.size > 25_000_000) throw new Error("Checkpoint excede o limite permitido.");
-    const parsed = JSON.parse(await fs.readFile(checkpointFile, "utf8")) as Partial<ExecutionCheckpoint>;
-    if (parsed.version !== 1 || parsed.externalExecutionId !== externalExecutionId || !Array.isArray(parsed.results)) {
+    let raw = sharedCheckpointEncrypted?.trim() ?? "";
+    if (!raw) {
+      const stat = await fs.stat(checkpointFile);
+      if (stat.size > 25_000_000) throw new Error("Checkpoint excede o limite permitido.");
+      raw = await fs.readFile(checkpointFile, "utf8");
+    }
+    const decoded = raw.startsWith("v1:") ? decryptCredential(raw) : raw;
+    const parsed = JSON.parse(decoded) as ParsedExecutionCheckpoint;
+    if (![1, 2].includes(Number(parsed.version)) || parsed.externalExecutionId !== externalExecutionId || !Array.isArray(parsed.results)) {
       throw new Error("Checkpoint incompatível com a execução atual.");
     }
     const scenarioOrder = new Map(scenarios.map((scenario, index) => [scenario.id, index]));
@@ -352,9 +369,11 @@ export async function loadExecutionCheckpoint(
       return ["PASSOU", "FALHOU", "BLOQUEADO", "ERRO_AUTOMACAO"].includes(text(result?.status));
     }).sort((left, right) => scenarioOrder.get(left.scenario_id)! - scenarioOrder.get(right.scenario_id)!);
     let testData: Record<string, string> = {};
-    if (parsed.testDataEncrypted) {
-      const decrypted = JSON.parse(decryptCredential(parsed.testDataEncrypted)) as Record<string, unknown>;
-      testData = Object.fromEntries(Object.entries(decrypted)
+    const checkpointData = parsed.version === 1 && parsed.testDataEncrypted
+      ? JSON.parse(decryptCredential(parsed.testDataEncrypted)) as Record<string, unknown>
+      : parsed.testData ?? {};
+    if (checkpointData && typeof checkpointData === "object" && !Array.isArray(checkpointData)) {
+      testData = Object.fromEntries(Object.entries(checkpointData)
         .map(([key, value]) => [key.slice(0, 80), String(value ?? "").slice(0, 2_000)])
         .slice(0, 100));
     }
@@ -372,18 +391,29 @@ export async function loadExecutionCheckpoint(
 
 export async function writeExecutionCheckpoint(
   checkpointFile: string,
-  checkpoint: Omit<ExecutionCheckpoint, "version" | "testDataEncrypted">,
+  checkpoint: Omit<ExecutionCheckpoint, "version" | "testData">,
   testData: Record<string, string>,
-): Promise<void> {
+): Promise<string> {
   const temporaryFile = `${checkpointFile}.tmp`;
   const payload: ExecutionCheckpoint = {
-    version: 1,
+    version: 2,
     ...checkpoint,
     results: sanitizeSensitiveData(checkpoint.results, { knownValues: testData }),
-    testDataEncrypted: encryptCredential(JSON.stringify(testData)),
+    testData,
   };
-  await fs.writeFile(temporaryFile, JSON.stringify(payload), { encoding: "utf8", flag: "w" });
+  const encrypted = encryptCredential(JSON.stringify(payload));
+  await fs.writeFile(temporaryFile, encrypted, { encoding: "utf8", flag: "w" });
   await fs.rename(temporaryFile, checkpointFile);
+  return encrypted;
+}
+
+async function persistExecutionCheckpoint(
+  checkpointFile: string,
+  checkpoint: Omit<ExecutionCheckpoint, "version" | "testData">,
+  testData: Record<string, string>,
+): Promise<void> {
+  const encrypted = await writeExecutionCheckpoint(checkpointFile, checkpoint, testData);
+  await saveExecutionCheckpoint(checkpoint.externalExecutionId, encrypted);
 }
 
 async function persistScenarioMemory(
@@ -432,7 +462,12 @@ export async function runDirectQaExecution(
   const runDirectory = path.resolve("artifacts", "agent-executions", externalExecutionId);
   await fs.mkdir(runDirectory, { recursive: true });
   const checkpointFile = path.join(runDirectory, "execution-checkpoint.json");
-  const checkpoint = await loadExecutionCheckpoint(checkpointFile, externalExecutionId, scenarios);
+  const checkpoint = await loadExecutionCheckpoint(
+    checkpointFile,
+    externalExecutionId,
+    scenarios,
+    await getExecutionCheckpoint(externalExecutionId),
+  );
   const testData = {
     ...buildAutomaticTestData(externalExecutionId),
     ...testDataFromBody(body),
@@ -553,7 +588,7 @@ export async function runDirectQaExecution(
       }
       const normalizedResult = executionResult(scenario, result, Date.now() - scenarioStartedAt, environments[0]);
       results.push(normalizedResult);
-      await writeExecutionCheckpoint(checkpointFile, {
+      await persistExecutionCheckpoint(checkpointFile, {
         externalExecutionId,
         startedAt: startedAt.toISOString(),
         results,
@@ -614,7 +649,7 @@ export async function runDirectQaExecution(
         Date.now() - scenarioStartedAt,
       );
       results.push(normalizedResult);
-      await writeExecutionCheckpoint(checkpointFile, {
+      await persistExecutionCheckpoint(checkpointFile, {
         externalExecutionId,
         startedAt: startedAt.toISOString(),
         results,

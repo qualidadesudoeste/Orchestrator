@@ -314,6 +314,7 @@ export const testExecutions = mysqlTable("test_executions", {
   currentStage: varchar("currentStage", { length: 80 }),
   progressMessage: varchar("progressMessage", { length: 1000 }),
   liveProgressJson: text("liveProgressJson"),
+  executionCheckpointEncrypted: longtext("executionCheckpointEncrypted"),
   lastHeartbeatAt: timestamp("lastHeartbeatAt"),
   passedScenarios: int("passedScenarios").notNull().default(0),
   failedScenarios: int("failedScenarios").notNull().default(0),

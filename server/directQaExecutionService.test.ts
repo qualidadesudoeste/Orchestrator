@@ -87,12 +87,20 @@ describe("executor direto da fila", () => {
       const raw = await fs.readFile(checkpointFile, "utf8");
       expect(raw).not.toContain("ABC-123");
       expect(raw).not.toContain("valor-secreto");
-      await writeExecutionCheckpoint(checkpointFile, {
+      const local = await loadExecutionCheckpoint(checkpointFile, "exec-checkpoint", scenarios);
+      expect(local.results).toHaveLength(1);
+      const sharedCheckpoint = await writeExecutionCheckpoint(checkpointFile, {
         externalExecutionId: "exec-checkpoint",
         startedAt: "2026-08-17T12:00:00.000Z",
         results: [result],
       }, { PROTOCOLO: "ABC-123", SENHA_TESTE: "valor-secreto" });
-      const loaded = await loadExecutionCheckpoint(checkpointFile, "exec-checkpoint", scenarios);
+      await fs.unlink(checkpointFile);
+      const loaded = await loadExecutionCheckpoint(
+        checkpointFile,
+        "exec-checkpoint",
+        scenarios,
+        sharedCheckpoint,
+      );
       expect(loaded.results).toHaveLength(1);
       expect(loaded.testData).toMatchObject({ PROTOCOLO: "ABC-123", SENHA_TESTE: "valor-secreto" });
       expect(loaded.startedAt?.toISOString()).toBe("2026-08-17T12:00:00.000Z");

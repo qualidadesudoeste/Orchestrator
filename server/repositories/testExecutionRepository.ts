@@ -74,6 +74,32 @@ export async function getPersistedScenarioGherkin(
   return rows[0]?.gherkin ?? undefined;
 }
 
+export async function getExecutionCheckpoint(externalExecutionId: string): Promise<string | null> {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  const rows = await db.select({ checkpoint: testExecutions.executionCheckpointEncrypted })
+    .from(testExecutions)
+    .where(eq(testExecutions.externalExecutionId, externalExecutionId))
+    .limit(1);
+  return rows[0]?.checkpoint ?? null;
+}
+
+export async function saveExecutionCheckpoint(
+  externalExecutionId: string,
+  checkpointEncrypted: string,
+): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  await db.update(testExecutions).set({
+    executionCheckpointEncrypted: checkpointEncrypted,
+    lastHeartbeatAt: new Date(),
+    leaseExpiresAt: new Date(Date.now() + 2 * 60 * 60 * 1000),
+  }).where(and(
+    eq(testExecutions.externalExecutionId, externalExecutionId),
+    inArray(testExecutions.executionState, ["QUEUED", "RUNNING", "PAUSED"]),
+  ));
+}
+
 export async function markTestExecutionStartFailure(
   externalExecutionId: string,
   reason: string,
@@ -157,27 +183,20 @@ export async function updateTestExecutionProgress(progress: NormalizedExecutionP
     const progressPercent = execution.totalScenarios > 0
       ? Math.min(100, Math.round((completedScenarios / execution.totalScenarios) * 100))
       : 0;
-    const isFinished =
+    const allScenariosProcessed =
       progress.event === "SCENARIO_COMPLETED" &&
       execution.totalScenarios > 0 &&
       completedScenarios >= execution.totalScenarios;
-    const finalStatus = counts.failed > 0
-      ? "FALHOU"
-      : counts.blocked > 0
-        ? "BLOQUEADO"
-        : counts.automation > 0
-          ? "ERRO_AUTOMACAO"
-          : "PASSOU";
     await tx.update(testExecutions).set({
-      executionState: isFinished ? "FINISHED" : "RUNNING",
-      status: isFinished ? finalStatus : execution.status,
+      executionState: "RUNNING",
+      status: execution.status,
       currentScenarioIndex: progress.scenarioIndex,
       currentScenarioId: progress.scenarioId,
       currentScenarioTitle: progress.scenarioTitle,
       currentEnvironment: progress.environment || null,
-      currentStage: isFinished ? "CONCLUIDO" : progress.stage,
-      progressMessage: isFinished
-        ? `Execução concluída: ${completedScenarios} de ${execution.totalScenarios} cenários processados.`
+      currentStage: allScenariosProcessed ? "GERANDO_ARTEFATOS" : progress.stage,
+      progressMessage: allScenariosProcessed
+        ? `Cenários processados: ${completedScenarios} de ${execution.totalScenarios}. Gerando artefatos finais.`
         : progress.event === "SCENARIO_STARTED"
           ? `Executando cenário ${progress.scenarioIndex} de ${execution.totalScenarios}: ${progress.scenarioTitle}`.slice(0, 1000)
           : `Cenário ${progress.scenarioIndex} concluído com status ${progress.status}.`.slice(0, 1000),
@@ -189,10 +208,10 @@ export async function updateTestExecutionProgress(progress: NormalizedExecutionP
       coveragePercent: progressPercent,
       liveProgressJson: JSON.stringify(live),
       lastHeartbeatAt: progress.occurredAt,
-      leaseExpiresAt: isFinished ? null : new Date(progress.occurredAt.getTime() + 2 * 60 * 60 * 1000),
-      finishedAt: isFinished ? progress.occurredAt : execution.finishedAt,
-      dispatchPayloadEncrypted: isFinished ? null : execution.dispatchPayloadEncrypted,
-      assignedWorkerId: isFinished ? null : execution.assignedWorkerId,
+      leaseExpiresAt: new Date(progress.occurredAt.getTime() + 2 * 60 * 60 * 1000),
+      finishedAt: execution.finishedAt,
+      dispatchPayloadEncrypted: execution.dispatchPayloadEncrypted,
+      assignedWorkerId: execution.assignedWorkerId,
     }).where(eq(testExecutions.id, execution.id));
     return { executionId: execution.id, completedScenarios, progressPercent };
   });
@@ -540,17 +559,29 @@ export async function pauseExecutionForManualVpn(
 export async function failExpiredExecutionJobs() {
   const db = await getDb();
   if (!db) return 0;
-  const expired = await db.select({ externalExecutionId: testExecutions.externalExecutionId })
+  const expired = await db.select({
+    externalExecutionId: testExecutions.externalExecutionId,
+    dispatchPayloadEncrypted: testExecutions.dispatchPayloadEncrypted,
+    dispatchAttempts: testExecutions.dispatchAttempts,
+  })
     .from(testExecutions)
     .where(and(
       eq(testExecutions.executionState, "RUNNING"),
       lt(testExecutions.leaseExpiresAt, new Date()),
     ));
   for (const job of expired) {
-    await markTestExecutionStartFailure(
-      job.externalExecutionId,
-      "O worker deixou de enviar atualizacoes por mais de duas horas. A execucao foi encerrada como falha de infraestrutura.",
-    );
+    if (job.dispatchPayloadEncrypted && job.dispatchAttempts < 3) {
+      await returnExecutionJobToQueue(
+        job.externalExecutionId,
+        "O worker anterior perdeu o lease. A execução será retomada pelo checkpoint compartilhado.",
+        job.dispatchPayloadEncrypted,
+      );
+    } else {
+      await markTestExecutionStartFailure(
+        job.externalExecutionId,
+        "O worker deixou de enviar atualizações e o limite de retomadas foi atingido.",
+      );
+    }
   }
   return expired.length;
 }
@@ -712,6 +743,7 @@ export async function upsertTestExecution(
       startedAt: data.startedAt ?? null,
       finishedAt: data.finishedAt ?? null,
       rawPayload: data.rawPayload,
+      executionCheckpointEncrypted: null,
       assignedWorkerId: null,
       dispatchPayloadEncrypted: null,
       leaseExpiresAt: null,
