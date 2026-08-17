@@ -2,9 +2,8 @@ import { useState } from "react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { CheckCircle2, Clock, Eye, FileText, GraduationCap } from "lucide-react";
+import { CheckCircle2, Clock, Eye, FileText } from "lucide-react";
 import { totalItems } from "@/data/qaData";
-import { totalTrailTopics } from "@/data/trailData";
 import AppLayout from "@/components/AppLayout";
 import { ChecklistViewModal } from "@/components/ChecklistViewModal";
 import SprintTestPlansModal from "@/components/SprintTestPlansModal";
@@ -17,7 +16,6 @@ export default function CoordinatorPage() {
   const { data: allUsers } = trpc.users.list.useQuery(undefined, { enabled: isCoordinator });
   const { data: sprints } = trpc.sprints.list.useQuery({ projectId: undefined }, { enabled: isCoordinator });
   const { data: projects } = trpc.projects.list.useQuery({ clientId: undefined }, { enabled: isCoordinator });
-  const { data: allTrailProgress } = trpc.trail.allProgress.useQuery(undefined, { enabled: isCoordinator });
 
   type ChecklistRow = NonNullable<typeof allChecklists>[number];
   const [viewChecklist, setViewChecklist] = useState<ChecklistRow | null>(null);
@@ -123,29 +121,6 @@ export default function CoordinatorPage() {
             );
           })}
         </div>
-
-        <h2 className="mb-4 mt-10 flex items-center gap-2 text-base font-bold text-slate-900"><GraduationCap className="h-4 w-4 text-blue-600" /> Trilha do Conhecimento — Progresso por Analista</h2>
-        {(!allTrailProgress || allTrailProgress.length === 0) ? (
-          <p className="py-8 text-center text-sm text-gray-400">Nenhum analista iniciou a trilha ainda.</p>
-        ) : (
-          <div className="space-y-3">
-            {allTrailProgress.map(trail => {
-              let completed = 0;
-              try { const parsed = JSON.parse(trail.completedTopics); if (Array.isArray(parsed)) completed = parsed.length; } catch { /* ignore */ }
-              const percent = totalTrailTopics > 0 ? Math.round((completed / totalTrailTopics) * 100) : 0;
-              const analystName = userMap[trail.userId] ?? `Analista #${trail.userId}`;
-              return (
-                <Card key={trail.id}>
-                  <CardContent className="flex items-center gap-4 p-4">
-                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-600 text-xs font-bold text-white">{analystName.charAt(0).toUpperCase()}</div>
-                    <div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold text-slate-900">{analystName}</p><p className="text-xs text-gray-400">Atualizado em {new Date(trail.updatedAt).toLocaleDateString("pt-BR")}</p></div>
-                    <div className="flex shrink-0 items-center gap-3"><div className="h-2 w-32 overflow-hidden rounded-full bg-slate-200"><div className="h-full rounded-full bg-blue-600" style={{ width: `${percent}%` }} /></div><span className="w-10 text-right text-sm font-bold text-blue-700">{percent}%</span><span className="w-16 text-right text-xs text-gray-400">{completed}/{totalTrailTopics} tópicos</span></div>
-                  </CardContent>
-                </Card>
-              );
-            })}
-          </div>
-        )}
       </main>
     </AppLayout>
   );

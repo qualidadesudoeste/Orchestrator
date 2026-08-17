@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import {
   CheckSquare, Folder, Users, History,
-  Shield, LogOut, GraduationCap, Wand2, Settings,
+  Shield, LogOut, Wand2, Settings,
   ChevronDown, ChevronRight, LayoutGrid, LayoutDashboard, User, X, GripVertical, Activity, ListChecks
 } from "lucide-react";
 
@@ -20,14 +20,6 @@ const MODULES = [
       { label: "Fila de Testes SIG", icon: ListChecks, path: "/workspace/sig-test-queue" },
       { label: "Fila de Execuções", icon: Activity, path: "/workspace/execution-queue" },
       { label: "Histórico de Execuções", icon: History, path: "/history" },
-    ],
-  },
-  {
-    id: "capacitacao",
-    label: "Capacitação",
-    icon: GraduationCap,
-    items: [
-      { label: "Trilha do Conhecimento", icon: GraduationCap, path: "/trail" },
     ],
   },
 ];

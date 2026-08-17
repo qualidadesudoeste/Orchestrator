@@ -204,16 +204,6 @@ export const checklists = mysqlTable("checklists", {
 });
 export type Checklist = typeof checklists.$inferSelect;
 
-export const trailProgress = mysqlTable("trail_progress", {
-  id: int("id").autoincrement().primaryKey(),
-  userId: int("userId").notNull().unique(),
-  completedTopics: text("completedTopics").notNull(),
-  updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
-});
-
-export type TrailProgress = typeof trailProgress.$inferSelect;
-export type InsertTrailProgress = typeof trailProgress.$inferInsert;
-
 // ─── QA Plan Documents ────────────────────────────────────────────────────────
 export const qaPlanDocuments = mysqlTable("qa_plan_documents", {
   id: int("id").autoincrement().primaryKey(),

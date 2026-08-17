@@ -11,7 +11,6 @@ const WorkspacePage = lazy(() => import("./pages/WorkspacePage"));
 const HistoryPage = lazy(() => import("./pages/HistoryPage"));
 const CoordinatorPage = lazy(() => import("./pages/CoordinatorPage"));
 const UsersPage = lazy(() => import("./pages/UsersPage"));
-const TrailPage = lazy(() => import("./pages/TrailPage"));
 const LoginPage = lazy(() => import("./pages/LoginPage"));
 const QAPlannerPage = lazy(() => import("./pages/QAPlannerPage"));
 const DashboardPage = lazy(() => import("./pages/DashboardPage"));
@@ -34,7 +33,6 @@ function Router() {
       <Route path="/coordinator" component={CoordinatorPage} />
       <Route path="/users" component={UsersPage} />
       <Route path="/parameters" component={ParametersPage} />
-      <Route path="/trail" component={TrailPage} />
       <Route path="/qa-planner" component={QAPlannerPage} />
       <Route path="/404" component={NotFound} />
       <Route component={NotFound} />
