@@ -406,7 +406,7 @@ const fetchWithBackoff = async (
       await sleep(computeBackoffDelay(attempt, retryAfterMs));
     } catch (error) {
       lastError = error;
-      if (error instanceof Error && error.name === "AbortError") throw error;
+      if (init.signal?.aborted || (error instanceof Error && ["AbortError", "TimeoutError"].includes(error.name))) throw error;
       if (attempt === RETRY_MAX_RETRIES) throw error;
       logWarn("llm_request_retry", {
         attempt: attempt + 1,
@@ -531,9 +531,10 @@ async function invokeProvider(
     method: "POST",
     headers,
     body: JSON.stringify(payload),
-    signal: isLocalLlmUrl(provider.apiUrl)
-      ? AbortSignal.timeout(180_000)
-      : undefined,
+    signal: AbortSignal.timeout(Math.round(Math.min(
+      600_000,
+      Math.max(10_000, ENV.llmRequestTimeoutMs || 180_000),
+    ))),
   });
 
   if (!response.ok) {

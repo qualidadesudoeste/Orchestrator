@@ -25,6 +25,12 @@ Google Chrome ou defina:
 PLAYWRIGHT_CHROME_EXECUTABLE_PATH=C:\Program Files\Google\Chrome\Application\chrome.exe
 ```
 
+Cada chamada ao provedor de IA é limitada por `LLM_REQUEST_TIMEOUT_MS` (padrão:
+3 minutos), e cada cenário completo por `QA_SCENARIO_TIMEOUT_MS` (padrão: 15
+minutos). Um timeout registra `ERRO_AUTOMACAO` somente no cenário afetado e o
+worker continua os demais. Após queda ou reinício, o checkpoint criptografado
+em `artifacts/agent-executions/<execução>` evita repetir cenários já concluídos.
+
 Inicie com `npm.cmd run start:worker`. O preflight encerra imediatamente quando
 o sistema não é Windows, o Chrome não existe ou a configuração de produção é
 inválida. Para desenvolvimento, use `npm.cmd run dev:worker`.
