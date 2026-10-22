@@ -36,9 +36,9 @@ describe("PlaywrightPilotRuntime upload", () => {
     outputDirectory = await mkdtemp(path.join(os.tmpdir(), "orchestrator-runtime-upload-"));
     const runtime = new PlaywrightPilotRuntime({
       runId: "upload-run",
-      scenarioId: "DEN-002",
-      title: "Cadastrar denúncia com anexo",
-      gherkin: "Cenário: Cadastrar denúncia com anexo\nDado nova denúncia\nQuando adiciono anexo\nEntão o anexo fica registrado",
+      scenarioId: "CT-UPLOAD",
+      title: "Cadastrar registro com anexo",
+      gherkin: "Cenário: Cadastrar registro com anexo\nDado um novo registro\nQuando adiciono anexo\nEntão o anexo fica registrado",
       environments: [{ name: "Sandbox", url }],
       outputDirectory,
       headless: true,
@@ -52,7 +52,7 @@ describe("PlaywrightPilotRuntime upload", () => {
         fixtureKind: "PNG",
         visibleConfirmation: true,
       });
-      expect(JSON.stringify(execution.output)).toContain("qa-upload-run-den-002.png");
+      expect(JSON.stringify(execution.output)).toContain("qa-upload-run-ct-upload.png");
     } finally {
       await runtime.close();
     }

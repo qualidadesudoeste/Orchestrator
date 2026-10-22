@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isExternalAccessBlock, normalizePlaywrightKey } from "./qaPilotRuntime";
+import { isActionableNetworkFailure, isExternalAccessBlock, normalizePlaywrightKey } from "./qaPilotRuntime";
 
 describe("PlaywrightPilotRuntime helpers", () => {
   it("normaliza teclas e modificadores para os nomes aceitos pelo Playwright", () => {
@@ -12,5 +12,12 @@ describe("PlaywrightPilotRuntime helpers", () => {
   it("reconhece bloqueios externos de acesso", () => {
     expect(isExternalAccessBlock("URL bloqueada por política de segurança")).toBe(true);
     expect(isExternalAccessBlock("Painel executivo carregado normalmente")).toBe(false);
+  });
+
+  it("não transforma cancelamentos normais de navegação em falha de rede", () => {
+    expect(isActionableNetworkFailure("net::ERR_ABORTED")).toBe(false);
+    expect(isActionableNetworkFailure("csp")).toBe(false);
+    expect(isActionableNetworkFailure("net::ERR_CONNECTION_REFUSED")).toBe(true);
+    expect(isActionableNetworkFailure("net::ERR_NAME_NOT_RESOLVED")).toBe(true);
   });
 });

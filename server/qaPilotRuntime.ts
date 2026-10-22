@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
+import { chromium, type Browser, type BrowserContext, type Frame, type Locator, type Page } from "playwright-core";
 import {
   classifyBlocker,
   requestQaProvisioning,
@@ -31,6 +31,7 @@ const UI_MUTATING_TOOLS = new Set([
   "browser_fill", "browser_fill_semantic", "browser_fill_test_data", "browser_fill_test_data_semantic",
   "browser_fill_visible_form", "browser_submit_form", "browser_select", "browser_select_semantic",
   "browser_press", "browser_back", "browser_search_no_match", "browser_click_and_download", "browser_upload_test_file",
+  "browser_switch_tab", "browser_close_tab",
 ]);
 
 const PLAYWRIGHT_KEY_NAMES: Record<string, string> = {
@@ -64,7 +65,6 @@ export function normalizePlaywrightKey(value: unknown): string {
     return PLAYWRIGHT_KEY_NAMES[token.toUpperCase()] ?? token;
   }).join("+");
 }
-
 function safeFilename(value: string): string {
   return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "")
     .toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 80) || "cenario";
@@ -73,6 +73,12 @@ function safeFilename(value: string): string {
 function isAllowedNavigation(target: string, allowedOrigins: Set<string>, currentUrl?: string): boolean {
   try { return allowedOrigins.has(new URL(target, currentUrl).origin); }
   catch { return false; }
+}
+
+export function isActionableNetworkFailure(errorText: unknown): boolean {
+  const value = String(errorText ?? "").trim().toLowerCase();
+  if (!value) return true;
+  return !value.includes("net::err_aborted") && value !== "csp" && !value.includes("cancelled") && !value.includes("canceled");
 }
 
 function capturedValue(raw: string, key: string, label: string): string {
@@ -100,6 +106,8 @@ export class PlaywrightPilotRuntime implements QaPilotToolRuntime {
   private readonly networkFailures: string[] = [];
   private readonly authenticatedOrigins = new Set<string>();
   private readonly refDescriptors = new Map<string, { name: string; context: string; role: string; tag: string; type: string }>();
+  private readonly refLocators = new Map<string, Locator>();
+  private readonly instrumentedPages = new WeakSet<Page>();
   private final?: QaPilotFinal;
   private readonly allowedOrigins: Set<string>;
 
@@ -120,8 +128,47 @@ export class PlaywrightPilotRuntime implements QaPilotToolRuntime {
     return sanitizeSensitiveData(value, this.sensitiveContext());
   }
 
+  private instrumentPage(page: Page): void {
+    if (this.instrumentedPages.has(page)) return;
+    this.instrumentedPages.add(page);
+    page.on("console", message => {
+      const value = `[${message.type()}] ${message.text()}`.slice(0, 1_000);
+      this.consoleMessages.push(value);
+      if (this.consoleMessages.length > 30) this.consoleMessages.shift();
+    });
+    page.on("pageerror", error => {
+      this.consoleMessages.push(`[pageerror] ${error.message}`.slice(0, 1_000));
+    });
+    page.on("requestfailed", request => {
+      const errorText = request.failure()?.errorText ?? "falhou";
+      if (!isActionableNetworkFailure(errorText)) return;
+      this.networkFailures.push(`${request.method()} ${request.url()} — ${errorText}`.slice(0, 1_000));
+      if (this.networkFailures.length > 30) this.networkFailures.shift();
+    });
+  }
+
+  private resetTransientDiagnostics(): void {
+    this.consoleMessages.length = 0;
+    this.networkFailures.length = 0;
+  }
+
+  private async activePage(): Promise<Page> {
+    const page = await this.ensurePage();
+    if (!page.isClosed()) return page;
+    const fallback = this.context?.pages().filter(candidate => !candidate.isClosed()).at(-1);
+    if (!fallback) throw new Error("Nenhuma aba do navegador permanece aberta.");
+    this.page = fallback;
+    return fallback;
+  }
+
   private async ensurePage(): Promise<Page> {
-    if (this.page) return this.page;
+    if (this.page && !this.page.isClosed()) return this.page;
+    const existing = this.context?.pages().filter(page => !page.isClosed()).at(-1);
+    if (existing) {
+      this.page = existing;
+      this.instrumentPage(existing);
+      return existing;
+    }
     const executablePath = process.env.PLAYWRIGHT_CHROME_EXECUTABLE_PATH?.trim();
     this.browser = await chromium.launch({
       ...(executablePath ? { executablePath } : { channel: "chrome" as const }),
@@ -140,101 +187,157 @@ export class PlaywrightPilotRuntime implements QaPilotToolRuntime {
       }
       await route.continue();
     });
+    this.context.on("page", page => {
+      this.instrumentPage(page);
+      this.page = page;
+    });
     this.page = await this.context.newPage();
-    this.page.on("console", message => {
-      const value = `[${message.type()}] ${message.text()}`.slice(0, 1_000);
-      this.consoleMessages.push(value);
-      if (this.consoleMessages.length > 30) this.consoleMessages.shift();
-    });
-    this.page.on("pageerror", error => {
-      this.consoleMessages.push(`[pageerror] ${error.message}`.slice(0, 1_000));
-    });
-    this.page.on("requestfailed", request => {
-      this.networkFailures.push(`${request.method()} ${request.url()} — ${request.failure()?.errorText ?? "falhou"}`.slice(0, 1_000));
-      if (this.networkFailures.length > 30) this.networkFailures.shift();
-    });
+    this.instrumentPage(this.page);
     return this.page;
   }
 
   private async observe(): Promise<unknown> {
-    const page = await this.ensurePage();
-    // A string is intentional: TSX/esbuild decorates nested callbacks with a
-    // helper that does not exist inside the isolated browser context.
-    const rawSnapshot = await page.evaluate(`(() => {
-      const candidates = Array.from(document.querySelectorAll(
-        "a,button,input,select,textarea,[contenteditable=true],[aria-haspopup],[role=button],[role=link],[role=tab],[role=checkbox],[role=radio],[role=combobox],[role=listbox],[role=option],[role=menuitem]"
-      )).filter(element => {
-        const style = window.getComputedStyle(element);
-        const rect = element.getBoundingClientRect();
-        return style.visibility !== "hidden" && style.display !== "none" && rect.width > 0 && rect.height > 0;
-      }).slice(0, 80);
-      document.querySelectorAll("[data-qa-pilot-ref]").forEach(element => element.removeAttribute("data-qa-pilot-ref"));
-      const elements = candidates.map((element, index) => {
-        const ref = "e" + (index + 1);
-        element.setAttribute("data-qa-pilot-ref", ref);
-        const label = (element.labels && element.labels[0] && element.labels[0].innerText || "").trim()
-          || element.getAttribute("aria-label") || "";
-        return {
-          ref,
-          tag: element.tagName.toLowerCase(),
-          role: element.getAttribute("role") || "",
-          type: element.type || "",
-          name: label || (element.innerText || "").trim().slice(0, 120) || element.placeholder || element.name || "",
-          context: (((element.closest("tr,[role=row],li") || element.parentElement) && (element.closest("tr,[role=row],li") || element.parentElement).innerText) || "").replace(/\\s+/g, " ").trim().slice(0, 160),
-          value: element.type === "password" ? "[REDACTED]" : String(element.value || "").slice(0, 160),
-          disabled: Boolean(element.disabled) || element.getAttribute("aria-disabled") === "true",
-          checked: element.type === "checkbox" || element.type === "radio"
-            ? Boolean(element.checked)
-            : element.getAttribute("aria-checked")
-        };
-      });
-      return {
-        title: document.title,
-        text: (document.body && document.body.innerText || "").replace(/\\s+/g, " ").trim().slice(0, ${MAX_OBSERVATION_TEXT}),
-        elements
-      };
-    })()` ) as { title: string; text: string; elements: unknown[] };
-    for (const raw of rawSnapshot.elements) {
-      const element = raw as { ref?: unknown; name?: unknown; context?: unknown; role?: unknown; tag?: unknown; type?: unknown };
-      const ref = String(element.ref ?? "");
-      if (ref) this.refDescriptors.set(ref, {
-        name: String(element.name ?? "").trim(),
-        context: String(element.context ?? "").trim(),
-        role: String(element.role ?? "").trim(),
-        tag: String(element.tag ?? "").trim(),
-        type: String(element.type ?? "").trim(),
-      });
+    const page = await this.activePage();
+    await page.waitForLoadState("domcontentloaded", { timeout: 5_000 }).catch(() => undefined);
+    this.refLocators.clear();
+    this.refDescriptors.clear();
+    const elements: Array<Record<string, unknown>> = [];
+    const frameSummaries: Array<Record<string, unknown>> = [];
+    const textParts: string[] = [];
+    let nextRef = 1;
+    const observableFrames = page.frames().slice(0, 20);
+    for (let frameIndex = 0; frameIndex < observableFrames.length; frameIndex++) {
+      const frame = observableFrames[frameIndex];
+      if (elements.length >= 80) break;
+      const startIndex = nextRef;
+      const limit = 80 - elements.length;
+      try {
+        // Keep this as a string: build transforms must not leak helpers into the browser realm.
+        const rawSnapshot = await frame.evaluate(`(() => {
+          const startIndex = ${startIndex};
+          const limit = ${limit};
+          const selector = "a,button,input,select,textarea,[contenteditable=true],[aria-haspopup],[role=button],[role=link],[role=tab],[role=checkbox],[role=radio],[role=combobox],[role=listbox],[role=option],[role=menuitem]";
+          const roots = [document];
+          const allElements = Array.from(document.querySelectorAll("*"));
+          for (const element of allElements) if (element.shadowRoot) roots.push(element.shadowRoot);
+          const seen = new Set();
+          const candidates = [];
+          for (const root of roots) {
+            for (const element of root.querySelectorAll(selector)) {
+              if (seen.has(element)) continue;
+              seen.add(element);
+              const style = window.getComputedStyle(element);
+              const rect = element.getBoundingClientRect();
+              if (style.visibility !== "hidden" && style.display !== "none" && rect.width > 0 && rect.height > 0) candidates.push(element);
+              if (candidates.length >= limit) break;
+            }
+            if (candidates.length >= limit) break;
+          }
+          for (const root of roots) root.querySelectorAll("[data-qa-pilot-ref]").forEach(element => element.removeAttribute("data-qa-pilot-ref"));
+          const elements = candidates.map((element, index) => {
+            const ref = "e" + (startIndex + index);
+            element.setAttribute("data-qa-pilot-ref", ref);
+            const label = (element.labels && element.labels[0] && element.labels[0].innerText || "").trim()
+              || element.getAttribute("aria-label") || element.getAttribute("title") || "";
+            return {
+              ref,
+              tag: element.tagName.toLowerCase(),
+              role: element.getAttribute("role") || "",
+              type: element.type || "",
+              name: label || (element.innerText || "").trim().slice(0, 120) || element.placeholder || element.name || "",
+              context: (((element.closest("tr,[role=row],li") || element.parentElement) && (element.closest("tr,[role=row],li") || element.parentElement).innerText) || "").replace(/\\s+/g, " ").trim().slice(0, 160),
+              value: element.type === "password" ? "[REDACTED]" : String(element.value || "").slice(0, 160),
+              disabled: Boolean(element.disabled) || element.getAttribute("aria-disabled") === "true",
+              checked: element.type === "checkbox" || element.type === "radio" ? Boolean(element.checked) : element.getAttribute("aria-checked")
+            };
+          });
+          const shadowText = roots.slice(1).map(root => root.textContent || "").join(" ");
+          return {
+            text: ((document.body && document.body.innerText || "") + " " + shadowText).replace(/\\s+/g, " ").trim().slice(0, ${MAX_OBSERVATION_TEXT}),
+            elements
+          };
+        })()` ) as { text: string; elements: Array<Record<string, unknown>> };
+        const frameName = frame.name().slice(0, 120);
+        const frameUrl = frame.url();
+        const isMainFrame = frame === page.mainFrame();
+        if (rawSnapshot.text) textParts.push(isMainFrame ? rawSnapshot.text : `[Frame ${frameName || frameIndex}] ${rawSnapshot.text}`);
+        frameSummaries.push({ index: frameIndex, name: frameName, url: frameUrl, main: isMainFrame, text: rawSnapshot.text.slice(0, 500) });
+        for (const raw of rawSnapshot.elements) {
+          const ref = String(raw.ref ?? "");
+          if (!ref) continue;
+          const decorated = { ...raw, frameIndex, frameName: frameName || undefined, frameUrl };
+          elements.push(decorated);
+          this.refLocators.set(ref, frame.locator(`[data-qa-pilot-ref="${ref}"]`).first());
+          this.refDescriptors.set(ref, {
+            name: String(raw.name ?? "").trim(),
+            context: String(raw.context ?? "").trim(),
+            role: String(raw.role ?? "").trim(),
+            tag: String(raw.tag ?? "").trim(),
+            type: String(raw.type ?? "").trim(),
+          });
+          nextRef += 1;
+        }
+      } catch (error) {
+        frameSummaries.push({ index: frameIndex, name: frame.name().slice(0, 120), url: frame.url(), unreadable: safeErrorMessage(error) });
+      }
     }
+    const tabs = await this.tabSummaries();
     return this.sanitize({
       url: page.url(),
-      ...rawSnapshot,
+      title: await page.title(),
+      text: textParts.join(" ").replace(/\s+/g, " ").trim().slice(0, MAX_OBSERVATION_TEXT),
+      elements,
+      frames: frameSummaries,
+      tabs,
       console: this.consoleMessages.slice(-10),
       networkFailures: this.networkFailures.slice(-10),
     });
   }
 
-  private locatorForRef(page: Page, ref: unknown) {
+  private locatorForRef(page: Page, ref: unknown): Locator {
     const normalized = String(ref ?? "");
     if (!/^e\d+$/.test(normalized)) throw new Error("Referência de elemento inválida; observe a página novamente.");
-    return page.locator(`[data-qa-pilot-ref="${normalized}"]`).first();
+    return this.refLocators.get(normalized) ?? page.locator(`[data-qa-pilot-ref="${normalized}"]`).first();
   }
 
-  private semanticCandidates(page: Page, label: string) {
+  private semanticCandidates(target: Page | Frame, label: string): Locator[] {
     return [
-      page.getByRole("button", { name: label, exact: true }),
-      page.getByRole("link", { name: label, exact: true }),
-      page.getByRole("tab", { name: label, exact: true }),
-      page.getByRole("menuitem", { name: label, exact: true }),
-      page.getByLabel(label, { exact: true }),
-      page.getByPlaceholder(label, { exact: true }),
-      page.getByText(label, { exact: true }),
+      target.getByRole("button", { name: label, exact: true }),
+      target.getByRole("link", { name: label, exact: true }),
+      target.getByRole("tab", { name: label, exact: true }),
+      target.getByRole("menuitem", { name: label, exact: true }),
+      target.getByLabel(label, { exact: true }),
+      target.getByPlaceholder(label, { exact: true }),
+      target.getByText(label, { exact: true }),
     ];
   }
 
-  private async firstVisible(candidates: ReturnType<Page["locator"]>[]) {
+  private semanticCandidatesAcrossFrames(page: Page, label: string): Locator[] {
+    return page.frames().flatMap(frame => this.semanticCandidates(frame, label));
+  }
+
+  private async tabSummaries(): Promise<Array<{ index: number; active: boolean; title: string; url: string }>> {
+    const pages = this.context?.pages().filter(page => !page.isClosed()) ?? [];
+    return Promise.all(pages.map(async (page, index) => ({
+      index,
+      active: page === this.page,
+      title: (await page.title().catch(() => "")).slice(0, 200),
+      url: page.url(),
+    })));
+  }
+
+  private async firstVisible(candidates: Locator[]) {
     for (const candidate of candidates) {
       const locator = candidate.first();
       if (await locator.count() && await locator.isVisible().catch(() => false)) return locator;
+    }
+    return null;
+  }
+
+  private async firstExisting(candidates: Locator[]) {
+    for (const candidate of candidates) {
+      const locator = candidate.first();
+      if (await locator.count()) return locator;
     }
     return null;
   }
@@ -244,7 +347,7 @@ export class PlaywrightPilotRuntime implements QaPilotToolRuntime {
     if (await direct.count() && await direct.isVisible().catch(() => false)) return direct;
     const descriptor = this.refDescriptors.get(String(ref ?? ""));
     if (!descriptor?.name) throw new Error("Elemento não está mais disponível e não possui identidade semântica para recuperação.");
-    const recovered = await this.firstVisible(this.semanticCandidates(page, descriptor.name));
+    const recovered = await this.firstVisible(this.semanticCandidatesAcrossFrames(page, descriptor.name));
     if (!recovered) throw new Error(`Elemento '${descriptor.name}' mudou e não foi reencontrado semanticamente.`);
     return recovered;
   }
@@ -296,37 +399,124 @@ export class PlaywrightPilotRuntime implements QaPilotToolRuntime {
     }
   }
 
+  private async selectOptionUniversal(page: Page, locator: Locator, value: string): Promise<{ value: string; selectedLabel: string }> {
+    const tagName = await locator.evaluate(element => element.tagName.toLowerCase()).catch(() => "");
+    if (tagName === "select") {
+      const options = await locator.locator("option").evaluateAll(items => items.map(item => ({
+        value: (item as HTMLOptionElement).value,
+        label: (item.textContent || "").trim(),
+      })));
+      const normalize = (item: string) => item.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+      const wanted = normalize(value);
+      const match = options.find(item => normalize(item.value) === wanted || normalize(item.label) === wanted)
+        ?? options.find(item => normalize(item.label).includes(wanted));
+      if (!match) throw new Error(`Opção '${value}' não encontrada. Opções disponíveis: ${options.map(item => item.label).filter(Boolean).slice(0, 20).join(", ")}`);
+      await locator.selectOption(match.value, { timeout: 15_000 });
+      return { value: match.value, selectedLabel: match.label };
+    }
+
+    await this.clickWithUiRecovery(page, locator);
+    await page.waitForTimeout(250);
+    const candidates = page.frames().flatMap(frame => [
+      frame.getByRole("option", { name: value, exact: true }),
+      frame.getByRole("option", { name: value, exact: false }),
+      frame.getByRole("menuitem", { name: value, exact: false }),
+      frame.getByText(value, { exact: true }),
+    ]);
+    const option = await this.firstVisible(candidates);
+    if (!option) throw new Error(`Opção visível '${value}' não encontrada no seletor customizado.`);
+    const selectedLabel = (await option.innerText().catch(() => value)).trim().slice(0, 160) || value;
+    await option.click({ timeout: 15_000 });
+    return { value, selectedLabel };
+  }
+
   private async inspectPage(query: unknown): Promise<unknown> {
-    const page = await this.ensurePage();
+    const page = await this.activePage();
     const needle = String(query ?? "").trim().slice(0, 200);
     const encodedNeedle = JSON.stringify(needle);
-    return page.evaluate(`(() => {
-      const needle = ${encodedNeedle};
-      const normalized = value => value.normalize("NFD").replace(/[\\u0300-\\u036f]/g, "").toLowerCase();
-      const wanted = normalized(needle);
-      const visible = element => {
-        const style = window.getComputedStyle(element);
-        const rect = element.getBoundingClientRect();
-        return style.visibility !== "hidden" && style.display !== "none" && rect.width > 0 && rect.height > 0;
-      };
-      const sections = Array.from(document.querySelectorAll("h1,h2,h3,h4,table,dl,article,section,[role=row],label"))
-        .filter(visible)
-        .map(element => (element.textContent || "").replace(/\s+/g, " ").trim())
-        .filter(value => value && (!wanted || normalized(value).includes(wanted)))
-        .slice(0, 40)
-        .map(value => value.slice(0, 600));
-      const fields = Array.from(document.querySelectorAll("input,select,textarea"))
-        .filter(visible)
-        .map(element => {
-          const field = element;
-          const label = field.labels?.[0]?.innerText || field.getAttribute("aria-label") || field.getAttribute("placeholder") || field.getAttribute("name") || "campo";
-          const sensitive = field.type === "password" || /senha|password|token|secret|cpf|cnpj|e-?mail|telefone/i.test(label);
-          return { label: label.trim().slice(0, 160), type: field.type || field.tagName.toLowerCase(), value: sensitive ? "[REDACTED]" : String(field.value || "").slice(0, 300) };
-        })
-        .filter(field => !wanted || normalized(field.label + " " + field.value).includes(wanted))
-        .slice(0, 40);
-      return { url: location.href, title: document.title, query: needle, sections, fields };
-    })()`);
+    const inspections: Array<Record<string, unknown>> = [];
+    const inspectableFrames = page.frames().slice(0, 20);
+    for (let frameIndex = 0; frameIndex < inspectableFrames.length; frameIndex++) {
+      const frame = inspectableFrames[frameIndex];
+      try {
+        const inspection = await frame.evaluate(`(() => {
+          const needle = ${encodedNeedle};
+          const normalized = value => value.normalize("NFD").replace(/[\\u0300-\\u036f]/g, "").toLowerCase();
+          const wanted = normalized(needle);
+          const visible = element => {
+            const style = window.getComputedStyle(element);
+            const rect = element.getBoundingClientRect();
+            return style.visibility !== "hidden" && style.display !== "none" && rect.width > 0 && rect.height > 0;
+          };
+          const sections = Array.from(document.querySelectorAll("h1,h2,h3,h4,table,dl,article,section,[role=row],label,p"))
+            .filter(visible)
+            .map(element => (element.textContent || "").replace(/\\s+/g, " ").trim())
+            .filter(value => value && (!wanted || normalized(value).includes(wanted)))
+            .slice(0, 40)
+            .map(value => value.slice(0, 600));
+          const fields = Array.from(document.querySelectorAll("input,select,textarea"))
+            .filter(visible)
+            .map(element => {
+              const field = element;
+              const label = field.labels?.[0]?.innerText || field.getAttribute("aria-label") || field.getAttribute("placeholder") || field.getAttribute("name") || "campo";
+              const sensitive = field.type === "password" || /senha|password|token|secret|cpf|cnpj|e-?mail|telefone/i.test(label);
+              return { label: label.trim().slice(0, 160), type: field.type || field.tagName.toLowerCase(), value: sensitive ? "[REDACTED]" : String(field.value || "").slice(0, 300) };
+            })
+            .filter(field => !wanted || normalized(field.label + " " + field.value).includes(wanted))
+            .slice(0, 40);
+          return { sections, fields };
+        })()` ) as { sections: string[]; fields: Array<Record<string, unknown>> };
+        if (inspection.sections.length || inspection.fields.length || !needle) {
+          inspections.push({
+            frameIndex,
+            frameName: frame.name().slice(0, 120) || undefined,
+            frameUrl: frame.url(),
+            ...inspection,
+          });
+        }
+      } catch (error) {
+        inspections.push({ frameIndex, frameUrl: frame.url(), error: safeErrorMessage(error, this.sensitiveContext()) });
+      }
+    }
+    return this.sanitize({ url: page.url(), title: await page.title(), query: needle, frames: inspections });
+  }
+
+  private async inspectTables(query: unknown): Promise<unknown> {
+    const page = await this.activePage();
+    const needle = String(query ?? "").trim().slice(0, 200);
+    const encodedNeedle = JSON.stringify(needle);
+    const tables: Array<Record<string, unknown>> = [];
+    const tableFrames = page.frames().slice(0, 20);
+    for (let frameIndex = 0; frameIndex < tableFrames.length; frameIndex++) {
+      const frame = tableFrames[frameIndex];
+      try {
+        const frameTables = await frame.evaluate(`(() => {
+          const needle = ${encodedNeedle};
+          const normalized = value => value.normalize("NFD").replace(/[\\u0300-\\u036f]/g, "").toLowerCase();
+          const wanted = normalized(needle);
+          return Array.from(document.querySelectorAll("table,[role=grid],[role=table]"))
+            .filter(table => {
+              const style = window.getComputedStyle(table);
+              const rect = table.getBoundingClientRect();
+              const text = (table.textContent || "").replace(/\\s+/g, " ").trim();
+              return style.visibility !== "hidden" && style.display !== "none" && rect.width > 0 && rect.height > 0 && (!wanted || normalized(text).includes(wanted));
+            })
+            .slice(0, 10)
+            .map((table, tableIndex) => {
+              const headerCells = Array.from(table.querySelectorAll("thead th,[role=columnheader]"));
+              const headers = headerCells.map(cell => (cell.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 160));
+              const rowElements = Array.from(table.querySelectorAll("tbody tr,[role=row]"));
+              const rows = rowElements.slice(0, 50).map(row => Array.from(row.querySelectorAll("th,td,[role=cell],[role=gridcell]"))
+                .map(cell => (cell.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 300)));
+              return { tableIndex, caption: (table.querySelector("caption")?.textContent || table.getAttribute("aria-label") || "").trim().slice(0, 200), headers, rows, totalVisibleRows: rowElements.length };
+            });
+        })()` ) as Array<Record<string, unknown>>;
+        for (const table of frameTables) tables.push({ frameIndex, frameName: frame.name().slice(0, 120) || undefined, frameUrl: frame.url(), ...table });
+      } catch (error) {
+        tables.push({ frameIndex, frameUrl: frame.url(), error: safeErrorMessage(error, this.sensitiveContext()) });
+      }
+    }
+    return this.sanitize({ url: page.url(), query: needle, tables });
   }
 
   private automaticFieldKey(label: string, type: string): string | undefined {
@@ -349,55 +539,59 @@ export class PlaywrightPilotRuntime implements QaPilotToolRuntime {
   }
 
   private async fillVisibleKnownForm(): Promise<unknown> {
-    const page = await this.ensurePage();
-    const fields = page.locator("input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=checkbox]):not([type=radio]):not([type=file]),textarea");
+    const page = await this.activePage();
     const filled: Array<{ label: string; key: string }> = [];
-    for (let index = 0; index < await fields.count(); index++) {
-      const field = fields.nth(index);
-      if (!await field.isVisible().catch(() => false) || await field.isDisabled().catch(() => true)) continue;
-      if (await field.getAttribute("readonly") != null) continue;
-      const current = await field.inputValue().catch(() => "");
-      if (current.trim()) continue;
-      const label = await field.evaluate(element => {
-        const input = element as HTMLInputElement;
-        return input.labels?.[0]?.innerText || element.getAttribute("aria-label") ||
-          element.getAttribute("placeholder") || element.getAttribute("name") || "campo";
-      });
-      const type = await field.getAttribute("type") || (await field.evaluate(element => element.tagName.toLowerCase()));
-      const key = this.automaticFieldKey(String(label), type);
-      const value = key ? this.input.testData?.[key] : undefined;
-      if (!key || value == null) continue;
-      await field.fill(value, { timeout: 15_000 });
-      filled.push({ label: String(label).trim().slice(0, 120), key });
+    for (const frame of page.frames().slice(0, 20)) {
+      const fields = frame.locator("input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=checkbox]):not([type=radio]):not([type=file]),textarea");
+      for (let index = 0; index < await fields.count(); index++) {
+        const field = fields.nth(index);
+        if (!await field.isVisible().catch(() => false) || await field.isDisabled().catch(() => true)) continue;
+        if (await field.getAttribute("readonly") != null) continue;
+        const current = await field.inputValue().catch(() => "");
+        if (current.trim()) continue;
+        const label = await field.evaluate(element => {
+          const input = element as HTMLInputElement;
+          return input.labels?.[0]?.innerText || element.getAttribute("aria-label") ||
+            element.getAttribute("placeholder") || element.getAttribute("name") || "campo";
+        });
+        const type = await field.getAttribute("type") || (await field.evaluate(element => element.tagName.toLowerCase()));
+        const key = this.automaticFieldKey(String(label), type);
+        const value = key ? this.input.testData?.[key] : undefined;
+        if (!key || value == null) continue;
+        await field.fill(value, { timeout: 15_000 });
+        filled.push({ label: String(label).trim().slice(0, 120), key });
+      }
     }
 
     const checked: string[] = [];
-    const controls = page.locator('input[type="checkbox"], [role="checkbox"]');
-    for (let index = 0; index < await controls.count(); index++) {
-      const control = controls.nth(index);
-      if (!await control.isVisible().catch(() => false) || await control.isDisabled().catch(() => true)) continue;
-      const label = await control.evaluate(element => {
-        const input = element as HTMLInputElement;
-        return input.labels?.[0]?.innerText || element.getAttribute("aria-label") ||
-          element.parentElement?.innerText || "";
-      });
-      if (!/aceit|concord|consent|privacidade|lgpd|termo/i.test(label)) continue;
-      const type = await control.getAttribute("type");
-      if (type === "checkbox") await control.check({ timeout: 15_000 });
-      else if (await control.getAttribute("aria-checked") !== "true") await control.click({ timeout: 15_000 });
-      const isChecked = type === "checkbox" ? await control.isChecked() : await control.getAttribute("aria-checked") === "true";
-      if (!isChecked) throw new Error(`O aceite '${String(label).slice(0, 120)}' não permaneceu marcado.`);
-      checked.push(String(label).trim().slice(0, 120));
+    for (const frame of page.frames().slice(0, 20)) {
+      const controls = frame.locator('input[type="checkbox"], [role="checkbox"]');
+      for (let index = 0; index < await controls.count(); index++) {
+        const control = controls.nth(index);
+        if (!await control.isVisible().catch(() => false) || await control.isDisabled().catch(() => true)) continue;
+        const label = await control.evaluate(element => {
+          const input = element as HTMLInputElement;
+          return input.labels?.[0]?.innerText || element.getAttribute("aria-label") ||
+            element.parentElement?.innerText || "";
+        });
+        if (!/aceit|concord|consent|privacidade|lgpd|termo/i.test(label)) continue;
+        const type = await control.getAttribute("type");
+        if (type === "checkbox") await control.check({ timeout: 15_000 });
+        else if (await control.getAttribute("aria-checked") !== "true") await control.click({ timeout: 15_000 });
+        const isChecked = type === "checkbox" ? await control.isChecked() : await control.getAttribute("aria-checked") === "true";
+        if (!isChecked) throw new Error(`O aceite '${String(label).slice(0, 120)}' não permaneceu marcado.`);
+        checked.push(String(label).trim().slice(0, 120));
+      }
     }
     return { action: { type: "fill_visible_form", fields: filled, checked }, ...(await this.observe() as Record<string, unknown>) };
   }
 
   private async submitVisibleForm(): Promise<unknown> {
-    const page = await this.ensurePage();
-    const submit = await this.firstVisible([
-      page.getByRole("button", { name: /enviar|cadastrar|confirmar|salvar|consultar|pesquisar|buscar|continuar/i }),
-      page.locator('button[type="submit"],input[type="submit"]'),
-    ]);
+    const page = await this.activePage();
+    const submit = await this.firstVisible(page.frames().flatMap(frame => [
+      frame.getByRole("button", { name: /enviar|cadastrar|confirmar|salvar|consultar|pesquisar|buscar|continuar/i }),
+      frame.locator('button[type="submit"],input[type="submit"]'),
+    ]));
     if (!submit) throw new Error("Nenhum controle semântico de envio foi encontrado no formulário visível.");
     const label = await submit.innerText().catch(() => submit.getAttribute("value")) || "Enviar";
     if (DESTRUCTIVE_ACTION.test(label)) throw new Error("Ação destrutiva bloqueada pelo motor V2.");
@@ -523,6 +717,7 @@ export class PlaywrightPilotRuntime implements QaPilotToolRuntime {
           await this.deterministicLogin(alternative.name);
           attempts.push({ strategy, ok: true, detail: `Sessão isolada aberta no ambiente '${alternative.name}'.` });
         } else if (strategy === "RELOAD_AND_RETRY") {
+          this.resetTransientDiagnostics();
           await page.reload({ waitUntil: "domcontentloaded", timeout: 30_000 });
           attempts.push({ strategy, ok: true, detail: "Página recarregada após falha transitória." });
         }
@@ -567,44 +762,38 @@ export class PlaywrightPilotRuntime implements QaPilotToolRuntime {
     const loginUrl = new URL(environment.url);
     const currentUrl = page.url() && page.url() !== "about:blank" ? new URL(page.url()) : null;
     if (currentUrl?.origin === loginUrl.origin && this.authenticatedOrigins.has(loginUrl.origin)) {
-      const visiblePassword = page.locator("input[type=password]:visible").first();
-      if (!await visiblePassword.count()) {
+      const visiblePassword = await this.firstVisible(page.frames().map(frame => frame.locator("input[type=password]")));
+      if (!visiblePassword) {
         return { authenticated: true, alreadyAuthenticated: true, url: page.url(), title: await page.title() };
       }
       this.authenticatedOrigins.delete(loginUrl.origin);
     }
     if (!currentUrl || currentUrl.origin !== loginUrl.origin || currentUrl.pathname !== loginUrl.pathname) {
+      this.resetTransientDiagnostics();
       await page.goto(environment.url, { waitUntil: "domcontentloaded", timeout: 60_000 });
     }
     // SPA forms may be mounted after DOMContentLoaded. Waiting for the first
     // visible input prevents a false "field not found" during hydration.
-    await page.locator("input").first().waitFor({ state: "visible", timeout: 15_000 }).catch(() => undefined);
-    const firstVisible = async (candidates: ReturnType<Page["locator"]>[]) => {
-      for (const candidate of candidates) {
-        const locator = candidate.first();
-        if (await locator.count() && await locator.isVisible().catch(() => false)) return locator;
-      }
-      return null;
-    };
-    const user = await firstVisible([
-      page.getByLabel(/usu.rio|login|e-?mail|cpf|cnpj|matr.cula/i),
-      page.getByPlaceholder(/usu.rio|login|e-?mail|cpf|cnpj|matr.cula/i),
-      page.locator("input[type=email]"),
-      page.locator("input[name*=user i],input[name*=login i],input[name*=email i],input[name*=cpf i]"),
-      page.locator("input[type=text]"),
-    ]);
-    const password = await firstVisible([
-      page.getByLabel(/senha|password/i),
-      page.getByPlaceholder(/senha|password/i),
-      page.locator("input[type=password]"),
-    ]);
+    await page.waitForTimeout(300);
+    const user = await this.firstVisible(page.frames().flatMap(frame => [
+      frame.getByLabel(/usu.rio|login|e-?mail|cpf|cnpj|matr.cula/i),
+      frame.getByPlaceholder(/usu.rio|login|e-?mail|cpf|cnpj|matr.cula/i),
+      frame.locator("input[type=email]"),
+      frame.locator("input[name*=user i],input[name*=login i],input[name*=email i],input[name*=cpf i]"),
+      frame.locator("input[type=text]"),
+    ]));
+    const password = await this.firstVisible(page.frames().flatMap(frame => [
+      frame.getByLabel(/senha|password/i),
+      frame.getByPlaceholder(/senha|password/i),
+      frame.locator("input[type=password]"),
+    ]));
     if (!user || !password) throw new Error("Campos de login não encontrados.");
     await user.fill(environment.username!);
     await password.fill(environment.password!);
-    const submit = await firstVisible([
-      page.getByRole("button", { name: /entrar|acessar|login|sign in|continuar/i }),
-      page.locator("button[type=submit],input[type=submit]"),
-    ]);
+    const submit = await this.firstVisible(page.frames().flatMap(frame => [
+      frame.getByRole("button", { name: /entrar|acessar|login|sign in|continuar/i }),
+      frame.locator("button[type=submit],input[type=submit]"),
+    ]));
     if (!submit) throw new Error("Botão de login não encontrado.");
     await submit.click();
     await page.waitForLoadState("domcontentloaded", { timeout: 30_000 }).catch(() => undefined);
@@ -645,10 +834,12 @@ export class PlaywrightPilotRuntime implements QaPilotToolRuntime {
       if (repeatedFailures.length >= 2) {
         throw new Error("Loop de automação interrompido: a mesma ação falhou duas vezes no mesmo estado. Reobserve a tela e escolha outra estratégia sem repetir a referência.");
       }
+      if (UI_MUTATING_TOOLS.has(name)) this.resetTransientDiagnostics();
       let output: unknown;
       if (name === "browser_navigate") {
         const target = String(args.url ?? "");
         if (!isAllowedNavigation(target, this.allowedOrigins, page.url())) throw new Error("Navegação fora dos ambientes autorizados.");
+        this.resetTransientDiagnostics();
         await page.goto(new URL(target, page.url()).toString(), { waitUntil: "domcontentloaded", timeout: 60_000 });
         output = await this.observe();
       } else if (name === "browser_navigate_test_data") {
@@ -657,12 +848,38 @@ export class PlaywrightPilotRuntime implements QaPilotToolRuntime {
         if (!key || !target) throw new Error(`Massa de teste '${key}' não foi parametrizada.`);
         if (!isAllowedNavigation(target, this.allowedOrigins, page.url())) throw new Error("A URL parametrizada está fora dos ambientes autorizados.");
         event.arguments = { key, url: "[REDACTED]" };
+        this.resetTransientDiagnostics();
         await page.goto(new URL(target, page.url()).toString(), { waitUntil: "domcontentloaded", timeout: 60_000 });
         output = { key, ...(await this.observe() as Record<string, unknown>) };
       } else if (name === "browser_observe") {
         output = await this.observe();
       } else if (name === "browser_inspect_page") {
         output = await this.inspectPage(args.query);
+      } else if (name === "browser_inspect_table") {
+        output = await this.inspectTables(args.query);
+      } else if (name === "browser_tabs") {
+        output = { tabs: await this.tabSummaries() };
+      } else if (name === "browser_switch_tab") {
+        const pages = this.context?.pages().filter(candidate => !candidate.isClosed()) ?? [];
+        const index = Number(args.index);
+        if (!Number.isInteger(index) || index < 0 || index >= pages.length) {
+          throw new Error(`Aba ${String(args.index)} inválida. Abas disponíveis: ${pages.map((_, itemIndex) => itemIndex).join(", ") || "nenhuma"}.`);
+        }
+        this.page = pages[index];
+        await this.page.bringToFront();
+        output = await this.observe();
+      } else if (name === "browser_close_tab") {
+        const pages = this.context?.pages().filter(candidate => !candidate.isClosed()) ?? [];
+        if (pages.length <= 1) throw new Error("A única aba do navegador não pode ser fechada.");
+        const requestedIndex = args.index == null ? pages.indexOf(page) : Number(args.index);
+        if (!Number.isInteger(requestedIndex) || requestedIndex < 0 || requestedIndex >= pages.length) {
+          throw new Error(`Aba ${String(args.index)} inválida.`);
+        }
+        await pages[requestedIndex].close();
+        this.page = (this.context?.pages().filter(candidate => !candidate.isClosed()) ?? []).at(-1);
+        if (!this.page) throw new Error("Nenhuma aba permaneceu aberta.");
+        await this.page.bringToFront();
+        output = await this.observe();
       } else if (name === "browser_login") {
         output = await this.deterministicLogin(args.environmentName);
       } else if (name === "browser_new_session") {
@@ -715,7 +932,7 @@ export class PlaywrightPilotRuntime implements QaPilotToolRuntime {
       } else if (name === "browser_click_semantic") {
         const label = String(args.label ?? "").trim();
         if (!label || DESTRUCTIVE_ACTION.test(label)) throw new Error("Ação semântica inválida ou destrutiva.");
-        const locator = await this.firstVisible(this.semanticCandidates(page, label));
+        const locator = await this.firstVisible(this.semanticCandidatesAcrossFrames(page, label));
         if (!locator) throw new Error(`Elemento '${label}' não encontrado semanticamente.`);
         await this.clickWithUiRecovery(page, locator);
         await page.waitForTimeout(400);
@@ -741,11 +958,11 @@ export class PlaywrightPilotRuntime implements QaPilotToolRuntime {
         output = { action: { type: "check", label: String(label).trim().slice(0, 160) }, checked: true, ...(await this.observe() as Record<string, unknown>) };
       } else if (name === "browser_check_semantic") {
         const label = String(args.label ?? "").trim();
-        const locator = await this.firstVisible([
-          page.getByRole("checkbox", { name: label, exact: false }),
-          page.getByRole("radio", { name: label, exact: false }),
-          page.getByLabel(label, { exact: false }),
-        ]);
+        const locator = await this.firstVisible(page.frames().flatMap(frame => [
+          frame.getByRole("checkbox", { name: label, exact: false }),
+          frame.getByRole("radio", { name: label, exact: false }),
+          frame.getByLabel(label, { exact: false }),
+        ]));
         if (!locator) throw new Error(`Controle '${label}' não encontrado semanticamente.`);
         const type = await locator.getAttribute("type");
         if (type === "checkbox" || type === "radio") await locator.check({ timeout: 15_000 });
@@ -764,13 +981,13 @@ export class PlaywrightPilotRuntime implements QaPilotToolRuntime {
       } else if (name === "browser_fill_semantic") {
         const label = String(args.label ?? "").trim();
         const value = String(args.value ?? "");
-        const candidates = [page.getByLabel(label, { exact: true }), page.getByPlaceholder(label, { exact: true }), page.locator(`[name="${label.replace(/["\\]/g, "")}"]`)];
-        let locator = candidates[0].first();
-        for (const candidate of candidates) {
-          if (await candidate.count() && await candidate.first().isVisible().catch(() => false)) {
-            locator = candidate.first(); break;
-          }
-        }
+        const candidates = page.frames().flatMap(frame => [
+          frame.getByLabel(label, { exact: true }),
+          frame.getByPlaceholder(label, { exact: true }),
+          frame.locator(`[name="${label.replace(/["\\]/g, "")}"]`),
+        ]);
+        const locator = await this.firstVisible(candidates);
+        if (!locator) throw new Error(`Campo '${label}' não encontrado semanticamente.`);
         await locator.fill(value, { timeout: 15_000 });
         output = { action: { type: "fill", label, value: value.slice(0, 160) }, ...(await this.observe() as Record<string, unknown>) };
       } else if (name === "browser_fill_test_data") {
@@ -787,7 +1004,7 @@ export class PlaywrightPilotRuntime implements QaPilotToolRuntime {
         const label = String(args.label ?? "").trim();
         const value = this.input.testData?.[key];
         if (!key || value == null) throw new Error(`Massa de teste '${key}' não foi parametrizada.`);
-        const locator = await this.firstVisible(this.semanticCandidates(page, label));
+        const locator = await this.firstVisible(this.semanticCandidatesAcrossFrames(page, label));
         if (!locator) throw new Error(`Campo '${label}' não foi reencontrado semanticamente.`);
         await locator.fill(value, { timeout: 15_000 });
         event.arguments = { label, key, value: "[REDACTED]" };
@@ -833,7 +1050,10 @@ export class PlaywrightPilotRuntime implements QaPilotToolRuntime {
       } else if (name === "browser_capture_link_test_data") {
         const key = String(args.key ?? "").trim().slice(0, 80);
         const label = String(args.label ?? "").trim().slice(0, 200);
-        const locator = await this.firstVisible([page.getByRole("link", { name: label, exact: false }), page.getByText(label, { exact: false })]);
+        const locator = await this.firstVisible(page.frames().flatMap(frame => [
+          frame.getByRole("link", { name: label, exact: false }),
+          frame.getByText(label, { exact: false }),
+        ]));
         if (!key || !locator) throw new Error("Link capturável não encontrado.");
         const href = await locator.getAttribute("href");
         if (!href) throw new Error("O elemento não expõe um link.");
@@ -846,8 +1066,8 @@ export class PlaywrightPilotRuntime implements QaPilotToolRuntime {
       } else if (name === "browser_capture_text_test_data") {
         const key = String(args.key ?? "").trim().slice(0, 80);
         const query = String(args.query ?? "").trim().slice(0, 200);
-        const locator = page.getByText(query, { exact: false }).first();
-        if (!key || !query || !await locator.count() || !await locator.isVisible().catch(() => false)) {
+        const locator = await this.firstVisible(page.frames().map(frame => frame.getByText(query, { exact: false })));
+        if (!key || !query || !locator) {
           throw new Error("Texto capturável não encontrado.");
         }
         const container = locator.locator("..");
@@ -861,15 +1081,17 @@ export class PlaywrightPilotRuntime implements QaPilotToolRuntime {
       } else if (name === "browser_search_no_match") {
         const filterLabel = String(args.filterLabel ?? "").trim();
         if (filterLabel) {
-          const filter = await this.firstVisible([
-            page.getByRole("button", { name: filterLabel, exact: false }),
-            page.getByRole("tab", { name: filterLabel, exact: false }),
-            page.getByLabel(filterLabel, { exact: false }),
-          ]);
+          const filter = await this.firstVisible(page.frames().flatMap(frame => [
+            frame.getByRole("button", { name: filterLabel, exact: false }),
+            frame.getByRole("tab", { name: filterLabel, exact: false }),
+            frame.getByLabel(filterLabel, { exact: false }),
+          ]));
           if (!filter) throw new Error(`Filtro '${filterLabel}' não encontrado ou invisível.`);
           await this.clickWithUiRecovery(page, filter);
         }
-        const search = page.locator("input[type=search], input[placeholder*='buscar' i], input[placeholder*='pesquisar' i], input[aria-label*='buscar' i], input[aria-label*='pesquisar' i]").first();
+        const search = await this.firstVisible(page.frames().map(frame =>
+          frame.locator("input[type=search], input[placeholder*='buscar' i], input[placeholder*='pesquisar' i], input[aria-label*='buscar' i], input[aria-label*='pesquisar' i]")));
+        if (!search) throw new Error("Campo de busca visível não encontrado.");
         await search.waitFor({ state: "visible", timeout: 15_000 });
         const noMatchValue = this.input.testData?.TERMO_SEM_RESULTADO ?? "QA_SEM_RESULTADO_AUTOMACAO";
         await search.fill(noMatchValue);
@@ -882,7 +1104,7 @@ export class PlaywrightPilotRuntime implements QaPilotToolRuntime {
       } else if (name === "browser_click_and_download") {
         const label = String(args.label ?? "").trim();
         if (!label || DESTRUCTIVE_ACTION.test(label)) throw new Error("Ação de download inválida ou destrutiva.");
-        const locator = await this.firstVisible(this.semanticCandidates(page, label));
+        const locator = await this.firstVisible(this.semanticCandidatesAcrossFrames(page, label));
         if (!locator) throw new Error(`Controle de download '${label}' não encontrado.`);
         const downloadPromise = page.waitForEvent("download", { timeout: 20_000 });
         await locator.click({ timeout: 15_000 });
@@ -906,11 +1128,13 @@ export class PlaywrightPilotRuntime implements QaPilotToolRuntime {
       } else if (name === "browser_upload_test_file") {
         const label = String(args.label ?? "").trim().slice(0, 200);
         const requestedKind = args.fixtureKind ? String(args.fixtureKind).toUpperCase() as SyntheticFixtureKind : undefined;
-        let input = label ? page.getByLabel(label, { exact: false }).first() : page.locator('input[type="file"]').first();
-        const labeledIsFileInput = await input.count() > 0 && await input.evaluate(element =>
+        let input = label
+          ? await this.firstExisting(page.frames().map(frame => frame.getByLabel(label, { exact: false })))
+          : await this.firstExisting(page.frames().map(frame => frame.locator('input[type="file"]')));
+        const labeledIsFileInput = Boolean(input) && await input!.evaluate(element =>
           element instanceof HTMLInputElement && element.type === "file").catch(() => false);
-        if (!labeledIsFileInput) input = page.locator('input[type="file"]').first();
-        if (!await input.count()) throw new Error("Nenhum campo de upload de arquivo foi encontrado na página.");
+        if (!labeledIsFileInput) input = await this.firstExisting(page.frames().map(frame => frame.locator('input[type="file"]')));
+        if (!input) throw new Error("Nenhum campo de upload de arquivo foi encontrado na página.");
         const accept = await input.getAttribute("accept") ?? "";
         const kind = selectSyntheticFixtureKind(accept, requestedKind);
         const fixture = await createSyntheticUploadFixture(
@@ -927,7 +1151,7 @@ export class PlaywrightPilotRuntime implements QaPilotToolRuntime {
         await page.waitForTimeout(500);
         const selectedNames = await input.evaluate((element: HTMLInputElement) =>
           Array.from(element.files ?? []).map(file => file.name));
-        const visibleConfirmation = await page.getByText(fixture.filename, { exact: false }).count() > 0;
+        const visibleConfirmation = Boolean(await this.firstVisible(page.frames().map(frame => frame.getByText(fixture.filename, { exact: false }))));
         if (!selectedNames.includes(fixture.filename) && !visibleConfirmation) {
           throw new Error("A interface não confirmou a seleção do arquivo sintético.");
         }
@@ -946,23 +1170,21 @@ export class PlaywrightPilotRuntime implements QaPilotToolRuntime {
         const locator = await this.locatorWithSemanticRecovery(page, args.ref);
         const label = await locator.getAttribute("aria-label") || await locator.getAttribute("name") || "campo";
         const value = String(args.value ?? "");
-        const options = await locator.locator("option").evaluateAll(items => items.map(item => ({
-          value: (item as HTMLOptionElement).value,
-          label: (item.textContent || "").trim(),
-        })));
-        const normalize = (item: string) => item.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
-        const wanted = normalize(value);
-        const match = options.find(item => normalize(item.value) === wanted || normalize(item.label) === wanted)
-          ?? options.find(item => normalize(item.label).includes(wanted));
-        if (!match) throw new Error(`Opção '${value}' não encontrada. Opções disponíveis: ${options.map(item => item.label).filter(Boolean).slice(0, 20).join(", ")}`);
-        await locator.selectOption(match.value, { timeout: 6_000 });
-        output = { action: { type: "select", label, value: match.value, selectedLabel: match.label }, ...(await this.observe() as Record<string, unknown>) };
+        const selected = await this.selectOptionUniversal(page, locator, value);
+        output = { action: { type: "select", label, ...selected }, ...(await this.observe() as Record<string, unknown>) };
       } else if (name === "browser_select_semantic") {
         const label = String(args.label ?? "").trim();
         const value = String(args.value ?? "");
-        const locator = page.getByLabel(label, { exact: true }).first();
-        await locator.selectOption(value, { timeout: 15_000 });
-        output = { action: { type: "select", label, value }, ...(await this.observe() as Record<string, unknown>) };
+        const candidates = page.frames().flatMap(frame => [
+          frame.getByLabel(label, { exact: true }),
+          frame.getByRole("combobox", { name: label, exact: true }),
+          frame.getByLabel(label, { exact: false }),
+          frame.getByRole("combobox", { name: label, exact: false }),
+        ]);
+        const locator = await this.firstVisible(candidates);
+        if (!locator) throw new Error(`Seletor '${label}' não encontrado semanticamente.`);
+        const selected = await this.selectOptionUniversal(page, locator, value);
+        output = { action: { type: "select", label, ...selected }, ...(await this.observe() as Record<string, unknown>) };
       } else if (name === "browser_press") {
         const key = normalizePlaywrightKey(args.key);
         event.arguments = { key };
