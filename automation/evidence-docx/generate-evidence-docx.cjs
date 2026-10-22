@@ -335,7 +335,10 @@ function resolveEvidencePaths(scenario, inputDirectory) {
     const raw = String(value);
     if (/^https?:\/\//i.test(raw)) return { kind: "remote", value: raw };
     const resolved = path.isAbsolute(raw) ? raw : path.resolve(inputDirectory, raw);
-    return fs.existsSync(resolved) ? { kind: "local", value: resolved } : { kind: "missing", value: resolved };
+    if (!fs.existsSync(resolved)) return { kind: "missing", value: resolved };
+    return /\.(?:png|jpe?g|gif|bmp)$/i.test(resolved)
+      ? { kind: "local", value: resolved }
+      : { kind: "attachment", value: resolved };
   });
 }
 
@@ -446,7 +449,11 @@ function scenarioChildren(scenario, index, inputDirectory) {
   }
 
   for (const evidence of evidencePaths.filter((entry) => entry.kind !== "local")) {
-    const prefix = evidence.kind === "remote" ? "URL não incorporada" : "Arquivo não encontrado";
+    const prefix = evidence.kind === "remote"
+      ? "URL não incorporada"
+      : evidence.kind === "attachment"
+        ? "Arquivo baixado e validado"
+        : "Arquivo não encontrado";
     children.push(new Paragraph({ style: "Note", children: [textRun(`${prefix}: ${evidence.value}`, { size: 18, color: COLORS.muted })] }));
   }
   return children;

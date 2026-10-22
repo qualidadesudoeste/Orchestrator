@@ -1,6 +1,7 @@
 # Gerador de evidências DOCX
 
-Gera um relatório Word a partir do JSON consolidado produzido pelo workflow `Agente QA — Playwright MCP`.
+Gera um relatório Word a partir do JSON consolidado produzido pelo executor
+Playwright direto.
 
 ## Executar
 
@@ -24,18 +25,15 @@ O documento contém:
 
 Os status aceitos são `PASSOU`, `FALHOU`, `BLOQUEADO` e `ERRO_AUTOMACAO`.
 
-## Integração automática com n8n
+## Integração automática
 
-O workflow `automation/n8n/Agente_QA_Playwright_MCP.json` envia o resultado
-consolidado para:
+O backend pode enviar o resultado consolidado para:
 
 ```text
-POST http://host.docker.internal:3000/api/qa/evidence-docx
+POST http://localhost:3000/api/qa/evidence-docx
 Authorization: Bearer <QA_AGENT_API_TOKEN>
 ```
 
-Configure o mesmo `QA_AGENT_API_TOKEN` no `.env` da raiz do Orchestrator e no
-arquivo `automation/n8n/.env`. Configure também `ORCHESTRATOR_PUBLIC_URL` como
-`http://localhost:3000` e `ORCHESTRATOR_API_URL` como
-`http://host.docker.internal:3000`. A resposta contém
+Configure `QA_AGENT_API_TOKEN` e `ORCHESTRATOR_PUBLIC_URL` no `.env` da raiz do
+Orchestrator. A resposta contém
 `evidence_docx.download_url`, um link protegido e válido por sete dias.

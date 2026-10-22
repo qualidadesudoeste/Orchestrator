@@ -4,6 +4,11 @@ import { trpc } from "@/lib/trpc";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { toast } from "sonner";
 import {
+  Tooltip as HelpTooltip,
+  TooltipContent as HelpTooltipContent,
+  TooltipTrigger as HelpTooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
   Area,
   AreaChart,
   CartesianGrid,
@@ -22,6 +27,8 @@ import {
   Brain,
   Bug,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   ClipboardCopy,
   Database,
   Download,
@@ -39,6 +46,7 @@ import {
 } from "lucide-react";
 
 const STATUS_STYLE: Record<string, { background: string; color: string; label: string }> = {
+  EM_ANDAMENTO: { background: "#dbeafe", color: "#1d4ed8", label: "Em andamento" },
   PASSOU: { background: "#dcfce7", color: "#15803d", label: "Passou" },
   FALHOU: { background: "#fee2e2", color: "#b91c1c", label: "Falhou" },
   BLOQUEADO: { background: "#fef3c7", color: "#b45309", label: "Bloqueado" },
@@ -47,6 +55,7 @@ const STATUS_STYLE: Record<string, { background: string; color: string; label: s
     color: "#475569",
     label: "Erro de automação",
   },
+  CANCELADO: { background: "#f1f5f9", color: "#475569", label: "Encerrado" },
   PARCIAL: { background: "#fef3c7", color: "#b45309", label: "Parcial" },
   ERRO: { background: "#e2e8f0", color: "#475569", label: "Erro" },
   NAO_EXECUTADO: {
@@ -132,6 +141,7 @@ export default function DashboardPage() {
   const [filterProjeto, setFilterProjeto] = useState("");
   const [filterSprint, setFilterSprint] = useState("");
   const [historyCardId, setHistoryCardId] = useState("");
+  const [showSpecialistMemory, setShowSpecialistMemory] = useState(false);
 
   const { data: clients } = trpc.clients.list.useQuery(undefined, {
     enabled: isAuthenticated,
@@ -307,25 +317,28 @@ export default function DashboardPage() {
       background: "#f3e8ff",
     },
     {
-      label: "Pass Rate",
+      label: "Testes aprovados",
       value: `${summary.passRate}%`,
-      detail: "Cenários estáveis",
+      detail: "Do total de cenários planejados",
+      tooltip: "Percentual de todos os cenários planejados que terminaram aprovados. Quanto maior, melhor.",
       icon: CheckCircle2,
       color: "#15803d",
       background: "#dcfce7",
     },
     {
-      label: "Fail Rate",
+      label: "Testes com falha",
       value: `${summary.failRate}%`,
       detail: "Falhas reais confirmadas",
+      tooltip: "Percentual de todos os cenários planejados que identificaram uma falha funcional confirmada. Quanto menor, melhor.",
       icon: XCircle,
       color: "#b91c1c",
       background: "#fee2e2",
     },
     {
-      label: "Flaky Rate",
+      label: "Testes instáveis",
       value: `${summary.flakyRate}%`,
       detail: `${summary.flakyScenarios} cenários instáveis`,
+      tooltip: "Percentual de cenários que apresentaram resultados diferentes entre execuções ou retestes. Quanto menor, melhor.",
       icon: RefreshCw,
       color: "#7c3aed",
       background: "#ede9fe",
@@ -339,12 +352,13 @@ export default function DashboardPage() {
       background: "#ffedd5",
     },
     {
-      label: "DRE",
+      label: "Detecção antecipada de defeitos",
       value: summary.dre === null ? "—" : `${summary.dre}%`,
       detail:
         summary.dre === null
           ? "Aguardando dados de defeitos"
           : "Defeitos removidos antes da produção",
+      tooltip: "Percentual dos defeitos conhecidos que foram identificados antes de chegar à produção. Quanto maior, melhor.",
       icon: ShieldCheck,
       color: "#0369a1",
       background: "#e0f2fe",
@@ -352,39 +366,43 @@ export default function DashboardPage() {
   ];
   const nonFunctionalCards = [
     {
-      label: "Performance p95",
+      label: "Tempo de resposta",
       value:
         nonFunctional.summary.latestP95Ms === null
           ? "—"
           : `${nonFunctional.summary.latestP95Ms} ms`,
       detail: "Última execução k6",
+      tooltip: "Tempo máximo em que 95% das requisições foram concluídas (p95). Quanto menor, melhor.",
       icon: Timer,
       color: "#7c3aed",
       background: "#f3e8ff",
     },
     {
-      label: "Taxa de erro HTTP",
+      label: "Falhas de comunicação",
       value:
         nonFunctional.summary.latestFailureRatePercent === null
           ? "—"
           : `${nonFunctional.summary.latestFailureRatePercent}%`,
       detail: `${nonFunctional.summary.totalRuns} execuções não funcionais`,
+      tooltip: "Percentual de requisições HTTP que falharam por erro do servidor, resposta inválida, timeout ou problema de conexão. Quanto menor, melhor.",
       icon: Activity,
       color: "#0369a1",
       background: "#e0f2fe",
     },
     {
-      label: "Riscos ZAP",
+      label: "Segurança",
       value: nonFunctional.summary.zapHigh.toLocaleString("pt-BR"),
       detail: `${nonFunctional.summary.zapMedium} alertas médios`,
+      tooltip: "Alertas de segurança identificados pela análise passiva do OWASP ZAP. Cada alerta deve ser analisado antes de ser considerado uma vulnerabilidade confirmada.",
       icon: ShieldAlert,
       color: "#b91c1c",
       background: "#fee2e2",
     },
     {
-      label: "Violações axe",
+      label: "Acessibilidade",
       value: nonFunctional.summary.axeCritical.toLocaleString("pt-BR"),
       detail: `${nonFunctional.summary.axeSerious} violações sérias`,
+      tooltip: "Problemas de acessibilidade encontrados automaticamente pelo axe-core, como campos sem rótulo, contraste inadequado ou elementos incompatíveis com leitores de tela.",
       icon: Accessibility,
       color: "#c2410c",
       background: "#ffedd5",
@@ -580,14 +598,16 @@ export default function DashboardPage() {
         >
           {cards.map(card => {
             const Icon = card.icon;
-            return (
+            const content = (
               <div
-                key={card.label}
+                tabIndex={card.tooltip ? 0 : undefined}
+                aria-label={card.tooltip ? `${card.label}: ${card.value}. ${card.tooltip}` : undefined}
                 style={{
                   background: "white",
                   borderRadius: 12,
                   padding: 16,
                   boxShadow: "0 1px 3px rgba(15,23,42,0.08)",
+                  cursor: card.tooltip ? "help" : undefined,
                 }}
               >
                 <div
@@ -637,6 +657,15 @@ export default function DashboardPage() {
                   {card.detail}
                 </div>
               </div>
+            );
+            if (!card.tooltip) return <Fragment key={card.label}>{content}</Fragment>;
+            return (
+              <HelpTooltip key={card.label}>
+                <HelpTooltipTrigger asChild>{content}</HelpTooltipTrigger>
+                <HelpTooltipContent side="top" sideOffset={8} className="max-w-80 leading-relaxed">
+                  {card.tooltip}
+                </HelpTooltipContent>
+              </HelpTooltip>
             );
           })}
         </div>
@@ -955,61 +984,56 @@ export default function DashboardPage() {
             {nonFunctionalCards.map(card => {
               const Icon = card.icon;
               return (
-                <div
-                  key={card.label}
-                  style={{
-                    background: "white",
-                    borderRadius: 12,
-                    padding: 15,
-                    boxShadow: "0 1px 3px rgba(15,23,42,0.08)",
-                  }}
-                >
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      marginBottom: 10,
-                    }}
-                  >
-                    <span
+                <HelpTooltip key={card.label}>
+                  <HelpTooltipTrigger asChild>
+                    <div
+                      tabIndex={0}
+                      aria-label={`${card.label}: ${card.value}. ${card.tooltip}`}
                       style={{
-                        color: "#64748b",
-                        fontSize: 11,
-                        fontWeight: 700,
+                        background: "white",
+                        borderRadius: 12,
+                        padding: 15,
+                        boxShadow: "0 1px 3px rgba(15,23,42,0.08)",
+                        cursor: "help",
                       }}
                     >
-                      {card.label}
-                    </span>
-                    <span
-                      style={{
-                        display: "grid",
-                        placeItems: "center",
-                        width: 29,
-                        height: 29,
-                        borderRadius: 8,
-                        color: card.color,
-                        background: card.background,
-                      }}
-                    >
-                      <Icon size={16} />
-                    </span>
-                  </div>
-                  <div
-                    style={{
-                      color: "#0f172a",
-                      fontSize: 24,
-                      fontWeight: 800,
-                    }}
-                  >
-                    {card.value}
-                  </div>
-                  <div
-                    style={{ color: "#94a3b8", fontSize: 10, marginTop: 4 }}
-                  >
-                    {card.detail}
-                  </div>
-                </div>
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          marginBottom: 10,
+                        }}
+                      >
+                        <span style={{ color: "#64748b", fontSize: 11, fontWeight: 700 }}>
+                          {card.label}
+                        </span>
+                        <span
+                          style={{
+                            display: "grid",
+                            placeItems: "center",
+                            width: 29,
+                            height: 29,
+                            borderRadius: 8,
+                            color: card.color,
+                            background: card.background,
+                          }}
+                        >
+                          <Icon size={16} />
+                        </span>
+                      </div>
+                      <div style={{ color: "#0f172a", fontSize: 24, fontWeight: 800 }}>
+                        {card.value}
+                      </div>
+                      <div style={{ color: "#94a3b8", fontSize: 10, marginTop: 4 }}>
+                        {card.detail}
+                      </div>
+                    </div>
+                  </HelpTooltipTrigger>
+                  <HelpTooltipContent side="top" sideOffset={8} className="max-w-80 leading-relaxed">
+                    {card.tooltip}
+                  </HelpTooltipContent>
+                </HelpTooltip>
               );
             })}
           </div>
@@ -1028,7 +1052,7 @@ export default function DashboardPage() {
               <table style={tableStyle}>
                 <thead>
                   <tr>
-                    {["Execução", "Projeto", "Status", "k6 p95", "ZAP", "axe"].map(
+                    {["Execução", "Projeto", "Status", "Tempo de resposta", "Segurança", "Acessibilidade"].map(
                       heading => (
                         <th key={heading} style={headerCellStyle}>
                           {heading}
@@ -1131,12 +1155,20 @@ export default function DashboardPage() {
           }}
         >
           <div
+            role="button"
+            tabIndex={0}
+            aria-expanded={showSpecialistMemory}
+            onClick={() => setShowSpecialistMemory(open => !open)}
+            onKeyDown={event => {
+              if (event.key === "Enter" || event.key === " ") setShowSpecialistMemory(open => !open);
+            }}
             style={{
               display: "flex",
               alignItems: "center",
               justifyContent: "space-between",
               gap: 12,
-              marginBottom: 12,
+              cursor: "pointer",
+              marginBottom: showSpecialistMemory ? 12 : 0,
             }}
           >
             <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
@@ -1172,11 +1204,16 @@ export default function DashboardPage() {
                 </div>
               </div>
             </div>
-            <span style={{ color: "#64748b", fontSize: 11 }}>
-              {agentMemory.summary.activeMemories} conhecimentos ativos
-            </span>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ color: "#64748b", fontSize: 11 }}>
+                {agentMemory.summary.activeMemories} conhecimentos ativos
+              </span>
+              {showSpecialistMemory ? <ChevronUp size={16} color="#64748b" /> : <ChevronDown size={16} color="#64748b" />}
+            </div>
           </div>
 
+          {showSpecialistMemory && (
+            <>
           {agentMemory.recentMemories.length ? (
             <div style={{ overflowX: "auto" }}>
               <table style={tableStyle}>
@@ -1237,6 +1274,9 @@ export default function DashboardPage() {
             </div>
           ) : (
             <EmptyState message="O agente ainda não registrou aprendizados persistentes." />
+          )}
+
+            </>
           )}
         </section>
 

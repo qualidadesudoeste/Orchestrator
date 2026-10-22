@@ -1,4 +1,5 @@
 import type { Express, Request } from "express";
+import { logError } from "./_core/logger";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -329,7 +330,7 @@ export function registerRegressionCodeRoutes(app: Express): void {
         res.status(400).json({ error: message });
         return;
       }
-      console.error("[qa-regression-code] error:", error);
+      logError("qa_regression_code_failed", error);
       res.status(500).json({
         error: `Falha ao salvar código de regressão: ${message}`,
       });

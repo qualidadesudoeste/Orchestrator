@@ -2,6 +2,7 @@ import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
 import { useState, useCallback, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { phases, totalItems } from "@/data/qaData";
 import { ChevronRight, ClipboardCheck, X, FolderOpen, ExternalLink } from "lucide-react";
@@ -18,16 +19,22 @@ export interface ChecklistModalProps {
 }
 
 export function ChecklistModal({ sprintId, sprintName, projectName, clientName, onClose }: ChecklistModalProps) {
-  const { isAuthenticated } = useAuth();
+  const { user, isAuthenticated } = useAuth();
   const [checked, setChecked] = useState<CheckedMap>({});
   const [activePhase, setActivePhase] = useState(phases[0].id);
   const [maximized, setMaximized] = useState(false);
+  const [responsibleUserId, setResponsibleUserId] = useState<number | null>(null);
 
   const { data: existing } = trpc.checklists.get.useQuery(
     { sprintId }, { enabled: isAuthenticated && sprintId > 0 }
   );
+  const { data: users = [] } = trpc.users.options.useQuery(undefined, { enabled: isAuthenticated });
   const saveMutation = trpc.checklists.save.useMutation();
   const utils = trpc.useUtils();
+  const updateResponsibleMutation = trpc.checklists.updateResponsible.useMutation({
+    onSuccess: () => { utils.checklists.allHistory.invalidate(); toast.success("Responsável atualizado."); },
+    onError: error => toast.error(error.message),
+  });
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -36,6 +43,10 @@ export function ChecklistModal({ sprintId, sprintName, projectName, clientName, 
     }
   }, [existing]);
 
+  useEffect(() => {
+    setResponsibleUserId(existing?.responsibleUserId ?? existing?.analystId ?? user?.id ?? null);
+  }, [existing, user?.id]);
+
   const completedCount = Object.values(checked).filter(Boolean).length;
   const globalProgress = totalItems > 0 ? Math.round((completedCount / totalItems) * 100) : 0;
 
@@ -43,7 +54,10 @@ export function ChecklistModal({ sprintId, sprintName, projectName, clientName, 
     const isCompleted = count === totalItems;
     try {
       await saveMutation.mutateAsync({
-        sprintId, checkedItems: JSON.stringify(nextChecked), totalItems,
+        sprintId,
+        checkedItems: JSON.stringify(nextChecked),
+        totalItems,
+        responsibleUserId: responsibleUserId ?? user?.id,
         completedItems: count, status: isCompleted ? "completed" : "in_progress",
         completedAt: isCompleted ? new Date() : null,
       });
@@ -51,7 +65,7 @@ export function ChecklistModal({ sprintId, sprintName, projectName, clientName, 
       utils.checklists.myHistory.invalidate();
       utils.checklists.allHistory.invalidate();
     } catch { /* silencioso */ }
-  }, [sprintId, totalItems, saveMutation, utils]);
+  }, [sprintId, totalItems, saveMutation, utils, responsibleUserId, user?.id]);
   const toggle = useCallback((id: string) => {
     setChecked(prev => {
       const next = { ...prev, [id]: !prev[id] };
@@ -67,6 +81,7 @@ export function ChecklistModal({ sprintId, sprintName, projectName, clientName, 
     await saveMutation.mutateAsync({
       sprintId,
       checkedItems: JSON.stringify(checked),
+      responsibleUserId: responsibleUserId ?? user?.id,
       totalItems,
       completedItems: completedCount,
       status: isCompleted ? "completed" : "in_progress",
@@ -76,7 +91,25 @@ export function ChecklistModal({ sprintId, sprintName, projectName, clientName, 
     utils.checklists.myHistory.invalidate();
     utils.checklists.allHistory.invalidate();
     toast.success("Progresso salvo!");
-  }, [checked, completedCount, sprintId, saveMutation, utils]);
+  }, [checked, completedCount, sprintId, saveMutation, utils, responsibleUserId, user?.id]);
+
+  const changeResponsible = async (value: string) => {
+    const nextId = Number(value);
+    setResponsibleUserId(nextId);
+    if (existing?.id) {
+      updateResponsibleMutation.mutate({ id: existing.id, responsibleUserId: nextId });
+      return;
+    }
+    const isCompleted = completedCount === totalItems;
+    await saveMutation.mutateAsync({
+      sprintId, responsibleUserId: nextId, checkedItems: JSON.stringify(checked), totalItems,
+      completedItems: completedCount, status: isCompleted ? "completed" : "in_progress",
+      completedAt: isCompleted ? new Date() : null,
+    });
+    utils.checklists.get.invalidate({ sprintId });
+    utils.checklists.allHistory.invalidate();
+    toast.success("Responsável definido.");
+  };
 
   const phaseProgress = phases.map(phase => {
     const items = phase.steps.flatMap(s => s.items);
@@ -90,8 +123,8 @@ export function ChecklistModal({ sprintId, sprintName, projectName, clientName, 
         className="flex overflow-hidden transition-all duration-300"
         style={{
           background: "oklch(0.975 0.006 80)",
-          width: maximized ? "100vw" : "min(92vw, 1100px)",
-          height: maximized ? "100vh" : "min(90vh, 820px)",
+          width: maximized ? "100vw" : "min(96vw, 1500px)",
+          height: maximized ? "100vh" : "92vh",
           borderRadius: maximized ? "0" : "16px",
           boxShadow: maximized ? "none" : "0 24px 80px rgba(0,0,0,0.35)",
         }}
@@ -187,6 +220,12 @@ export function ChecklistModal({ sprintId, sprintName, projectName, clientName, 
               </h1>
             </div>
             <div className="flex items-center gap-4">
+              <div className="min-w-56">
+                <Select value={responsibleUserId ? String(responsibleUserId) : undefined} onValueChange={changeResponsible} disabled={updateResponsibleMutation.isPending}>
+                  <SelectTrigger className="h-9 w-full bg-white text-xs"><SelectValue placeholder="Selecione o responsável" /></SelectTrigger>
+                  <SelectContent>{users.map(option => <SelectItem key={option.id} value={String(option.id)}>{option.name || option.username}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
               <div className="flex items-center gap-2">
                 <div className="w-28 h-2 rounded-full overflow-hidden" style={{ background: "oklch(0.88 0.008 80)" }}>
                   <div className="h-full rounded-full transition-all" style={{ width: `${globalProgress}%`, background: globalProgress === 100 ? "oklch(0.50 0.18 145)" : "oklch(0.55 0.18 264)" }} />

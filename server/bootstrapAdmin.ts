@@ -1,5 +1,6 @@
 import "dotenv/config";
 import bcrypt from "bcryptjs";
+import { logError, logInfo } from "./_core/logger";
 import { drizzle } from "drizzle-orm/mysql2";
 import mysql from "mysql2/promise";
 import { users } from "../drizzle/schema";
@@ -55,29 +56,15 @@ async function main() {
       password => bcrypt.hash(password, 12),
     );
 
-    console.log(
-      JSON.stringify({
-        timestamp: new Date().toISOString(),
-        level: "info",
-        event: result.created
-          ? "initial_admin_created"
-          : "initial_admin_skipped",
-        reason: result.reason ?? null,
-      }),
-    );
+    logInfo(result.created ? "initial_admin_created" : "initial_admin_skipped", {
+      reason: result.reason ?? null,
+    });
   } finally {
     await pool.end();
   }
 }
 
 main().catch(error => {
-  console.error(
-    JSON.stringify({
-      timestamp: new Date().toISOString(),
-      level: "error",
-      event: "initial_admin_failed",
-      message: error instanceof Error ? error.message : String(error),
-    }),
-  );
+  logError("initial_admin_failed", error);
   process.exitCode = 1;
 });

@@ -3,6 +3,7 @@ import path from "node:path";
 import { drizzle } from "drizzle-orm/mysql2";
 import { migrate } from "drizzle-orm/mysql2/migrator";
 import mysql from "mysql2/promise";
+import { logError, logInfo } from "./_core/logger";
 
 async function runMigrations() {
   const databaseUrl = process.env.DATABASE_URL?.trim();
@@ -19,22 +20,13 @@ async function runMigrations() {
       process.env.MIGRATIONS_FOLDER ??
       path.resolve(process.cwd(), "drizzle");
     await migrate(database, { migrationsFolder });
-    console.log(JSON.stringify({
-      timestamp: new Date().toISOString(),
-      level: "info",
-      event: "migrations_complete",
-    }));
+    logInfo("migrations_complete");
   } finally {
     await pool.end();
   }
 }
 
 runMigrations().catch(error => {
-  console.error(JSON.stringify({
-    timestamp: new Date().toISOString(),
-    level: "error",
-    event: "migrations_failed",
-    message: error instanceof Error ? error.message : String(error),
-  }));
+  logError("migrations_failed", error);
   process.exitCode = 1;
 });

@@ -3,6 +3,7 @@ import fs from "fs";
 import { type Server } from "http";
 import { nanoid } from "nanoid";
 import path from "path";
+import { logError } from "./logger";
 
 export async function setupVite(app: Express, server: Server) {
   const viteModuleName = "vite";
@@ -39,6 +40,17 @@ export async function setupVite(app: Express, server: Server) {
 
       // always reload the index.html file from disk incase it changes
       let template = await fs.promises.readFile(clientTemplate, "utf-8");
+      // Em middleware mode com appType custom, o React Refresh nem sempre
+      // injeta o preâmbulo automaticamente. Sem ele, o frontend falha antes
+      // de montar a tela. Esta é a mesma inicialização usada pelo plugin React.
+      const reactRefreshPreamble = `<script type="module">
+import RefreshRuntime from "/@react-refresh";
+RefreshRuntime.injectIntoGlobalHook(window);
+window.$RefreshReg$ = () => {};
+window.$RefreshSig$ = () => type => type;
+window.__vite_plugin_react_preamble_installed__ = true;
+</script>`;
+      template = template.replace("<head>", `<head>\n${reactRefreshPreamble}`);
       template = template.replace(
         `src="/src/main.tsx"`,
         `src="/src/main.tsx?v=${nanoid()}"`
@@ -58,8 +70,10 @@ export function serveStatic(app: Express) {
       ? path.resolve(import.meta.dirname, "../..", "dist", "public")
       : path.resolve(import.meta.dirname, "public");
   if (!fs.existsSync(distPath)) {
-    console.error(
-      `Could not find the build directory: ${distPath}, make sure to build the client first`
+    logError(
+      "static_build_directory_missing",
+      new Error("Diretório de build ausente."),
+      { distPath },
     );
   }
 

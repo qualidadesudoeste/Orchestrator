@@ -36,6 +36,7 @@ export type NormalizedTestResult = {
 
 export type NormalizedTestExecution = {
   externalExecutionId: string;
+  createdById: number;
   clientId?: number;
   projectId?: number;
   sprintId?: number;
@@ -112,6 +113,20 @@ function text(value: unknown): string | undefined {
 
 function array(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
+}
+
+const OMITTED_RAW_KEYS = /^(?:login_usuario|login_senha|username|password|senha|token|authorization|ambientes_json|ambientes_execucao_json|contexto_codigo_fonte|codigo_regressao)$/i;
+
+function rawPayloadForStorage(value: unknown): string {
+  const seen = new WeakSet<object>();
+  return JSON.stringify(value, (key, current) => {
+    if (OMITTED_RAW_KEYS.test(key)) return undefined;
+    if (current && typeof current === "object") {
+      if (seen.has(current)) return "[referência circular omitida]";
+      seen.add(current);
+    }
+    return current;
+  });
 }
 
 function moduleFromGherkin(gherkin: string | undefined): string | undefined {
@@ -242,12 +257,21 @@ export function normalizeTestExecutionPayload(
       "Informe execution_id para garantir ingestão sem duplicidade.",
     );
   }
+  const createdById = optionalId(
+    (raw as any).solicitado_por ?? (raw as any).requested_by,
+  );
+  if (!createdById) {
+    throw new TestExecutionValidationError(
+      "Informe solicitado_por para associar a execução ao usuário.",
+    );
+  }
 
   const rawCoverage =
     (raw as any).coverage_percent ?? (raw as any).score_cobertura;
 
   return {
     externalExecutionId,
+    createdById,
     clientId: optionalId((raw as any).client_id),
     projectId: optionalId((raw as any).project_id),
     sprintId: optionalId((raw as any).sprint_id),
@@ -292,7 +316,7 @@ export function normalizeTestExecutionPayload(
       optionalDate(
         (raw as any).fim_processamento ?? (raw as any).finished_at,
       ) ?? new Date(),
-    rawPayload: JSON.stringify(raw),
+    rawPayload: rawPayloadForStorage(raw),
     results,
   };
 }

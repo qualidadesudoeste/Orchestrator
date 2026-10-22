@@ -20,6 +20,7 @@ COPY package.json package-lock.json ./
 COPY --from=production-dependencies /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/drizzle ./drizzle
+COPY --from=build /app/automation/evidence-docx ./automation/evidence-docx
 RUN mkdir -p /app/artifacts && chown -R node:node /app
 USER node
 EXPOSE 3000

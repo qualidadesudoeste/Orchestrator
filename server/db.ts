@@ -1,29 +1,31 @@
-import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/mysql2";
+import { and, asc, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import {
   Checklist,
   InsertQAAgentMemory,
   InsertDefectCard,
-  InsertUser,
   QAPlanDocument,
   Sprint,
-  TrailProgress,
   checklists,
   clients,
+  aiProviderSettings,
   defectCardHistory,
   defectCards,
+  executionWorkers,
   nonFunctionalFindings,
   nonFunctionalRuns,
   projects,
+  projectMembers,
+  projectQaProvisioning,
+  projectTestEnvironments,
+  vpnProfiles,
   qaAgentMemories,
   qaPlanDocuments,
+  qaTestPlans,
   sprints,
   testExecutions,
   testResults,
-  trailProgress,
   users,
 } from "../drizzle/schema";
-import { ENV } from "./_core/env";
 import type { AgentMemoryLearning } from "./agentMemoryService";
 import type { NormalizedDefectCard } from "./defectCardService";
 import {
@@ -32,147 +34,176 @@ import {
 } from "./defectCardLifecycleService";
 import type { NormalizedNonFunctionalRun } from "./nonFunctionalService";
 import type { NormalizedTestExecution } from "./testExecutionService";
+import type { NormalizedExecutionProgress } from "./testExecutionProgressService";
+import type { ExecutionQueuePool } from "./executionQueueTypes";
+import { getDb } from "./database/client";
+export { checkDatabaseHealth, getDb } from "./database/client";
+export * from "./repositories/userRepository";
 
-let _db: ReturnType<typeof drizzle> | null = null;
-
-export async function getDb() {
-  if (!_db && process.env.DATABASE_URL) {
-    try { _db = drizzle(process.env.DATABASE_URL); } catch (error) { console.warn("[Database] Failed to connect:", error); _db = null; }
-  }
-  return _db;
-}
-
-export async function checkDatabaseHealth() {
-  const startedAt = performance.now();
-  const db = await getDb();
-  if (!db) {
-    return { ok: false, latencyMs: null, reason: "database_not_configured" };
-  }
-  try {
-    await db.execute(sql`SELECT 1 FROM users LIMIT 1`);
-    return {
-      ok: true,
-      latencyMs: Math.round((performance.now() - startedAt) * 10) / 10,
-      reason: null,
-    };
-  } catch {
-    return {
-      ok: false,
-      latencyMs: Math.round((performance.now() - startedAt) * 10) / 10,
-      reason: "database_unavailable_or_not_migrated",
-    };
-  }
-}
-
-// ─── Auth helpers ─────────────────────────────────────────────────────────────
-
-export async function getUserByUsername(username: string) {
-  const db = await getDb();
-  if (!db) return undefined;
-  const result = await db.select().from(users).where(eq(users.username, username)).limit(1);
-  return result.length > 0 ? result[0] : undefined;
-}
-
-export async function getUserById(id: number) {
-  const db = await getDb();
-  if (!db) return undefined;
-  const result = await db.select().from(users).where(eq(users.id, id)).limit(1);
-  return result.length > 0 ? result[0] : undefined;
-}
-
-export async function createLocalUser(data: {
-  username: string;
-  passwordHash: string;
-  name: string;
-  email?: string;
-  role: "user" | "admin";
+export async function listTestExecutionHistory(filters: {
+  userId: number;
+  isAdmin: boolean;
+  clientId?: number;
+  projectId?: number;
+  dateFrom?: Date;
+  dateTo?: Date;
+  limit?: number;
 }) {
   const db = await getDb();
-  if (!db) throw new Error("DB unavailable");
-  await db.insert(users).values({
-    username: data.username,
-    passwordHash: data.passwordHash,
-    name: data.name,
-    email: data.email ?? null,
-    loginMethod: "local",
-    role: data.role,
-    lastSignedIn: new Date(),
-  });
-}
-
-export async function updateLocalUser(
-  userId: number,
-  data: { name?: string; email?: string; role?: "user" | "admin"; passwordHash?: string }
-) {
-  const db = await getDb();
-  if (!db) return;
-  const set: Record<string, unknown> = {};
-  if (data.name !== undefined) set.name = data.name;
-  if (data.email !== undefined) set.email = data.email;
-  if (data.role !== undefined) set.role = data.role;
-  if (data.passwordHash !== undefined) set.passwordHash = data.passwordHash;
-  if (Object.keys(set).length === 0) return;
-  await db.update(users).set(set).where(eq(users.id, userId));
-}
-
-export async function deleteUser(userId: number) {
-  const db = await getDb();
-  if (!db) return;
-  await db.delete(users).where(eq(users.id, userId));
-}
-
-export async function getAllUsers() {
-  const db = await getDb();
   if (!db) return [];
-  return db.select().from(users).orderBy(desc(users.createdAt));
+
+  const conditions = [];
+  if (!filters.isAdmin) {
+    conditions.push(eq(testExecutions.createdById, filters.userId));
+  }
+  if (filters.clientId) {
+    conditions.push(eq(testExecutions.clientId, filters.clientId));
+  }
+  if (filters.projectId) {
+    conditions.push(eq(testExecutions.projectId, filters.projectId));
+  }
+  if (filters.dateFrom) {
+    conditions.push(
+      sql`COALESCE(${testExecutions.finishedAt}, ${testExecutions.createdAt}) >= ${filters.dateFrom}`,
+    );
+  }
+  if (filters.dateTo) {
+    conditions.push(
+      sql`COALESCE(${testExecutions.finishedAt}, ${testExecutions.createdAt}) <= ${filters.dateTo}`,
+    );
+  }
+
+  const baseQuery = db
+    .select({
+      id: testExecutions.id,
+      externalExecutionId: testExecutions.externalExecutionId,
+      createdById: testExecutions.createdById,
+      createdByName: users.name,
+      createdByUsername: users.username,
+      clientId: testExecutions.clientId,
+      projectId: testExecutions.projectId,
+      clientName: testExecutions.clientName,
+      projectName: testExecutions.projectName,
+      sprintName: testExecutions.sprintName,
+      systemUrl: testExecutions.systemUrl,
+      status: testExecutions.status,
+      totalScenarios: testExecutions.totalScenarios,
+      passedScenarios: testExecutions.passedScenarios,
+      failedScenarios: testExecutions.failedScenarios,
+      blockedScenarios: testExecutions.blockedScenarios,
+      automationErrors: testExecutions.automationErrors,
+      flakyScenarios: testExecutions.flakyScenarios,
+      coveragePercent: testExecutions.coveragePercent,
+      defectsFound: testExecutions.defectsFound,
+      evidenceDocxUrl: testExecutions.evidenceDocxUrl,
+      reliabilityReportUrl: testExecutions.reliabilityReportUrl,
+      startedAt: testExecutions.startedAt,
+      finishedAt: testExecutions.finishedAt,
+      createdAt: testExecutions.createdAt,
+    })
+    .from(testExecutions)
+    .leftJoin(users, eq(users.id, testExecutions.createdById));
+
+  const limit = Math.min(Math.max(filters.limit ?? 100, 1), 200);
+  return conditions.length > 0
+    ? baseQuery
+        .where(and(...conditions))
+        .orderBy(desc(testExecutions.finishedAt), desc(testExecutions.createdAt))
+        .limit(limit)
+    : baseQuery
+        .orderBy(desc(testExecutions.finishedAt), desc(testExecutions.createdAt))
+        .limit(limit);
 }
 
-export async function updateLastSignedIn(userId: number) {
+export async function listExecutionQueue(filters: {
+  userId: number;
+  isAdmin: boolean;
+  state?: "ALL" | "QUEUED" | "RUNNING" | "PAUSED" | "FINISHED" | "FAILED" | "CANCELLED";
+  pool?: "PUBLIC" | "COGEL" | "SEFAZ" | "OUTRA";
+  limit?: number;
+}) {
   const db = await getDb();
-  if (!db) return;
-  await db.update(users).set({ lastSignedIn: new Date() }).where(eq(users.id, userId));
-}
+  if (!db) return { items: [], summary: { queued: 0, running: 0, paused: 0, finished: 0, failed: 0, cancelled: 0 } };
 
-// Mantido para compatibilidade com sdk.ts (OAuth legado)
-export async function getUserByOpenId(openId: string) {
-  const db = await getDb();
-  if (!db) return undefined;
-  const result = await db.select().from(users).where(eq(users.openId, openId)).limit(1);
-  return result.length > 0 ? result[0] : undefined;
-}
+  const visibility = [];
+  if (filters.pool) visibility.push(eq(testExecutions.queuePool, filters.pool));
+  if (filters.state && filters.state !== "ALL") {
+    visibility.push(eq(testExecutions.executionState, filters.state));
+  }
 
-export async function upsertUser(user: InsertUser): Promise<void> {
-  if (!user.openId) throw new Error("User openId is required for upsert");
-  const db = await getDb();
-  if (!db) { console.warn("[Database] Cannot upsert user: database not available"); return; }
-  try {
-    const values: InsertUser = { openId: user.openId };
-    const updateSet: Record<string, unknown> = {};
-    const textFields = ["name", "email", "loginMethod"] as const;
-    type TextField = (typeof textFields)[number];
-    const assignNullable = (field: TextField) => {
-      const value = user[field];
-      if (value === undefined) return;
-      const normalized = value ?? null;
-      values[field] = normalized;
-      updateSet[field] = normalized;
-    };
-    textFields.forEach(assignNullable);
-    if (user.lastSignedIn !== undefined) { values.lastSignedIn = user.lastSignedIn; updateSet.lastSignedIn = user.lastSignedIn; }
-    if (user.role !== undefined) { values.role = user.role; updateSet.role = user.role; }
-    else if (user.openId === ENV.ownerOpenId) { values.role = "admin"; updateSet.role = "admin"; }
-    if (!values.lastSignedIn) values.lastSignedIn = new Date();
-    if (Object.keys(updateSet).length === 0) updateSet.lastSignedIn = new Date();
-    await db.insert(users).values(values).onDuplicateKeyUpdate({ set: updateSet });
-  } catch (error) { console.error("[Database] Failed to upsert user:", error); throw error; }
-}
+  const queueOrder = await db.select({ id: testExecutions.id })
+    .from(testExecutions)
+    .where(eq(testExecutions.executionState, "QUEUED"))
+    .orderBy(asc(testExecutions.queuedAt), asc(testExecutions.id));
+  const queuePositions = new Map(queueOrder.map((item, index) => [item.id, index + 1]));
 
-export async function updateUserRole(userId: number, role: "user" | "admin") {
-  const db = await getDb();
-  if (!db) return;
-  await db.update(users).set({ role }).where(eq(users.id, userId));
-}
+  const query = db.select({
+    id: testExecutions.id,
+    externalExecutionId: testExecutions.externalExecutionId,
+    createdById: testExecutions.createdById,
+    createdByName: users.name,
+    createdByUsername: users.username,
+    clientName: testExecutions.clientName,
+    projectName: testExecutions.projectName,
+    sprintName: testExecutions.sprintName,
+    systemUrl: testExecutions.systemUrl,
+    status: testExecutions.status,
+    executionState: testExecutions.executionState,
+    controlState: testExecutions.controlState,
+    controlRequestedAt: testExecutions.controlRequestedAt,
+    controlRequestedById: testExecutions.controlRequestedById,
+    queuePool: testExecutions.queuePool,
+    totalScenarios: testExecutions.totalScenarios,
+    completedScenarios: testExecutions.completedScenarios,
+    currentScenarioIndex: testExecutions.currentScenarioIndex,
+    currentScenarioTitle: testExecutions.currentScenarioTitle,
+    currentEnvironment: testExecutions.currentEnvironment,
+    currentStage: testExecutions.currentStage,
+    progressMessage: testExecutions.progressMessage,
+    dispatchAttempts: testExecutions.dispatchAttempts,
+    queuedAt: testExecutions.queuedAt,
+    dispatchedAt: testExecutions.dispatchedAt,
+    startedAt: testExecutions.startedAt,
+    finishedAt: testExecutions.finishedAt,
+    lastHeartbeatAt: testExecutions.lastHeartbeatAt,
+    workerCode: executionWorkers.code,
+    workerName: executionWorkers.name,
+  }).from(testExecutions)
+    .leftJoin(users, eq(users.id, testExecutions.createdById))
+    .leftJoin(executionWorkers, eq(executionWorkers.id, testExecutions.assignedWorkerId));
 
+  const limit = Math.min(Math.max(filters.limit ?? 100, 1), 200);
+  const rows = visibility.length
+    ? await query.where(and(...visibility)).orderBy(
+        sql`CASE ${testExecutions.executionState} WHEN 'RUNNING' THEN 1 WHEN 'PAUSED' THEN 2 WHEN 'QUEUED' THEN 3 WHEN 'FAILED' THEN 4 WHEN 'CANCELLED' THEN 5 ELSE 6 END`,
+        sql`CASE WHEN ${testExecutions.executionState} IN ('RUNNING', 'PAUSED', 'QUEUED') THEN ${testExecutions.queuedAt} END ASC`,
+        sql`CASE WHEN ${testExecutions.executionState} IN ('FINISHED', 'FAILED', 'CANCELLED') THEN COALESCE(${testExecutions.finishedAt}, ${testExecutions.updatedAt}) END DESC`,
+      ).limit(limit)
+    : await query.orderBy(
+        sql`CASE ${testExecutions.executionState} WHEN 'RUNNING' THEN 1 WHEN 'PAUSED' THEN 2 WHEN 'QUEUED' THEN 3 WHEN 'FAILED' THEN 4 WHEN 'CANCELLED' THEN 5 ELSE 6 END`,
+        sql`CASE WHEN ${testExecutions.executionState} IN ('RUNNING', 'PAUSED', 'QUEUED') THEN ${testExecutions.queuedAt} END ASC`,
+        sql`CASE WHEN ${testExecutions.executionState} IN ('FINISHED', 'FAILED', 'CANCELLED') THEN COALESCE(${testExecutions.finishedAt}, ${testExecutions.updatedAt}) END DESC`,
+      ).limit(limit);
+
+  const items = rows.map(item => ({
+    ...item,
+    queuePosition: item.executionState === "QUEUED" ? queuePositions.get(item.id) ?? null : null,
+    progressPercent: item.totalScenarios > 0
+      ? Math.min(100, Math.round((item.completedScenarios / item.totalScenarios) * 100))
+      : 0,
+  }));
+  return {
+    items,
+    summary: {
+      queued: items.filter(item => item.executionState === "QUEUED").length,
+      running: items.filter(item => item.executionState === "RUNNING").length,
+      paused: items.filter(item => item.executionState === "PAUSED").length,
+      finished: items.filter(item => item.executionState === "FINISHED").length,
+      failed: items.filter(item => item.executionState === "FAILED").length,
+      cancelled: items.filter(item => item.executionState === "CANCELLED").length,
+    },
+  };
+}
 // ─── Clients ─────────────────────────────────────────────────────────────────
 export async function getClients() {
   const db = await getDb();
@@ -206,25 +237,276 @@ export async function getProjects(clientId?: number) {
   return db.select().from(projects).orderBy(desc(projects.createdAt));
 }
 
+export async function getProjectAccess(projectId: number, userId: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const projectRows = await db.select({ createdById: projects.createdById })
+    .from(projects).where(eq(projects.id, projectId)).limit(1);
+  if (projectRows[0]?.createdById === userId) return { role: "EXECUTOR" as const, owner: true };
+  const rows = await db.select({ role: projectMembers.role }).from(projectMembers)
+    .where(and(eq(projectMembers.projectId, projectId), eq(projectMembers.userId, userId))).limit(1);
+  return rows[0] ? { role: rows[0].role, owner: false } : null;
+}
+
+export async function listProjectMembers(projectId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select({
+    id: projectMembers.id,
+    projectId: projectMembers.projectId,
+    userId: projectMembers.userId,
+    role: projectMembers.role,
+    name: users.name,
+    username: users.username,
+  }).from(projectMembers)
+    .innerJoin(users, eq(users.id, projectMembers.userId))
+    .where(eq(projectMembers.projectId, projectId))
+    .orderBy(asc(users.name));
+}
+
+export async function replaceProjectMembers(input: {
+  projectId: number;
+  createdById: number;
+  members: Array<{ userId: number; role: "VIEWER" | "EXECUTOR" }>;
+}) {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  await db.transaction(async tx => {
+    await tx.delete(projectMembers).where(eq(projectMembers.projectId, input.projectId));
+    if (input.members.length) {
+      await tx.insert(projectMembers).values(input.members.map(member => ({
+        projectId: input.projectId,
+        userId: member.userId,
+        role: member.role,
+        createdById: input.createdById,
+      })));
+    }
+  });
+}
+
 export async function createProject(data: { name: string; description?: string; clientId: number; createdById: number }) {
   const db = await getDb();
   if (!db) throw new Error("DB unavailable");
   await db.insert(projects).values(data);
 }
 
-export async function updateProject(id: number, data: { name?: string; description?: string }) {
+export async function updateProject(id: number, data: {
+  name?: string;
+  description?: string;
+  repositoryUrl?: string | null;
+  repositoryBranch?: string | null;
+  sourceCodePath?: string | null;
+  sourceCodeSummary?: string | null;
+  sourceCodeFileCount?: number | null;
+  sourceCodeIndexedAt?: Date | null;
+}) {
   const db = await getDb();
   if (!db) throw new Error("DB unavailable");
   await db.update(projects).set(data).where(eq(projects.id, id));
 }
 
+export async function getProjectQaProvisioning(projectId: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db.select().from(projectQaProvisioning)
+    .where(eq(projectQaProvisioning.projectId, projectId)).limit(1);
+  return rows[0];
+}
+
+export async function upsertProjectQaProvisioning(data: typeof projectQaProvisioning.$inferInsert) {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  await db.insert(projectQaProvisioning).values(data).onDuplicateKeyUpdate({ set: {
+    endpointUrl: data.endpointUrl,
+    tokenEncrypted: data.tokenEncrypted,
+    isActive: data.isActive,
+  } });
+}
+
 export async function deleteProject(id: number) {
   const db = await getDb();
   if (!db) throw new Error("DB unavailable");
-  await db.delete(projects).where(eq(projects.id, id));
+  await db.transaction(async tx => {
+    await tx.delete(projectTestEnvironments).where(eq(projectTestEnvironments.projectId, id));
+    await tx.delete(projectQaProvisioning).where(eq(projectQaProvisioning.projectId, id));
+    await tx.delete(projects).where(eq(projects.id, id));
+  });
+}
+
+export async function listProjectTestEnvironments(projectId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select({
+    id: projectTestEnvironments.id,
+    projectId: projectTestEnvironments.projectId,
+    name: projectTestEnvironments.name,
+    type: projectTestEnvironments.type,
+    loginUrl: projectTestEnvironments.loginUrl,
+    username: projectTestEnvironments.username,
+    vpnProfileId: projectTestEnvironments.vpnProfileId,
+    vpnProvider: projectTestEnvironments.vpnProvider,
+    vpnProfileName: projectTestEnvironments.vpnProfileName,
+    vpnUsername: projectTestEnvironments.vpnUsername,
+    vpnAutoConnect: projectTestEnvironments.vpnAutoConnect,
+    vpnConnectionStrategy: projectTestEnvironments.vpnConnectionStrategy,
+    vpnConfigFileName: projectTestEnvironments.vpnConfigFileName,
+    hasVpnConfig: sql<number>`${projectTestEnvironments.vpnConfigEncrypted} is not null`,
+    vpnConfigImportedAt: projectTestEnvironments.vpnConfigImportedAt,
+    vpnInstallerUrl: projectTestEnvironments.vpnInstallerUrl,
+    vpnInstallerSha256: projectTestEnvironments.vpnInstallerSha256,
+    vpnVerificationUrl: projectTestEnvironments.vpnVerificationUrl,
+    isActive: projectTestEnvironments.isActive,
+    createdAt: projectTestEnvironments.createdAt,
+    updatedAt: projectTestEnvironments.updatedAt,
+  }).from(projectTestEnvironments)
+    .where(eq(projectTestEnvironments.projectId, projectId))
+    .orderBy(projectTestEnvironments.name);
+}
+
+export async function getProjectTestEnvironment(id: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db.select().from(projectTestEnvironments)
+    .where(eq(projectTestEnvironments.id, id)).limit(1);
+  return rows[0];
+}
+
+export async function createProjectTestEnvironment(data: typeof projectTestEnvironments.$inferInsert) {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  const [result] = await db.insert(projectTestEnvironments).values(data);
+  return Number((result as any).insertId);
+}
+
+export async function updateProjectTestEnvironment(
+  id: number,
+  data: Partial<Pick<typeof projectTestEnvironments.$inferInsert,
+    "name" | "type" | "loginUrl" | "username" | "passwordEncrypted" | "vpnProfileId" |
+    "vpnProvider" | "vpnProfileName" | "vpnUsername" | "vpnPasswordEncrypted" |
+    "vpnAutoConnect" | "vpnConnectionStrategy" | "vpnConfigFileName" |
+    "vpnConfigEncrypted" | "vpnConfigPasswordEncrypted" | "vpnConfigImportedAt" |
+    "vpnInstallerUrl" | "vpnInstallerSha256" | "vpnVerificationUrl" | "isActive">>,
+) {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  await db.update(projectTestEnvironments).set(data).where(eq(projectTestEnvironments.id, id));
+}
+
+export async function deleteProjectTestEnvironment(id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  await db.delete(projectTestEnvironments).where(eq(projectTestEnvironments.id, id));
 }
 
 // ─── Sprints ─────────────────────────────────────────────────────────────────
+// â”€â”€â”€ ParÃ¢metros globais â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+export async function listVpnProfiles() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select({
+    id: vpnProfiles.id,
+    name: vpnProfiles.name,
+    provider: vpnProfiles.provider,
+    profileName: vpnProfiles.profileName,
+    username: vpnProfiles.username,
+    autoConnect: vpnProfiles.autoConnect,
+    connectionStrategy: vpnProfiles.connectionStrategy,
+    configFileName: vpnProfiles.configFileName,
+    hasPassword: sql<number>`${vpnProfiles.passwordEncrypted} is not null`,
+    hasConfig: sql<number>`${vpnProfiles.configEncrypted} is not null`,
+    hasConfigPassword: sql<number>`${vpnProfiles.configPasswordEncrypted} is not null`,
+    configImportedAt: vpnProfiles.configImportedAt,
+    installerUrl: vpnProfiles.installerUrl,
+    installerSha256: vpnProfiles.installerSha256,
+    verificationUrl: vpnProfiles.verificationUrl,
+    isActive: vpnProfiles.isActive,
+    createdAt: vpnProfiles.createdAt,
+    updatedAt: vpnProfiles.updatedAt,
+  }).from(vpnProfiles).orderBy(vpnProfiles.name);
+}
+
+export async function getVpnProfile(id: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db.select().from(vpnProfiles).where(eq(vpnProfiles.id, id)).limit(1);
+  return rows[0];
+}
+
+export async function createVpnProfile(data: typeof vpnProfiles.$inferInsert) {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  const [result] = await db.insert(vpnProfiles).values(data);
+  return Number((result as any).insertId);
+}
+
+export async function updateVpnProfile(id: number, data: Partial<typeof vpnProfiles.$inferInsert>) {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  await db.update(vpnProfiles).set(data).where(eq(vpnProfiles.id, id));
+}
+
+export async function deleteVpnProfile(id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  const [{ count }] = await db.select({ count: sql<number>`count(*)` }).from(projectTestEnvironments).where(eq(projectTestEnvironments.vpnProfileId, id));
+  if (Number(count) > 0) throw new Error("Esta VPN estÃ¡ associada a um ou mais ambientes e nÃ£o pode ser excluÃ­da.");
+  await db.delete(vpnProfiles).where(eq(vpnProfiles.id, id));
+}
+
+export async function listAiProviderSettings() {
+  const db = await getDb();
+  if (!db) return [];
+  return db.select({
+    id: aiProviderSettings.id,
+    name: aiProviderSettings.name,
+    provider: aiProviderSettings.provider,
+    apiUrl: aiProviderSettings.apiUrl,
+    model: aiProviderSettings.model,
+    hasApiKey: sql<number>`${aiProviderSettings.apiKeyEncrypted} is not null`,
+    isActive: aiProviderSettings.isActive,
+    createdAt: aiProviderSettings.createdAt,
+    updatedAt: aiProviderSettings.updatedAt,
+  }).from(aiProviderSettings).orderBy(desc(aiProviderSettings.isActive), aiProviderSettings.name);
+}
+
+export async function getAiProviderSetting(id: number) {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db.select().from(aiProviderSettings).where(eq(aiProviderSettings.id, id)).limit(1);
+  return rows[0];
+}
+
+export async function getActiveAiProviderSetting() {
+  const db = await getDb();
+  if (!db) return undefined;
+  const rows = await db.select().from(aiProviderSettings).where(eq(aiProviderSettings.isActive, 1)).orderBy(desc(aiProviderSettings.updatedAt)).limit(1);
+  return rows[0];
+}
+
+export async function createAiProviderSetting(data: typeof aiProviderSettings.$inferInsert) {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  return db.transaction(async tx => {
+    if (data.isActive) await tx.update(aiProviderSettings).set({ isActive: 0 });
+    const [result] = await tx.insert(aiProviderSettings).values(data);
+    return Number((result as any).insertId);
+  });
+}
+
+export async function updateAiProviderSetting(id: number, data: Partial<typeof aiProviderSettings.$inferInsert>) {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  await db.transaction(async tx => {
+    if (data.isActive) await tx.update(aiProviderSettings).set({ isActive: 0 });
+    await tx.update(aiProviderSettings).set(data).where(eq(aiProviderSettings.id, id));
+  });
+}
+
+export async function deleteAiProviderSetting(id: number) {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  await db.delete(aiProviderSettings).where(eq(aiProviderSettings.id, id));
+}
 export async function getSprints(projectId?: number) {
   const db = await getDb();
   if (!db) return [];
@@ -258,10 +540,17 @@ export async function getChecklist(sprintId: number, analystId: number): Promise
   return result[0] ?? null as any;
 }
 
+export async function getChecklistById(id: number): Promise<Checklist | null> {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(checklists).where(eq(checklists.id, id)).limit(1);
+  return rows[0] ?? null;
+}
+
 export async function getChecklistsByAnalyst(analystId: number) {
   const db = await getDb();
   if (!db) return [];
-  return db.select().from(checklists).where(eq(checklists.analystId, analystId)).orderBy(desc(checklists.startedAt));
+  return db.select().from(checklists).where(or(eq(checklists.responsibleUserId, analystId), and(isNull(checklists.responsibleUserId), eq(checklists.analystId, analystId)))).orderBy(desc(checklists.startedAt));
 }
 
 export async function getAllChecklists() {
@@ -274,7 +563,7 @@ export async function getAllChecklists() {
 export async function getProgressBySprints(analystId: number) {
   const db = await getDb();
   if (!db) return [];
-  const rows = await db.select().from(checklists).where(eq(checklists.analystId, analystId));
+  const rows = await db.select().from(checklists).where(or(eq(checklists.responsibleUserId, analystId), and(isNull(checklists.responsibleUserId), eq(checklists.analystId, analystId))));
   const map = new Map<number, { sprintId: number; completedItems: number; totalItems: number; status: string; startedAt: Date }>();
   for (const row of rows) {
     const existing = map.get(row.sprintId);
@@ -288,6 +577,7 @@ export async function getProgressBySprints(analystId: number) {
 export async function upsertChecklist(data: {
   sprintId: number;
   analystId: number;
+  responsibleUserId: number;
   checkedItems: string;
   totalItems: number;
   completedItems: number;
@@ -299,6 +589,7 @@ export async function upsertChecklist(data: {
   const existing = await getChecklist(data.sprintId, data.analystId);
   if (existing) {
     await db.update(checklists).set({
+      responsibleUserId: data.responsibleUserId,
       checkedItems: data.checkedItems,
       totalItems: data.totalItems,
       completedItems: data.completedItems,
@@ -310,6 +601,7 @@ export async function upsertChecklist(data: {
     await db.insert(checklists).values({
       sprintId: data.sprintId,
       analystId: data.analystId,
+      responsibleUserId: data.responsibleUserId,
       checkedItems: data.checkedItems,
       totalItems: data.totalItems,
       completedItems: data.completedItems,
@@ -321,35 +613,10 @@ export async function upsertChecklist(data: {
   }
 }
 
-// ─── Trail Progress ───────────────────────────────────────────────────────────
-export async function getTrailProgress(userId: number): Promise<TrailProgress | null> {
-  const db = await getDb();
-  if (!db) return null;
-  const result = await db.select().from(trailProgress).where(eq(trailProgress.userId, userId)).limit(1);
-  return result[0] ?? null;
-}
-
-export async function upsertTrailProgress(userId: number, completedTopics: string[]): Promise<void> {
+export async function updateChecklistResponsible(id: number, responsibleUserId: number): Promise<void> {
   const db = await getDb();
   if (!db) throw new Error("DB unavailable");
-  const existing = await getTrailProgress(userId);
-  const topicsJson = JSON.stringify(completedTopics);
-  if (existing) {
-    await db.update(trailProgress).set({ completedTopics: topicsJson }).where(eq(trailProgress.userId, userId));
-  } else {
-    await db.insert(trailProgress).values({ userId, completedTopics: topicsJson });
-  }
-}
-
-export async function getAllTrailProgress() {
-  const db = await getDb();
-  if (!db) return [];
-  return db.select({
-    id: trailProgress.id,
-    userId: trailProgress.userId,
-    completedTopics: trailProgress.completedTopics,
-    updatedAt: trailProgress.updatedAt,
-  }).from(trailProgress).orderBy(desc(trailProgress.updatedAt));
+  await db.update(checklists).set({ responsibleUserId }).where(eq(checklists.id, id));
 }
 
 // ─── QA Plan Documents ────────────────────────────────────────────────────────
@@ -399,137 +666,51 @@ export async function deleteQAPlanDocument(id: number): Promise<void> {
   await db.delete(qaPlanDocuments).where(eq(qaPlanDocuments.id, id));
 }
 
-// ─── Execuções e resultados de QA ───────────────────────────────────────────
-export async function upsertTestExecution(
-  data: NormalizedTestExecution,
-): Promise<{ id: number; created: boolean }> {
+export async function insertQATestPlan(data: typeof qaTestPlans.$inferInsert): Promise<number> {
   const db = await getDb();
   if (!db) throw new Error("DB unavailable");
-
-  let clientId = data.clientId;
-  let projectId = data.projectId;
-  let sprintId = data.sprintId;
-  let clientName = data.clientName;
-
-  if (!projectId) {
-    const projectRows = await db
-      .select()
-      .from(projects)
-      .where(eq(projects.name, data.projectName))
-      .limit(1);
-    const project = projectRows[0];
-    if (project) {
-      projectId = project.id;
-      clientId = clientId ?? project.clientId;
-    }
-  }
-  if (!clientName && clientId) {
-    const clientRows = await db
-      .select()
-      .from(clients)
-      .where(eq(clients.id, clientId))
-      .limit(1);
-    clientName = clientRows[0]?.name;
-  }
-  if (!sprintId && data.sprintName) {
-    const sprintCondition = projectId
-      ? and(
-          eq(sprints.name, data.sprintName),
-          eq(sprints.projectId, projectId),
-        )
-      : eq(sprints.name, data.sprintName);
-    const sprintRows = await db
-      .select()
-      .from(sprints)
-      .where(sprintCondition)
-      .limit(1);
-    sprintId = sprintRows[0]?.id;
-  }
-
-  const existingRows = await db
-    .select({ id: testExecutions.id })
-    .from(testExecutions)
-    .where(eq(testExecutions.externalExecutionId, data.externalExecutionId))
-    .limit(1);
-  const existingId = existingRows[0]?.id;
-
-  return db.transaction(async tx => {
-    const executionValues = {
-      externalExecutionId: data.externalExecutionId,
-      clientId: clientId ?? null,
-      projectId: projectId ?? null,
-      sprintId: sprintId ?? null,
-      clientName: clientName ?? null,
-      projectName: data.projectName,
-      sprintName: data.sprintName ?? null,
-      systemUrl: data.systemUrl ?? null,
-      status: data.status,
-      totalScenarios: data.totalScenarios,
-      passedScenarios: data.passedScenarios,
-      failedScenarios: data.failedScenarios,
-      blockedScenarios: data.blockedScenarios,
-      automationErrors: data.automationErrors,
-      flakyScenarios: data.flakyScenarios,
-      inconclusiveScenarios: data.inconclusiveScenarios,
-      coveragePercent: data.coveragePercent,
-      defectsFound: data.defectsFound,
-      criticalDefects: data.criticalDefects,
-      escapedDefects: data.escapedDefects,
-      evidenceDocxUrl: data.evidenceDocxUrl ?? null,
-      reliabilityReportUrl: data.reliabilityReportUrl ?? null,
-      regressionBundleId: data.regressionBundleId ?? null,
-      startedAt: data.startedAt ?? null,
-      finishedAt: data.finishedAt ?? null,
-      rawPayload: data.rawPayload,
-    };
-
-    let executionId = existingId;
-    if (executionId) {
-      await tx
-        .update(testExecutions)
-        .set(executionValues)
-        .where(eq(testExecutions.id, executionId));
-      await tx
-        .delete(testResults)
-        .where(eq(testResults.executionId, executionId));
-    } else {
-      const [insertResult] = await tx
-        .insert(testExecutions)
-        .values(executionValues);
-      executionId = (insertResult as any).insertId as number;
-    }
-
-    if (data.results.length > 0) {
-      await tx.insert(testResults).values(
-        data.results.map(result => ({
-          executionId,
-          externalScenarioId: result.externalScenarioId,
-          title: result.title,
-          moduleName: result.moduleName ?? null,
-          gherkin: result.gherkin ?? null,
-          status: result.status,
-          risk: result.risk,
-          summary: result.summary ?? null,
-          realDefects: result.realDefects,
-          automationFailures: result.automationFailures,
-          durationMs: result.durationMs ?? null,
-          evidenceJson: result.evidenceJson,
-          failuresJson: result.failuresJson,
-          reliabilityStatus: result.reliabilityStatus,
-          attempts: result.attempts,
-          passedAttempts: result.passedAttempts,
-          failedAttempts: result.failedAttempts,
-          automationErrorAttempts: result.automationErrorAttempts,
-          attemptsJson: result.attemptsJson,
-          regressionCodeUrl: result.regressionCodeUrl ?? null,
-          executedAt: result.executedAt ?? null,
-        })),
-      );
-    }
-
-    return { id: executionId, created: !existingId };
-  });
+  const [result] = await db.insert(qaTestPlans).values(data);
+  return Number((result as any).insertId);
 }
+
+export async function listQATestPlans(input: {
+  projectId?: number;
+  sprintId?: number;
+}) {
+  const db = await getDb();
+  if (!db) return [];
+  const filters = [];
+  if (input.projectId) filters.push(eq(qaTestPlans.projectId, input.projectId));
+  if (input.sprintId) filters.push(eq(qaTestPlans.sprintId, input.sprintId));
+  return db.select().from(qaTestPlans)
+    .where(filters.length ? and(...filters) : undefined)
+    .orderBy(desc(qaTestPlans.createdAt))
+    .limit(100);
+}
+
+export async function getQATestPlan(id: number) {
+  const db = await getDb();
+  if (!db) return null;
+  const rows = await db.select().from(qaTestPlans).where(eq(qaTestPlans.id, id)).limit(1);
+  return rows[0] ?? null;
+}
+
+export async function updateQATestPlanResponsible(id: number, responsibleUserId: number): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  await db.update(qaTestPlans)
+    .set({ responsibleUserId })
+    .where(eq(qaTestPlans.id, id));
+}
+
+export async function deleteQATestPlan(id: number): Promise<void> {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  await db.delete(qaTestPlans).where(eq(qaTestPlans.id, id));
+}
+
+// ─── Execuções e resultados de QA ───────────────────────────────────────────
+export * from "./repositories/testExecutionRepository";
 
 export async function upsertNonFunctionalRun(
   data: NormalizedNonFunctionalRun,
@@ -830,11 +1011,34 @@ export async function getAgentMemories(scopeKey: string, limit = 30) {
       ),
     )
     .orderBy(
+      sql`CASE ${qaAgentMemories.category}
+        WHEN 'SELETOR' THEN 0
+        WHEN 'AUTOMACAO' THEN 1
+        WHEN 'REGRA_NEGOCIO' THEN 2
+        WHEN 'OBSERVACAO' THEN 3
+        WHEN 'RISCO' THEN 4
+        ELSE 5
+      END`,
       desc(qaAgentMemories.confidence),
       desc(qaAgentMemories.occurrences),
       desc(qaAgentMemories.lastSeenAt),
     )
     .limit(Math.min(50, Math.max(1, limit)));
+}
+
+export async function getAgentMemoryByFingerprint(scopeKey: string, fingerprint: string) {
+  const db = await getDb();
+  if (!db) throw new Error("DB unavailable");
+  const rows = await db
+    .select()
+    .from(qaAgentMemories)
+    .where(and(
+      eq(qaAgentMemories.scopeKey, scopeKey),
+      eq(qaAgentMemories.fingerprint, fingerprint),
+      eq(qaAgentMemories.status, "ATIVA"),
+    ))
+    .limit(1);
+  return rows[0];
 }
 
 export async function upsertAgentMemories(
@@ -1389,44 +1593,47 @@ export async function getDashboardMetrics(filters: DashboardMetricFilters) {
     };
   }
 
-  const executionIds = executions.map(execution => execution.id);
+  const completedExecutions = executions.filter(
+    execution => execution.status !== "EM_ANDAMENTO" && execution.status !== "CANCELADO",
+  );
+  const executionIds = completedExecutions.map(execution => execution.id);
   const results = await db
     .select()
     .from(testResults)
     .where(inArray(testResults.executionId, executionIds));
-  const totalScenarios = executions.reduce(
+  const totalScenarios = completedExecutions.reduce(
     (total, execution) => total + execution.totalScenarios,
     0,
   );
-  const passed = executions.reduce(
+  const passed = completedExecutions.reduce(
     (total, execution) => total + execution.passedScenarios,
     0,
   );
-  const failed = executions.reduce(
+  const failed = completedExecutions.reduce(
     (total, execution) => total + execution.failedScenarios,
     0,
   );
-  const blocked = executions.reduce(
+  const blocked = completedExecutions.reduce(
     (total, execution) => total + execution.blockedScenarios,
     0,
   );
-  const automationErrors = executions.reduce(
+  const automationErrors = completedExecutions.reduce(
     (total, execution) => total + execution.automationErrors,
     0,
   );
-  const flaky = executions.reduce(
+  const flaky = completedExecutions.reduce(
     (total, execution) => total + execution.flakyScenarios,
     0,
   );
-  const defectsFound = executions.reduce(
+  const defectsFound = completedExecutions.reduce(
     (total, execution) => total + execution.defectsFound,
     0,
   );
-  const criticalDefects = executions.reduce(
+  const criticalDefects = completedExecutions.reduce(
     (total, execution) => total + execution.criticalDefects,
     0,
   );
-  const escapedDefects = executions.reduce(
+  const escapedDefects = completedExecutions.reduce(
     (total, execution) => total + execution.escapedDefects,
     0,
   );
@@ -1502,7 +1709,7 @@ export async function getDashboardMetrics(filters: DashboardMetricFilters) {
       executed: number;
     }
   >();
-  for (const execution of [...executions].reverse()) {
+  for (const execution of [...completedExecutions].reverse()) {
     const date = execution.finishedAt ?? execution.createdAt;
     const label =
       execution.sprintName ||

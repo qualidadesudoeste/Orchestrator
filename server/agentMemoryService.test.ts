@@ -72,6 +72,45 @@ describe("agent memory service", () => {
     expect(memories).toHaveLength(0);
   });
 
+  it("aprende um mapa de telas mesmo quando o cenário fica bloqueado", () => {
+    const memories = extractAgentMemoryLearnings({
+      execution_id: "exec-map",
+      scenario_id: "CT-map",
+      projeto: "Portal",
+      sistema_url: "https://portal.example.com/login",
+      status: "BLOQUEADO",
+      resultado_teste: {
+        status: "BLOQUEADO",
+        mapa_interface: [{
+          tela: "Pedidos",
+          rota: "/pedidos",
+          acesso: "Menu Cadastros > Pedidos",
+          elementos: ["button Novo pedido", "textbox Cliente"],
+        }],
+      },
+    });
+    expect(memories).toHaveLength(1);
+    expect(memories[0].category).toBe("SELETOR");
+    expect(memories[0].title).toBe("Mapa da tela: Pedidos");
+    expect(memories[0].content).toContain("Menu Cadastros > Pedidos");
+  });
+
+  it("não memoriza regra de negócio que não foi executada", () => {
+    const memories = extractAgentMemoryLearnings({
+      projeto: "Portal",
+      status: "BLOQUEADO",
+      resultado_teste: {
+        status: "BLOQUEADO",
+        aprendizados: [{
+          categoria: "REGRA_NEGOCIO",
+          titulo: "Rollback",
+          conteudo: "A regra requer validar rollback, mas não foi exercitada.",
+        }],
+      },
+    });
+    expect(memories).toHaveLength(0);
+  });
+
   it("formata contexto compacto para o prompt", () => {
     const context = formatAgentMemoryContext([
       {

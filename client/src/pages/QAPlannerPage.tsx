@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useEffect, useState, useRef } from "react";
 import { trpc } from "@/lib/trpc";
 import AppLayout from "@/components/AppLayout";
 import { Button } from "@/components/ui/button";
@@ -7,12 +7,14 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import {
   Wand2, FileText, Plus, Trash2, Upload, Download,
   ChevronDown, ChevronUp, Loader2, ClipboardList, History, X,
-  FileJson, FileUp, ShieldCheck, AlertTriangle, AlertCircle, Info, CheckCircle2
+  FileJson, FileUp, ShieldCheck, AlertTriangle, AlertCircle, Info, CheckCircle2,
+  Play, ExternalLink, Code2, Globe2, Save
 } from "lucide-react";
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
@@ -25,6 +27,8 @@ interface TestCase {
   entao: string;
   resultado_esperado: string;
   tipo: string;
+  produz?: string[];
+  consome?: string[];
 }
 interface TestCard {
   categoria: string;
@@ -167,6 +171,62 @@ function montarHUConsolidada(cards: SigCard[]): string {
 }
 
 const STORAGE_KEY = "qa-planner-evidence-draft";
+const GENERATOR_STORAGE_KEY = "orchestrator-qa-planner-generator-state-v2";
+const PAGE_STORAGE_KEY = "orchestrator-qa-planner-page-state";
+
+type GeneratorUiState = {
+  userStory: string;
+  showUserStoryEditor: boolean;
+  systemType: string;
+  criticality: "low" | "medium" | "high" | "critical";
+  result: AIResult | null;
+  expandedCards: number[];
+  selectedProjectId: string;
+  selectedSprintId: string;
+  coverageResult: CoverageAnalysis | null;
+  showCoveragePanel: boolean;
+  showAutomationPanel: boolean;
+  selectedEnvironmentIds: string[];
+  authorizedEnvironment: boolean;
+  startedExecution: { executionId: string; totalScenarios: number } | null;
+  savedPlanId: number | null;
+};
+
+const EMPTY_GENERATOR_UI_STATE: GeneratorUiState = {
+  userStory: "",
+  showUserStoryEditor: false,
+  systemType: "web",
+  criticality: "medium",
+  result: null,
+  expandedCards: [0],
+  selectedProjectId: "",
+  selectedSprintId: "",
+  coverageResult: null,
+  showCoveragePanel: false,
+  showAutomationPanel: false,
+  selectedEnvironmentIds: [],
+  authorizedEnvironment: false,
+  startedExecution: null,
+  savedPlanId: null,
+};
+
+function loadGeneratorUiState(): GeneratorUiState {
+  try {
+    const saved = sessionStorage.getItem(GENERATOR_STORAGE_KEY);
+    const parsed = saved ? JSON.parse(saved) : {};
+    const queryParams = new URLSearchParams(window.location.search);
+    return {
+      ...EMPTY_GENERATOR_UI_STATE,
+      ...parsed,
+      selectedProjectId: queryParams.get("projectId") ?? parsed.selectedProjectId ?? "",
+      selectedSprintId: queryParams.get("sprintId") ?? parsed.selectedSprintId ?? "",
+      expandedCards: Array.isArray(parsed.expandedCards) ? parsed.expandedCards : [0],
+      selectedEnvironmentIds: Array.isArray(parsed.selectedEnvironmentIds) ? parsed.selectedEnvironmentIds : [],
+    };
+  } catch {
+    return EMPTY_GENERATOR_UI_STATE;
+  }
+}
 function loadDraft(): EvidenceProject {
   try {
     const s = localStorage.getItem(STORAGE_KEY);
@@ -177,13 +237,15 @@ function loadDraft(): EvidenceProject {
 
 // ─── Sub-componente: Gerador de Casos ─────────────────────────────────────────
 function CaseGenerator({ onExport }: { onExport: (cases: TestCase[], project: { name: string; sprint: string; clientName: string }) => void }) {
-  const [userStory, setUserStory] = useState("");
-  const [systemType, setSystemType] = useState("web");
-  const [criticality, setCriticality] = useState<"low" | "medium" | "high" | "critical">("medium");
-  const [result, setResult] = useState<AIResult | null>(null);
-  const [expandedCards, setExpandedCards] = useState<Set<number>>(new Set([0]));
-  const [selectedProjectId, setSelectedProjectId] = useState<string>("");
-  const [selectedSprintId, setSelectedSprintId] = useState<string>("");
+  const [initialUiState] = useState(loadGeneratorUiState);
+  const [userStory, setUserStory] = useState(initialUiState.userStory);
+  const [showUserStoryEditor, setShowUserStoryEditor] = useState(initialUiState.showUserStoryEditor);
+  const [systemType, setSystemType] = useState(initialUiState.systemType);
+  const [criticality, setCriticality] = useState<"low" | "medium" | "high" | "critical">(initialUiState.criticality);
+  const [result, setResult] = useState<AIResult | null>(initialUiState.result);
+  const [expandedCards, setExpandedCards] = useState<Set<number>>(() => new Set(initialUiState.expandedCards));
+  const [selectedProjectId, setSelectedProjectId] = useState<string>(initialUiState.selectedProjectId);
+  const [selectedSprintId, setSelectedSprintId] = useState<string>(initialUiState.selectedSprintId);
   const [importWorking, setImportWorking] = useState(false);
   const jsonRef = useRef<HTMLInputElement>(null);
   const docRef = useRef<HTMLInputElement>(null);
@@ -208,15 +270,79 @@ function CaseGenerator({ onExport }: { onExport: (cases: TestCase[], project: { 
   const selectedProject = allProjects.find(p => String(p.id) === selectedProjectId);
   const selectedSprint = allSprints.find(s => String(s.id) === selectedSprintId);
   const selectedClient = selectedProject ? clients.find(c => c.id === selectedProject.clientId) : null;
+  const { data: testEnvironments = [] } = trpc.testEnvironments.list.useQuery(
+    { projectId: Number(selectedProjectId) || 0 },
+    { enabled: Boolean(selectedProjectId) },
+  );
 
-  const [coverageResult, setCoverageResult] = useState<CoverageAnalysis | null>(null);
-  const [showCoveragePanel, setShowCoveragePanel] = useState(false);
+  const [coverageResult, setCoverageResult] = useState<CoverageAnalysis | null>(initialUiState.coverageResult);
+  const [showCoveragePanel, setShowCoveragePanel] = useState(initialUiState.showCoveragePanel);
+  const [showAutomationPanel, setShowAutomationPanel] = useState(initialUiState.showAutomationPanel);
+  const [selectedEnvironmentIds, setSelectedEnvironmentIds] = useState<string[]>(initialUiState.selectedEnvironmentIds);
+  const [authorizedEnvironment, setAuthorizedEnvironment] = useState(initialUiState.authorizedEnvironment);
+  const [startedExecution, setStartedExecution] = useState<{
+    executionId: string;
+    totalScenarios: number;
+  } | null>(initialUiState.startedExecution);
+  const [savedPlanId, setSavedPlanId] = useState<number | null>(initialUiState.savedPlanId);
+
+  useEffect(() => {
+    const state: GeneratorUiState = {
+      userStory,
+      showUserStoryEditor,
+      systemType,
+      criticality,
+      result,
+      expandedCards: Array.from(expandedCards),
+      selectedProjectId,
+      selectedSprintId,
+      coverageResult,
+      showCoveragePanel,
+      showAutomationPanel,
+      selectedEnvironmentIds,
+      authorizedEnvironment,
+      startedExecution,
+      savedPlanId,
+    };
+    sessionStorage.setItem(GENERATOR_STORAGE_KEY, JSON.stringify(state));
+  }, [userStory, showUserStoryEditor, systemType, criticality, result, expandedCards, selectedProjectId, selectedSprintId, coverageResult, showCoveragePanel, showAutomationPanel, selectedEnvironmentIds, authorizedEnvironment, startedExecution, savedPlanId]);
+  const executionProgressQuery = trpc.testExecutions.progress.useQuery(
+    { externalExecutionId: startedExecution?.executionId ?? "" },
+    {
+      enabled: Boolean(startedExecution?.executionId),
+      refetchInterval: 2_000,
+      refetchOnWindowFocus: true,
+    },
+  );
+  const executionProgress = executionProgressQuery.data;
+  const savePlanMutation = trpc.qaPlanner.savePlan.useMutation({
+    onSuccess: data => { setSavedPlanId(data.id); toast.success("Plano salvo na sprint."); },
+    onError: error => toast.error("Os casos foram gerados, mas o plano não pôde ser salvo: " + error.message),
+  });
 
   const generateMutation = trpc.qaPlanner.generateCases.useMutation({
     onSuccess: (data) => {
-      setResult(data as AIResult);
-      setCoverageResult(null); // reset análise anterior ao gerar novos casos
-      toast.success("Casos de teste gerados com sucesso!");
+      const cards = Array.isArray(data?.cards)
+        ? data.cards.filter(card => Array.isArray(card.casos))
+        : [];
+      if (cards.length === 0) {
+        toast.error("A IA retornou uma resposta sem casos de teste. Gere novamente.");
+        return;
+      }
+      const normalizedResult = { ...data, cards } as AIResult;
+      setResult(normalizedResult);
+      setSavedPlanId(null);
+      setCoverageResult(null);
+      if (selectedProjectId && selectedSprintId) {
+        savePlanMutation.mutate({
+          projectId: Number(selectedProjectId),
+          sprintId: Number(selectedSprintId),
+          userStory,
+          systemType,
+          criticality,
+          result: normalizedResult,
+        });
+      }
     },
     onError: (err) => toast.error("Erro ao gerar casos: " + err.message),
   });
@@ -230,6 +356,17 @@ function CaseGenerator({ onExport }: { onExport: (cases: TestCase[], project: { 
     onError: (err) => toast.error("Erro na análise: " + err.message),
   });
 
+  const startAutomationMutation = trpc.qaPlanner.startAutomatedTests.useMutation({
+    onSuccess: (data) => {
+      setStartedExecution({
+        executionId: data.executionId,
+        totalScenarios: data.totalScenarios,
+      });
+      toast.success("Execução adicionada à fila. Você já pode preparar outro plano.");
+    },
+    onError: (err) => toast.error("Erro ao iniciar testes: " + err.message),
+  });
+
   const handleAnalyzeCoverage = () => {
     if (!result) return;
     const allCases = result.cards.flatMap(c => c.casos);
@@ -238,6 +375,39 @@ function CaseGenerator({ onExport }: { onExport: (cases: TestCase[], project: { 
       generatedCases: allCases,
       projectContext: selectedProject?.name,
     });
+  };
+
+  const handleStartAutomation = () => {
+    if (!result || !selectedProjectId || !selectedSprintId) return;
+    if (selectedEnvironmentIds.length === 0) {
+      toast.error("Selecione ao menos um ambiente de automação");
+      return;
+    }
+    if (!authorizedEnvironment) {
+      toast.error("Confirme que o ambiente está autorizado para testes");
+      return;
+    }
+
+    startAutomationMutation.mutate({
+      projectId: Number(selectedProjectId),
+      sprintId: Number(selectedSprintId),
+      environmentIds: selectedEnvironmentIds.map(Number),
+      cases: result.cards.flatMap(card => card.casos),
+    });
+  };
+
+  const handleNewPlan = () => {
+    setUserStory("");
+    setShowUserStoryEditor(false);
+    setResult(null);
+    setCoverageResult(null);
+    setShowCoveragePanel(false);
+    setShowAutomationPanel(false);
+    setAuthorizedEnvironment(false);
+    setStartedExecution(null);
+    setSavedPlanId(null);
+    setExpandedCards(new Set([0]));
+    toast.success("Novo plano preparado. A execução anterior continua normalmente na fila.");
   };
 
   const toggleCard = (idx: number) => {
@@ -254,15 +424,39 @@ function CaseGenerator({ onExport }: { onExport: (cases: TestCase[], project: { 
     baixa: "bg-green-100 text-green-700 border-green-200",
   };
 
-  const totalCases = result?.cards.reduce((acc, c) => acc + c.casos.length, 0) ?? 0;
+  const totalCases = result?.cards?.reduce(
+    (acc, c) => acc + (Array.isArray(c.casos) ? c.casos.length : 0),
+    0
+  ) ?? 0;
 
   const handleGenerate = () => {
     if (!selectedProjectId) { toast.error("Selecione um projeto"); return; }
     if (!selectedSprintId) { toast.error("Selecione uma sprint"); return; }
     if (userStory.trim().length < 10) { toast.error("Informe a História de Usuário"); return; }
-    generateMutation.mutate({ userStory, systemType, criticality });
+    generateMutation.mutate({
+      userStory,
+      systemType,
+      criticality,
+      projectId: Number(selectedProjectId),
+      projectContext: selectedProject?.name,
+    });
   };
 
+  const handleSavePlan = () => {
+    if (!result) return;
+    if (!selectedProjectId || !selectedSprintId) {
+      toast.error("Selecione o projeto e a sprint antes de salvar.");
+      return;
+    }
+    savePlanMutation.mutate({
+      projectId: Number(selectedProjectId),
+      sprintId: Number(selectedSprintId),
+      userStory,
+      systemType,
+      criticality,
+      result,
+    });
+  };
   const handleExport = () => {
     if (!result) return;
     const allCases = result.cards.flatMap(c => c.casos);
@@ -358,7 +552,7 @@ function CaseGenerator({ onExport }: { onExport: (cases: TestCase[], project: { 
               </Label>
               <Select
                 value={selectedProjectId}
-                onValueChange={(v) => { setSelectedProjectId(v); setSelectedSprintId(""); }}
+                onValueChange={(v) => { setSelectedProjectId(v); setSelectedSprintId(""); setSelectedEnvironmentIds([]); }}
               >
                 <SelectTrigger className="mt-1">
                   <SelectValue placeholder="Selecione o projeto..." />
@@ -373,6 +567,14 @@ function CaseGenerator({ onExport }: { onExport: (cases: TestCase[], project: { 
                   ))}
                 </SelectContent>
               </Select>
+              {selectedProject && (
+                <p className={`mt-1.5 flex items-center gap-1 text-[11px] ${selectedProject.sourceCodeIndexedAt ? "text-emerald-700" : "text-slate-400"}`}>
+                  <Code2 className="h-3 w-3" />
+                  {selectedProject.sourceCodeIndexedAt
+                    ? `Código-fonte ativo (${selectedProject.sourceCodeFileCount ?? 0} arquivos)`
+                    : "Sem código-fonte indexado; a automação usará apenas a interface"}
+                </p>
+              )}
             </div>
             {/* Sprint */}
             <div>
@@ -405,9 +607,11 @@ function CaseGenerator({ onExport }: { onExport: (cases: TestCase[], project: { 
             <CardContent className="pt-4 flex flex-col gap-3">
               {/* Cabeçalho da HU com botões de importação */}
               <div className="flex items-center justify-between">
-                <Label className="text-xs font-medium" style={{ color: "#374151" }}>
+                <button type="button" onClick={() => setShowUserStoryEditor(open => !open)} className="flex items-center gap-1.5 text-xs font-medium text-slate-700">
+                  {showUserStoryEditor ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
                   História de Usuário <span style={{ color: "#ef4444" }}>*</span>
-                </Label>
+                  {!showUserStoryEditor && userStory.trim() && <span className="ml-1 font-normal text-slate-400">({userStory.length} caracteres)</span>}
+                </button>
                 <div className="flex gap-1.5">
                   <input ref={jsonRef} type="file" accept="application/json" className="hidden" onChange={handleImportJSON} />
                   <input ref={docRef} type="file" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" multiple className="hidden" onChange={handleImportDoc} />
@@ -419,8 +623,23 @@ function CaseGenerator({ onExport }: { onExport: (cases: TestCase[], project: { 
                     {importWorking ? <Loader2 className="w-3 h-3 animate-spin" /> : <FileUp className="w-3 h-3" />}
                     Importar PDF/DOCX
                   </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="h-7 px-2 text-xs gap-1.5"
+                    onClick={handleGenerate}
+                    disabled={generateMutation.isPending || !selectedProjectId || !selectedSprintId || userStory.trim().length < 10}
+                    style={{ background: "#2563eb", color: "white" }}
+                  >
+                    {generateMutation.isPending ? (
+                      <><Loader2 className="w-3 h-3 animate-spin" />Gerando...</>
+                    ) : (
+                      <><Wand2 className="w-3 h-3" />Gerar Casos</>
+                    )}
+                  </Button>
                 </div>
               </div>
+              {showUserStoryEditor && (
               <Textarea
                 value={userStory}
                 onChange={e => setUserStory(e.target.value)}
@@ -428,6 +647,7 @@ function CaseGenerator({ onExport }: { onExport: (cases: TestCase[], project: { 
                 className="resize-none text-sm"
                 style={{ minHeight: "280px" }}
               />
+              )}
               {/* Linha de configurações: Tipo de Sistema + Criticidade */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -460,19 +680,12 @@ function CaseGenerator({ onExport }: { onExport: (cases: TestCase[], project: { 
               </div>
               {/* Ações */}
               <div className="flex gap-2 flex-wrap">
-                <Button
-                  onClick={handleGenerate}
-                  disabled={generateMutation.isPending || !selectedProjectId || !selectedSprintId || userStory.trim().length < 10}
-                  className="flex-1"
-                  style={{ background: "#2563eb", color: "white" }}
-                >
-                  {generateMutation.isPending ? (
-                    <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Gerando casos...</>
-                  ) : (
-                    <><Wand2 className="w-4 h-4 mr-2" />Gerar Casos de Teste</>
-                  )}
-                </Button>
                 {result && (
+                  <Button onClick={handleSavePlan} disabled={savePlanMutation.isPending || Boolean(savedPlanId)} variant="outline">
+                    {savePlanMutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+                    {savedPlanId ? "Plano salvo" : "Salvar plano"}
+                  </Button>
+                )}                {result && (
                   <Button
                     onClick={handleAnalyzeCoverage}
                     disabled={analyzeMutation.isPending}
@@ -487,9 +700,29 @@ function CaseGenerator({ onExport }: { onExport: (cases: TestCase[], project: { 
                   </Button>
                 )}
                 {result && (
+                  <Button
+                    onClick={() => setShowAutomationPanel(value => !value)}
+                    style={{ background: "#16a34a", color: "white" }}
+                  >
+                    <Play className="w-4 h-4 mr-2" />
+                    Iniciar testes
+                  </Button>
+                )}
+                {result && (
                   <Button onClick={handleExport} variant="outline">
                     <FileText className="w-4 h-4 mr-2" />
                     Exportar para Evidências
+                  </Button>
+                )}
+                {result && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={handleNewPlan}
+                    disabled={generateMutation.isPending || startAutomationMutation.isPending}
+                  >
+                    <Plus className="w-4 h-4 mr-2" />
+                    Novo plano
                   </Button>
                 )}
               </div>
@@ -497,6 +730,156 @@ function CaseGenerator({ onExport }: { onExport: (cases: TestCase[], project: { 
           </Card>
 
           {/* ── Painel de Análise de Cobertura ── */}
+          {showAutomationPanel && result && (
+            <Card style={{ background: "#f0fdf4", border: "2px solid #86efac", borderRadius: "0.75rem" }}>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-sm flex items-center gap-2" style={{ color: "#166534" }}>
+                  <Play className="w-4 h-4" />
+                  Executar testes automatizados
+                </CardTitle>
+                <p className="text-xs" style={{ color: "#166534" }}>
+                  O agente abrirá o sistema informado e executará os {totalCases} cenários pelo Playwright.
+                </p>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-4 pt-0">
+                <div>
+                  <Label className="text-xs font-medium">Ambientes de execução</Label>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Selecione todos os ambientes usados pelos cenários. O agente alternará entre eles conforme os passos do teste.
+                  </p>
+                  <div className="mt-2 grid gap-2">
+                    {testEnvironments.filter(environment => environment.isActive).map(environment => {
+                      const environmentId = String(environment.id);
+                      const checked = selectedEnvironmentIds.includes(environmentId);
+                      return (
+                        <label
+                          key={environment.id}
+                          className={`flex cursor-pointer items-start gap-3 rounded-md border p-3 transition-colors ${checked ? "border-blue-500 bg-blue-50" : "border-slate-200 bg-white hover:bg-slate-50"}`}
+                        >
+                          <input
+                            type="checkbox"
+                            className="mt-1"
+                            checked={checked}
+                            onChange={() => setSelectedEnvironmentIds(current =>
+                              checked
+                                ? current.filter(id => id !== environmentId)
+                                : [...current, environmentId]
+                            )}
+                          />
+                          <span className="min-w-0">
+                            <span className="block text-sm font-medium text-slate-800">{environment.name} · {environment.type}</span>
+                            <span className="block truncate text-xs text-slate-500">{environment.loginUrl}</span>
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                  {testEnvironments.length === 0 && (
+                    <Button type="button" variant="link" className="mt-1 h-auto p-0 text-xs" onClick={() => window.location.assign("/workspace")}>
+                      <Globe2 className="mr-1 h-3.5 w-3.5" /> Cadastrar ambientes deste projeto
+                    </Button>
+                  )}
+                </div>
+
+                <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+                  O Orchestrator recupera as credenciais criptografadas somente no servidor e as utiliza durante esta execução.
+                  A senha nunca é enviada de volta para esta tela nem exibida no histórico.
+                </div>
+
+                <label className="flex items-start gap-2 text-xs text-slate-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={authorizedEnvironment}
+                    onChange={event => setAuthorizedEnvironment(event.target.checked)}
+                    className="mt-0.5"
+                  />
+                  Confirmo que este ambiente e esta conta estão autorizados para testes automatizados.
+                </label>
+
+                {startedExecution && (
+                  <div className="rounded-lg border border-green-300 bg-white p-4 space-y-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold text-green-700">
+                          {executionProgress?.executionState === "FINISHED"
+                            ? "Execução concluída"
+                            : executionProgress?.executionState === "FAILED"
+                              ? "Falha na execução"
+                              : executionProgress?.executionState === "CANCELLED"
+                                ? "Execução encerrada"
+                                : executionProgress?.executionState === "PAUSED"
+                                  ? "Execução pausada"
+                                  : executionProgress?.executionState === "RUNNING"
+                                    ? "Automação em execução"
+                                    : "Execução na fila"}
+                        </p>
+                        <p className="text-xs text-slate-600">
+                          {executionProgress?.completedScenarios ?? 0} de {executionProgress?.totalScenarios ?? startedExecution.totalScenarios} cenários · {startedExecution.executionId}
+                        </p>
+                      </div>
+                      <Button type="button" variant="outline" onClick={() => window.location.assign("/dashboard")}>
+                        <ExternalLink className="w-4 h-4 mr-2" /> Dashboard
+                      </Button>
+                    </div>
+                    <Progress value={executionProgress?.progressPercent ?? 0} className="h-2" />
+                    <div className="grid gap-2 text-xs sm:grid-cols-2">
+                      <div className="rounded bg-slate-50 p-2">
+                        <span className="text-slate-500">Etapa atual</span>
+                        <p className="font-medium text-slate-800">{executionProgress?.currentStage?.replaceAll("_", " ") ?? "PREPARANDO"}</p>
+                      </div>
+                      <div className="rounded bg-slate-50 p-2">
+                        <span className="text-slate-500">Ambiente</span>
+                        <p className="font-medium text-slate-800">{executionProgress?.currentEnvironment || "Aguardando identificação"}</p>
+                      </div>
+                    </div>
+                    <p className="text-xs text-slate-600">
+                      {executionProgress?.progressMessage ?? "O agente está preparando a execução."}
+                    </p>
+                    {executionProgress?.scenarios && executionProgress.scenarios.length > 0 && (
+                      <div className="max-h-52 space-y-1 overflow-y-auto border-t pt-2">
+                        {executionProgress.scenarios.map(scenario => (
+                          <div key={scenario.scenarioId} className="flex items-center justify-between gap-2 rounded px-2 py-1.5 text-xs hover:bg-slate-50">
+                            <span className="min-w-0 truncate">{scenario.scenarioIndex}. {scenario.scenarioTitle}</span>
+                            <Badge variant="outline" className={
+                              scenario.status === "PASSOU" ? "border-green-300 text-green-700" :
+                                scenario.status === "FALHOU" ? "border-red-300 text-red-700" :
+                                  scenario.status === "BLOQUEADO" ? "border-amber-300 text-amber-700" :
+                                    scenario.status === "ERRO_AUTOMACAO" ? "border-slate-400 text-slate-700" :
+                                      "border-blue-300 text-blue-700"
+                            }>
+                              {scenario.status === "EM_ANDAMENTO" ? "Executando" : scenario.status}
+                            </Badge>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {executionProgressQuery.isError && (
+                      <p className="text-xs text-red-600">Não foi possível atualizar o progresso agora. Uma nova tentativa será feita automaticamente.</p>
+                    )}
+                  </div>
+                )}
+
+                <Button
+                  type="button"
+                  onClick={handleStartAutomation}
+                  disabled={startAutomationMutation.isPending || selectedEnvironmentIds.length === 0}
+                  style={{ background: "#16a34a", color: "white" }}
+                >
+                  {startAutomationMutation.isPending ? (
+                    <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Iniciando agente...</>
+                  ) : (
+                    <><Play className="w-4 h-4 mr-2" />Executar {totalCases} cenários agora</>
+                  )}
+                </Button>
+                {startedExecution && executionProgress?.executionState !== "FINISHED" && executionProgress?.executionState !== "FAILED" && (
+                  <p className="text-xs text-slate-600">
+                    Esta execução continuará em segundo plano. Use <strong>Novo plano</strong> para gerar e iniciar outra automação; se o worker estiver ocupado, ela ficará na fila.
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
           {showCoveragePanel && coverageResult && (
             <Card style={{ background: "#fffbeb", border: "2px solid #f59e0b", borderRadius: "0.75rem", boxShadow: "0 2px 8px rgba(245,158,11,0.15)" }}>
               <CardHeader className="pb-3">
@@ -984,9 +1367,19 @@ function EvidenceEditor({ initialProject }: { initialProject?: Partial<EvidenceP
 
 // ─── Página principal ─────────────────────────────────────────────────────────
 export default function QAPlannerPage() {
-  const [activeTab, setActiveTab] = useState("generator");
+  const [activeTab, setActiveTab] = useState(() => {
+    try {
+      return sessionStorage.getItem(PAGE_STORAGE_KEY) ?? "generator";
+    } catch {
+      return "generator";
+    }
+  });
   const [exportedCases, setExportedCases] = useState<TestCase[]>([]);
   const [exportedProject, setExportedProject] = useState<{ name: string; sprint: string; clientName: string } | null>(null);
+
+  useEffect(() => {
+    sessionStorage.setItem(PAGE_STORAGE_KEY, activeTab);
+  }, [activeTab]);
 
   const handleExport = (cases: TestCase[], project: { name: string; sprint: string; clientName: string }) => {
     setExportedCases(cases);

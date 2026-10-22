@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type { Express, Request } from "express";
+import { logError } from "./_core/logger";
 import { ENV } from "./_core/env";
 import {
   getDefectCardByExternalId,
@@ -105,7 +106,7 @@ export function registerDefectCardRoutes(app: Express): void {
         });
         return;
       }
-      console.error("[qa-defect-cards] error:", error);
+      logError("qa_defect_cards_failed", error);
       res.status(500).json({
         error: `Falha ao gerar cards de defeito: ${message}`,
       });
@@ -143,7 +144,7 @@ export function registerDefectCardRoutes(app: Express): void {
         )
         .send(card.markdown);
     } catch (error) {
-      console.error("[qa-defect-card-download] error:", error);
+      logError("qa_defect_card_download_failed", error);
       res.status(500).json({ error: "Falha ao baixar card." });
     }
   });

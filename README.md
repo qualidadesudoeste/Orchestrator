@@ -1,39 +1,54 @@
 # Orchestrator — Plataforma de Qualidade
 
-Hub web para planejamento, execução e acompanhamento das atividades de QA. A plataforma reúne clientes, projetos, sprints, checklist do POP, trilha de conhecimento, geração de cenários por IA e análise de cobertura.
+Hub web para planejamento, execução e acompanhamento das atividades de QA. A plataforma reúne clientes, projetos, sprints, checklist do POP, geração de cenários por IA, execução automatizada e análise de cobertura.
 
-O agente de execução utiliza n8n e Playwright MCP. Os artefatos dessa integração ficam em [`automation/`](automation/README.md).
+O agente de execução usa Playwright diretamente no worker da plataforma. Os
+detalhes ficam em [`automation/`](automation/README.md).
 
 ## Arquitetura atual
 
 - Frontend: React 19, TypeScript, Vite, TailwindCSS e shadcn/ui.
 - Backend: Node.js, Express e tRPC.
 - Banco: MySQL com Drizzle ORM.
-- IA: endpoint compatível com OpenAI Chat Completions por meio de `invokeLLM`.
-- Automação: n8n 2.31.4 com MCP Client nativo e Playwright MCP.
+- IA: OpenAI API (`gpt-5.6-terra`) para geração e análise de cenários.
+- Automação: worker Windows independente, fila persistida e `playwright-core`.
+
+A API não abre navegadores nem consome a fila. O container Linux serve apenas
+frontend/API e gera DOCX; um processo separado no Windows executa Chrome, VPN e
+Playwright. Assim, reiniciar ou escalar a API não cria executores duplicados.
 
 ## Pré-requisitos
 
 - Node.js 20.19 ou superior.
 - npm.
 - MySQL acessível local ou remotamente.
-- Docker Desktop para executar o n8n.
-- Google Chrome para o Playwright MCP local.
+- Google Chrome ou Chromium compatível com Playwright.
+- Chave da OpenAI API com faturamento/créditos habilitados.
 
 ## Instalação local no Windows
 
 ```powershell
 Copy-Item .env.example .env
-npm install
+npm ci
 npm run check
 npm test
 npm run build
 npm run dev
 ```
 
-A aplicação inicia por padrão em `http://localhost:3000`. Antes de iniciar, preencha no `.env` pelo menos `DATABASE_URL`, `JWT_SECRET` e `BUILT_IN_FORGE_API_KEY`.
+Em outro terminal, inicie o executor Windows:
 
-O projeto usa npm como gerenciador oficial. O arquivo `.npmrc` mantém compatibilidade temporária com um plugin legado do ambiente Manus que ainda declara suporte somente a versões antigas do Vite.
+```powershell
+npm run dev:worker
+```
+
+A aplicação inicia por padrão em `http://localhost:3000`. Antes de iniciar,
+preencha no `.env` pelo menos `DATABASE_URL`, `JWT_SECRET`,
+`CREDENTIAL_ENCRYPTION_KEY`, `OPENAI_API_KEY`,
+`LLM_API_URL=https://api.openai.com` e `LLM_MODEL=gpt-5.6-terra`. A assinatura
+do ChatGPT não inclui créditos da API.
+
+O projeto usa npm como gerenciador oficial.
 
 ## Banco de dados
 
@@ -53,21 +68,20 @@ npm test        # Vitest
 npm run build   # Frontend e servidor de produção
 ```
 
-O teste de integração com IA é ignorado quando `BUILT_IN_FORGE_API_KEY` não está configurada. Os testes locais de autenticação utilizam mocks e não dependem de um banco existente.
+O teste de integração com IA roda quando `OPENAI_API_KEY` está configurada. Os
+testes locais de autenticação utilizam mocks e não dependem de um banco
+existente.
 
-## n8n e Playwright MCP
+## Executor Playwright direto
 
-Consulte [`automation/README.md`](automation/README.md) para iniciar o MCP, importar o workflow e executar o teste de fumaça. O endpoint usado pelo n8n é:
-
-```text
-http://host.docker.internal:8931/mcp
-```
+Consulte [`automation/worker/README.md`](automation/worker/README.md) para configurar o worker,
+executar cenários pela interface e localizar screenshots e traces.
 
 ## Testes não funcionais
 
 O Orchestrator consolida performance com k6, segurança passiva com OWASP ZAP e
 acessibilidade com axe-core. O executor autenticado, os limites padrão e o
-workflow n8n estão documentados em
+fluxo direto estão documentados em
 [`automation/non-functional/README.md`](automation/non-functional/README.md).
 
 ## Produção
@@ -89,8 +103,10 @@ também constrói a imagem Docker.
 
 - Nunca versionar `.env`, tokens, senhas ou evidências com dados pessoais.
 - Use segredos diferentes para JWT, banco e integração do agente.
-- Exponha somente o proxy HTTPS; MySQL, n8n e Playwright MCP devem permanecer
-  em rede privada.
+- Mantenha `ALLOW_MANUAL_TEST_URLS=false`; habilite somente em operação
+  administrada e temporária.
+- Exponha somente o proxy HTTPS; MySQL e workers Playwright devem permanecer em
+  rede privada.
 - Produção deve ser somente leitura para o agente.
 - Scans ativos e testes de carga exigem ambiente e autorização específicos.
 - Screenshots, relatórios e logs são gravados em `artifacts/`, que não é versionado.
@@ -98,17 +114,20 @@ também constrói a imagem Docker.
 ## Estado do roadmap
 
 - Geração de cenários e análise de cobertura: concluídas.
-- Configuração e smoke test do Playwright MCP: concluídos.
-- Conexão n8n → Playwright MCP com workflow de diagnóstico: concluída.
-- Loop sequencial por cenário Gherkin, consolidação e separação de falhas: concluídos.
-- Captura rastreável de screenshots pelo agente: configurada; teste funcional aguarda crédito na API OpenAI.
-- Execução completa pelo agente GPT-4o: tecnicamente configurada; aguarda crédito disponível na conta da API OpenAI.
+- Executor Playwright direto integrado à fila: concluído.
+- Contrato literal por cenário Gherkin e separação de falhas: concluídos.
+- Disparo pelo frontend com ambientes e credenciais parametrizados: concluído.
+- Acompanhamento em tempo real por cenário, etapa e ambiente no frontend: concluído.
+- Captura rastreável de screenshots e execução completa pelo agente: validadas ponta a ponta.
+- Execução real via VPN COGEL, incluindo login e cenário funcional: validada.
 - Gerador Node.js de evidências DOCX com screenshots: concluído.
+- Geração automática do DOCX pelo executor direto e link no histórico: concluída.
 - Persistência de execuções e dashboard operacional: concluídos.
 - k6, OWASP ZAP, axe-core e dashboard não funcional: concluídos.
 - Cards Markdown de defeitos reais, com cópia e download pelo Dashboard: concluídos.
 - Reteste, classificação de flaky tests e relatório HTML de confiabilidade: concluídos.
 - Memória especialista persistente por projeto, sistema e sprint: concluída.
+- Aprendizado automático de rotas, telas, elementos semânticos e fluxos aprovados: concluído.
 - Ciclo de vida dos cards de defeito, com histórico e rastreabilidade: concluído.
 - Preparação de produção, segurança HTTP, health checks, CI e backups: concluída.
 - Preflight GO/NO-GO e runtime mínimo de homologação: concluídos.

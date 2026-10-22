@@ -7,6 +7,19 @@ type UseAuthOptions = {
   redirectOnUnauthenticated?: boolean;
 };
 
+function clearUserInterfaceState(userId?: number) {
+  if (typeof window === "undefined") return;
+
+  // O gerador, o workspace e os modais guardam apenas estado temporário nesta
+  // área. Encerrar a sessão impede que esse conteúdo apareça para outro usuário.
+  window.sessionStorage.clear();
+  window.localStorage.removeItem("orchestrator-navigation-tabs");
+  window.localStorage.removeItem("qa-planner-evidence-draft");
+  if (userId) {
+    window.localStorage.removeItem(`orchestrator-navigation-tabs:${userId}`);
+  }
+}
+
 export function useAuth(options?: UseAuthOptions) {
   const { redirectOnUnauthenticated = false } = options ?? {};
   const utils = trpc.useUtils();
@@ -24,6 +37,7 @@ export function useAuth(options?: UseAuthOptions) {
   });
 
   const logout = useCallback(async () => {
+    const userId = meQuery.data?.id;
     try {
       await logoutMutation.mutateAsync();
     } catch (error: unknown) {
@@ -32,11 +46,12 @@ export function useAuth(options?: UseAuthOptions) {
       }
       throw error;
     } finally {
+      clearUserInterfaceState(userId);
       utils.auth.me.setData(undefined, null);
       await utils.auth.me.invalidate();
       setLocation("/login");
     }
-  }, [logoutMutation, utils, setLocation]);
+  }, [logoutMutation, meQuery.data?.id, utils, setLocation]);
 
   const state = useMemo(() => {
     return {

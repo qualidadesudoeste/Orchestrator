@@ -1,4 +1,8 @@
 import { ENV } from "./env";
+import { sanitizeSensitiveData, sanitizeSensitiveText } from "./sensitiveData";
+import { logWarn } from "./logger";
+import { getActiveAiProviderSetting } from "../db";
+import { decryptCredential } from "../credentialCrypto";
 
 export type Role = "system" | "user" | "assistant" | "tool" | "function";
 
@@ -30,6 +34,7 @@ export type Message = {
   content: MessageContent | MessageContent[];
   name?: string;
   tool_call_id?: string;
+  tool_calls?: ToolCall[];
 };
 
 export type Tool = {
@@ -69,6 +74,7 @@ export type InvokeParams = {
   model?: string;
   thinking?: Record<string, unknown>;
   reasoning?: Record<string, unknown>;
+  reasoningEffort?: "none" | "low" | "medium" | "high" | "xhigh" | "max";
 };
 
 export type ToolCall = {
@@ -140,7 +146,7 @@ const normalizeContentPart = (
 };
 
 const normalizeMessage = (message: Message) => {
-  const { role, name, tool_call_id } = message;
+  const { role, name, tool_call_id, tool_calls } = message;
 
   if (role === "tool" || role === "function") {
     const content = ensureArray(message.content)
@@ -163,6 +169,7 @@ const normalizeMessage = (message: Message) => {
       role,
       name,
       content: contentParts[0].text,
+      ...(tool_calls?.length ? { tool_calls } : {}),
     };
   }
 
@@ -170,6 +177,7 @@ const normalizeMessage = (message: Message) => {
     role,
     name,
     content: contentParts,
+    ...(tool_calls?.length ? { tool_calls } : {}),
   };
 };
 
@@ -212,15 +220,73 @@ const normalizeToolChoice = (
   return toolChoice;
 };
 
-const resolveApiUrl = () =>
-  ENV.forgeApiUrl && ENV.forgeApiUrl.trim().length > 0
-    ? `${ENV.forgeApiUrl.replace(/\/$/, "")}/v1/chat/completions`
+type LlmProviderConfig = {
+  apiUrl: string;
+  apiKey: string;
+  model: string;
+};
+
+const isLocalLlmUrl = (value: string): boolean => {
+  try {
+    const host = new URL(value).hostname.toLowerCase();
+    return host === "localhost" || host === "127.0.0.1" || host === "::1";
+  } catch {
+    return false;
+  }
+};
+
+const resolveProviderPath = (
+  resource: "chat/completions" | "models",
+  apiUrl = ENV.llmApiUrl,
+) => {
+  const baseUrl = apiUrl.replace(/\/$/, "");
+  if (/generativelanguage\.googleapis\.com/i.test(baseUrl)) {
+    return `${baseUrl}/${resource}`;
+  }
+  return `${baseUrl}/v1/${resource}`;
+};
+
+const resolveApiUrl = (apiUrl = ENV.llmApiUrl) =>
+  apiUrl && apiUrl.trim().length > 0
+    ? resolveProviderPath("chat/completions", apiUrl)
     : "https://forge.manus.im/v1/chat/completions";
 
-const assertApiKey = () => {
-  if (!ENV.forgeApiKey) {
-    throw new Error("OPENAI_API_KEY is not configured");
+const assertApiKey = (apiUrl = ENV.llmApiUrl, apiKey = ENV.llmApiKey) => {
+  if (!apiKey && !isLocalLlmUrl(apiUrl)) {
+    throw new Error("LLM_API_KEY is not configured");
   }
+};
+
+const environmentPrimaryProvider = (): LlmProviderConfig => ({
+  apiUrl: ENV.llmApiUrl,
+  // Never forward a cloud key to a process listening on this computer.
+  apiKey: isLocalLlmUrl(ENV.llmApiUrl) ? "" : ENV.llmApiKey,
+  model: ENV.llmModel,
+});
+
+const primaryProvider = async (): Promise<LlmProviderConfig> => {
+  try {
+    const setting = await getActiveAiProviderSetting();
+    if (setting) {
+      return {
+        apiUrl: setting.apiUrl,
+        apiKey: setting.apiKeyEncrypted ? decryptCredential(setting.apiKeyEncrypted) : "",
+        model: setting.model,
+      };
+    }
+  } catch (error) {
+    logWarn("llm_provider_database_read_failed", { error });
+  }
+  return environmentPrimaryProvider();
+};
+
+const fallbackProvider = (): LlmProviderConfig | undefined => {
+  if (!ENV.llmFallbackApiUrl || !ENV.llmFallbackModel) return undefined;
+  return {
+    apiUrl: ENV.llmFallbackApiUrl,
+    apiKey: ENV.llmFallbackApiKey,
+    model: ENV.llmFallbackModel,
+  };
 };
 
 const normalizeResponseFormat = ({
@@ -285,6 +351,13 @@ const parseRetryAfter = (value: string | null): number | undefined => {
   return Number.isNaN(at) ? undefined : Math.max(0, at - Date.now());
 };
 
+const isRetryableStatus = (status: number): boolean =>
+  status === 408 ||
+  status === 409 ||
+  status === 425 ||
+  status === 429 ||
+  status >= 500;
+
 // Equal-jitter exponential backoff. The cap/2 floor guarantees a minimum
 // delay so a misbehaving caller loop slows down instead of hammering the
 // upstream while it keeps returning errors.
@@ -297,8 +370,9 @@ const computeBackoffDelay = (
   return Math.min(Math.max(jittered, retryAfterMs ?? 0), RETRY_MAX_DELAY_MS);
 };
 
-// Retries non-2xx responses and network errors with exponential backoff, then
-// returns the final Response so callers keep their existing error handling.
+// Retries transient HTTP responses and network errors with exponential
+// backoff. Invalid requests and authentication errors return immediately so
+// the caller can show the real problem without unnecessary waiting.
 const fetchWithBackoff = async (
   url: string,
   init: FetchInit
@@ -308,7 +382,11 @@ const fetchWithBackoff = async (
   for (let attempt = 0; attempt <= RETRY_MAX_RETRIES; attempt++) {
     try {
       const response = await fetch(url, init);
-      if (response.ok || attempt === RETRY_MAX_RETRIES) {
+      if (
+        response.ok ||
+        !isRetryableStatus(response.status) ||
+        attempt === RETRY_MAX_RETRIES
+      ) {
         return response;
       }
 
@@ -320,16 +398,21 @@ const fetchWithBackoff = async (
       } catch {
         // Body already settled; nothing to clean up.
       }
-      console.warn(
-        `LLM request retry ${attempt + 1}/${RETRY_MAX_RETRIES} after status ${response.status}`
-      );
+      logWarn("llm_request_retry", {
+        attempt: attempt + 1,
+        maxAttempts: RETRY_MAX_RETRIES,
+        status: response.status,
+      });
       await sleep(computeBackoffDelay(attempt, retryAfterMs));
     } catch (error) {
       lastError = error;
+      if (init.signal?.aborted || (error instanceof Error && ["AbortError", "TimeoutError"].includes(error.name))) throw error;
       if (attempt === RETRY_MAX_RETRIES) throw error;
-      console.warn(
-        `LLM request retry ${attempt + 1}/${RETRY_MAX_RETRIES} after network error`
-      );
+      logWarn("llm_request_retry", {
+        attempt: attempt + 1,
+        maxAttempts: RETRY_MAX_RETRIES,
+        reason: "network_error",
+      });
       await sleep(computeBackoffDelay(attempt));
     }
   }
@@ -339,8 +422,11 @@ const fetchWithBackoff = async (
     : new Error("LLM request failed after exhausting retries");
 };
 
-export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
-  assertApiKey();
+async function invokeProvider(
+  params: InvokeParams,
+  provider: LlmProviderConfig,
+): Promise<InvokeResult> {
+  assertApiKey(provider.apiUrl, provider.apiKey);
 
   const {
     messages,
@@ -354,16 +440,18 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
     model,
     thinking,
     reasoning,
+    reasoningEffort,
     maxTokens,
     max_tokens,
   } = params;
 
   const payload: Record<string, unknown> = {
-    messages: messages.map(normalizeMessage),
+    messages: sanitizeSensitiveData(messages.map(normalizeMessage)),
   };
 
-  if (model) {
-    payload.model = model;
+  const resolvedModel = model || provider.model;
+  if (resolvedModel) {
+    payload.model = resolvedModel;
   }
 
   if (tools && tools.length > 0) {
@@ -380,7 +468,15 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
 
   const resolvedMaxTokens = max_tokens ?? maxTokens;
   if (typeof resolvedMaxTokens === "number") {
-    payload.max_tokens = resolvedMaxTokens;
+    // GPT-5 and reasoning models reject the legacy max_tokens parameter.
+    // Keep it for older chat models and Forge-compatible providers.
+    const usesCompletionTokenLimit =
+      typeof resolvedModel === "string" &&
+      (/^gpt-5(?:[.-]|$)/i.test(resolvedModel) ||
+        /^o\d(?:[.-]|$)/i.test(resolvedModel));
+    payload[
+      usesCompletionTokenLimit ? "max_completion_tokens" : "max_tokens"
+    ] = resolvedMaxTokens;
   }
 
   if (thinking) {
@@ -388,6 +484,9 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
   }
   if (reasoning) {
     payload.reasoning = reasoning;
+  }
+  if (reasoningEffort) {
+    payload.reasoning_effort = reasoningEffort;
   }
 
   const normalizedResponseFormat = normalizeResponseFormat({
@@ -398,26 +497,65 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
   });
 
   if (normalizedResponseFormat) {
-    payload.response_format = normalizedResponseFormat;
+    // Groq supports JSON Object Mode across all current chat models. This
+    // keeps the provider swap reliable even when the selected model does not
+    // implement JSON Schema constrained decoding.
+    const usesGroqJsonObject =
+      /api\.groq\.com/i.test(provider.apiUrl) &&
+      normalizedResponseFormat.type === "json_schema";
+    payload.response_format = usesGroqJsonObject
+      ? { type: "json_object" }
+      : normalizedResponseFormat;
+
+    if (usesGroqJsonObject) {
+      payload.messages = [
+        {
+          role: "system",
+          content: [
+            "Retorne exclusivamente um objeto JSON válido, sem Markdown.",
+            "O objeto deve respeitar exatamente o JSON Schema abaixo, incluindo os nomes das propriedades:",
+            JSON.stringify(normalizedResponseFormat.json_schema.schema),
+          ].join("\n"),
+        },
+        ...(payload.messages as ReturnType<typeof normalizeMessage>[]),
+      ];
+    }
   }
 
-  const response = await fetchWithBackoff(resolveApiUrl(), {
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+  };
+  if (provider.apiKey) headers.authorization = `Bearer ${provider.apiKey}`;
+
+  const response = await fetchWithBackoff(resolveApiUrl(provider.apiUrl), {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${ENV.forgeApiKey}`,
-    },
+    headers,
     body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(Math.round(Math.min(
+      600_000,
+      Math.max(10_000, ENV.llmRequestTimeoutMs || 180_000),
+    ))),
   });
 
   if (!response.ok) {
     const errorText = await response.text();
     throw new Error(
-      `LLM invoke failed: ${response.status} ${response.statusText} – ${errorText}`
+      `LLM invoke failed: ${response.status} ${response.statusText} - ${sanitizeSensitiveText(errorText)}`
     );
   }
 
   return (await response.json()) as InvokeResult;
+}
+
+export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
+  try {
+    return await invokeProvider(params, await primaryProvider());
+  } catch (primaryError) {
+    const fallback = fallbackProvider();
+    if (!fallback) throw primaryError;
+    logWarn("llm_primary_unavailable_using_fallback", { error: primaryError });
+    return invokeProvider({ ...params, model: fallback.model }, fallback);
+  }
 }
 
 export type ModelInfo = {
@@ -432,23 +570,26 @@ export type ModelsResponse = {
   data: ModelInfo[];
 };
 
-export async function listLLMModels(): Promise<ModelsResponse> {
-  assertApiKey();
-
-  const url = ENV.forgeApiUrl && ENV.forgeApiUrl.trim().length > 0
-    ? `${ENV.forgeApiUrl.replace(/\/$/, "")}/v1/models`
+async function listModelsForProvider(provider: LlmProviderConfig): Promise<ModelsResponse> {
+  assertApiKey(provider.apiUrl, provider.apiKey);
+  const url = provider.apiUrl && provider.apiUrl.trim().length > 0
+    ? resolveProviderPath("models", provider.apiUrl)
     : "https://forge.manus.im/v1/models";
-
-  const response = await fetchWithBackoff(url, {
-    headers: { authorization: `Bearer ${ENV.forgeApiKey}` },
-  });
-
+  const headers: Record<string, string> = {};
+  if (provider.apiKey) headers.authorization = `Bearer ${provider.apiKey}`;
+  const response = await fetchWithBackoff(url, { headers });
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(
-      `List LLM models failed: ${response.status} ${response.statusText} – ${errorText}`
-    );
+    throw new Error(`List LLM models failed: ${response.status} ${response.statusText} – ${errorText}`);
   }
-
   return (await response.json()) as ModelsResponse;
+}
+
+export async function testLLMProviderConfig(provider: LlmProviderConfig): Promise<{ ok: true; modelCount: number }> {
+  const models = await listModelsForProvider(provider);
+  return { ok: true, modelCount: Array.isArray(models.data) ? models.data.length : 0 };
+}
+
+export async function listLLMModels(): Promise<ModelsResponse> {
+  return listModelsForProvider(await primaryProvider());
 }

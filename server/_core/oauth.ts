@@ -1,6 +1,7 @@
 import { COOKIE_NAME, ONE_YEAR_MS, OAUTH_STATE_COOKIE, decodeOAuthState } from "@shared/const";
 import { parse as parseCookieHeader } from "cookie";
 import type { Express, Request, Response } from "express";
+import { logError } from "./logger";
 import * as db from "../db";
 import { getSessionCookieOptions } from "./cookies";
 import { sdk } from "./sdk";
@@ -58,7 +59,7 @@ export function registerOAuthRoutes(app: Express) {
 
       res.redirect(302, "/dashboard");
     } catch (error) {
-      console.error("[OAuth] Callback failed", error);
+      logError("oauth_callback_failed", error);
       res.status(500).json({ error: "OAuth callback failed" });
     }
   });

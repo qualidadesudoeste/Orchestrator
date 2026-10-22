@@ -30,7 +30,7 @@ function validPublicUrl(value: string): boolean {
 function validateSecret(
   env: NodeJS.ProcessEnv,
   name: string,
-  errors: string[],
+  errors: string[]
 ): string {
   const value = env[name]?.trim() ?? "";
   if (value.length < 32) {
@@ -42,7 +42,7 @@ function validateSecret(
 }
 
 export function validateProductionEnvironment(
-  env: NodeJS.ProcessEnv = process.env,
+  env: NodeJS.ProcessEnv = process.env
 ): EnvironmentValidation {
   const errors: string[] = [];
   const warnings: string[] = [];
@@ -57,20 +57,38 @@ export function validateProductionEnvironment(
 
   const jwtSecret = validateSecret(env, "JWT_SECRET", errors);
   const agentToken = validateSecret(env, "QA_AGENT_API_TOKEN", errors);
+  const credentialKey = validateSecret(
+    env,
+    "CREDENTIAL_ENCRYPTION_KEY",
+    errors
+  );
   if (jwtSecret && agentToken && jwtSecret === agentToken) {
     errors.push("JWT_SECRET e QA_AGENT_API_TOKEN devem ser diferentes.");
+  }
+  if (credentialKey && [jwtSecret, agentToken].includes(credentialKey)) {
+    errors.push(
+      "CREDENTIAL_ENCRYPTION_KEY deve ser diferente de JWT_SECRET e QA_AGENT_API_TOKEN."
+    );
   }
 
   const publicUrl = env.ORCHESTRATOR_PUBLIC_URL?.trim() ?? "";
   if (!validPublicUrl(publicUrl)) {
     errors.push(
-      "ORCHESTRATOR_PUBLIC_URL deve usar HTTPS (HTTP é aceito apenas em loopback local).",
+      "ORCHESTRATOR_PUBLIC_URL deve usar HTTPS (HTTP é aceito apenas em loopback local)."
     );
   }
 
-  if (!env.BUILT_IN_FORGE_API_KEY?.trim()) {
+  if (
+    !/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:\/|$)/i.test(
+      env.LLM_API_URL?.trim() ?? ""
+    ) &&
+    !env.OPENAI_API_KEY?.trim() &&
+    !env.GEMINI_API_KEY?.trim() &&
+    !env.LLM_API_KEY?.trim() &&
+    !env.BUILT_IN_FORGE_API_KEY?.trim()
+  ) {
     warnings.push(
-      "BUILT_IN_FORGE_API_KEY ausente: recursos de IA e armazenamento ficarão indisponíveis.",
+      "OPENAI_API_KEY/LLM_API_KEY ausente: recursos de IA ficarão indisponíveis."
     );
   }
   if (!env.VITE_ANALYTICS_ENDPOINT?.trim()) {
@@ -81,18 +99,20 @@ export function validateProductionEnvironment(
 }
 
 export function assertProductionEnvironment(
-  env: NodeJS.ProcessEnv = process.env,
+  env: NodeJS.ProcessEnv = process.env
 ): EnvironmentValidation {
   const validation = validateProductionEnvironment(env);
   if (validation.errors.length > 0) {
     throw new Error(
-      `Configuração de produção inválida:\n- ${validation.errors.join("\n- ")}`,
+      `Configuração de produção inválida:\n- ${validation.errors.join("\n- ")}`
     );
   }
   return validation;
 }
 
-export function parseTrustProxy(value: string | undefined): boolean | number | string {
+export function parseTrustProxy(
+  value: string | undefined
+): boolean | number | string {
   const normalized = value?.trim();
   if (!normalized) return false;
   if (normalized === "true") return true;
