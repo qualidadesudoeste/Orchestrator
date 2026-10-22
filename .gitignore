@@ -1,6 +1,7 @@
 node_modules/
 dist/
 artifacts/
+output/playwright/
 .npm-cache/
 .env
 .env.*

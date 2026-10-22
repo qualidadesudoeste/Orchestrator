@@ -2,6 +2,7 @@ import "dotenv/config";
 import mysql from "mysql2/promise";
 import { appRouter } from "../../server/routers";
 import { getTestExecutionProgress, getUserById } from "../../server/db";
+import { closeDatabaseConnection } from "../../server/database/client";
 
 function argument(name: string): string | undefined {
   const index = process.argv.indexOf(name);
@@ -16,8 +17,9 @@ async function main() {
   if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL não configurada.");
   const planId = Number(argument("--plan-id") || 0);
   const requestedCaseId = String(argument("--case-id") || "").trim();
-  if (!planId || !requestedCaseId) {
-    throw new Error("Use --plan-id <id> --case-id <id-do-caso>.");
+  const allCases = process.argv.includes("--all-cases");
+  if (!planId || (!requestedCaseId && !allCases) || (requestedCaseId && allCases)) {
+    throw new Error("Use --plan-id <id> com --case-id <id-do-caso> ou --all-cases.");
   }
 
   const connection = await mysql.createConnection(process.env.DATABASE_URL);
@@ -31,8 +33,8 @@ async function main() {
     const parsed = JSON.parse(String(plan.resultJson || "{}"));
     const cases = (Array.isArray(parsed.cards) ? parsed.cards : [])
       .flatMap((card: any) => Array.isArray(card.casos) ? card.casos : []);
-    const selected = cases.find((item: any) => String(item.id) === requestedCaseId);
-    if (!selected) throw new Error(`Caso ${requestedCaseId} não encontrado no plano.`);
+    const selectedCases = allCases ? cases : cases.filter((item: any) => String(item.id) === requestedCaseId);
+    if (!selectedCases.length) throw new Error(allCases ? "Plano sem casos de teste." : `Caso ${requestedCaseId} não encontrado no plano.`);
 
     const [environmentRows] = await connection.query(
       "SELECT id FROM project_test_environments WHERE projectId=? AND isActive=1 ORDER BY id",
@@ -48,9 +50,9 @@ async function main() {
       projectId: Number(plan.projectId),
       sprintId: Number(plan.sprintId),
       environmentIds,
-      cases: [selected],
+      cases: selectedCases,
     });
-    console.log(JSON.stringify({ event: "queued", ...started }));
+    console.log(JSON.stringify({ event: "queued", ...started, caseIds: selectedCases.map((item: any) => String(item.id)) }));
 
     const deadline = Date.now() + 45 * 60 * 1000;
     while (Date.now() < deadline) {
@@ -77,6 +79,7 @@ async function main() {
     throw new Error("Timeout aguardando conclusão da execução integrada.");
   } finally {
     await connection.end();
+    await closeDatabaseConnection();
   }
 }
 

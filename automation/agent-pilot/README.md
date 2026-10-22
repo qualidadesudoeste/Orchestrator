@@ -21,6 +21,16 @@ npm run agent:pilot -- --execution-id 14 --scenario "Filtrar por serviço"
 Use `--headed` para acompanhar o navegador. Os planos, traces e screenshots
 ficam em `artifacts/agent-pilot/`.
 
+Para iniciar uma execução nova de todos os casos de um plano salvo pela fila
+integrada e acompanhar a conclusão, com o worker ativo:
+
+```powershell
+npm run agent:smoke -- --plan-id 2 --all-cases
+```
+
+Use `--case-id CT-001` no lugar de `--all-cases` para executar um único caso.
+Essa execução é registrada no histórico e usa os ambientes ativos do projeto.
+
 O piloto bloqueia cliques destrutivos, limita a navegação aos ambientes
 parametrizados e usa um verificador independente antes de aceitar a conclusão.
 Quando o ambiente exige VPN, o mesmo preflight seguro do Orchestrator verifica
