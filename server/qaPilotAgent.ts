@@ -435,40 +435,6 @@ export function normalizeVerifierDecision(
   };
 }
 
-export async function executeV2Bootstrap(input: QaPilotInput, runtime: QaPilotToolRuntime): Promise<unknown[]> {
-  if (!input.executionPlan) return [];
-  const outputs: unknown[] = [];
-  const skillIds = new Set(input.executionPlan.resolutions.flatMap(item => item.skillIds));
-  if (skillIds.has("universal.login") && input.environments.some(item => item.username && item.password)) {
-    const login = await runtime.execute("browser_login", {}, 0);
-    outputs.push({ action: "LOGIN", result: boundedResult(login.output) });
-  }
-  const route = input.executionPlan.scenario.steps
-    .filter(step => step.keyword !== "ENTAO")
-    .map(step => step.text.match(/\/(?:[a-z0-9][a-z0-9/_-]*)(?:\?[a-z0-9=&_%.-]+)?/i)?.[0])
-    .find(Boolean);
-  if (route) {
-    const base = input.environments[0]?.url;
-    if (base) {
-      const target = new URL(route, base).toString();
-      const navigation = await runtime.execute("browser_navigate", { url: target }, 0);
-      outputs.push({ action: "NAVIGATE", target, result: boundedResult(navigation.output) });
-    }
-  }
-  const scenarioText = input.executionPlan.scenario.steps.map(step => step.text).join(" ");
-  if (/preencher|dados v[aá]lidos|formul[aá]rio|cadastro/i.test(scenarioText)) {
-    const form = await runtime.execute("browser_fill_visible_form", {}, 0);
-    outputs.push({ action: "FILL_FORM", result: boundedResult(form.output) });
-  }
-  const actionText = input.executionPlan.scenario.steps
-    .filter(step => step.keyword === "QUANDO").map(step => step.text).join(" ");
-  if (/enviar|submeter|cadastrar|salvar/i.test(actionText)) {
-    const submit = await runtime.execute("browser_submit_form", {}, 0);
-    outputs.push({ action: "SUBMIT_FORM", result: boundedResult(submit.output) });
-  }
-  return outputs;
-}
-
 /**
  * Reproduz um fluxo previamente aprovado sem deixar o modelo decidir cada
  * clique. Uma chamada curta ao verificador ainda confirma o resultado atual;
@@ -638,7 +604,6 @@ export async function runQaPilotAgent(
   const runtime = options.runtime ?? new PlaywrightPilotRuntime(input);
   const maxIterations = Math.min(40, Math.max(8, input.maxIterations ?? 28));
   const plan = await createPlan(input, trackedLlm);
-  const bootstrapEvidence = await executeV2Bootstrap(input, runtime);
   const stepResults: QaScenarioStepResult[] = [];
   let traceCheckpoint = 0;
   const messages: Message[] = [
@@ -669,6 +634,7 @@ export async function runQaPilotAgent(
         "Antes de concluir BLOQUEADO ou ERRO_AUTOMACAO, use resolve_blocker, repita o passo original e observe novamente. O motor também aplicará essa recuperação automaticamente se você tentar concluir sem fazê-la.",
         "Quando houver ponte de provisionamento e o passo exigir massa complexa, estado temporal, perfil específico ou execução de rotina agendada, use provision_test_state. Nunca tente simular a passagem do tempo apenas pelo navegador.",
         "Execute literalmente cada item de scenarioContract, na ordem. Não substitua, agrupe nem pule passos.",
+        "Nenhuma ação de navegador foi executada previamente. Use as habilidades do plano somente ao executar o passo atual: não antecipe login, navegação, preenchimento ou envio com base em passos futuros. A simples menção a formulário ou cadastro não autoriza preenchê-lo ou enviá-lo.",
         "scenarioContract/Gherkin é a única fonte de requisitos. O plano é apenas uma sugestão de navegação: ignore qualquer requiredData, campo, payload ou validação extra que não esteja no scenarioContract.",
         "Ausência comprovada de uma tela, campo, botão, rota ou comportamento que o scenarioContract exige é FALHOU (divergência funcional), não BLOQUEADO. BLOQUEADO é reservado a dependência externa ou massa de negócio indispensável que não pode ser criada pela interface.",
         "Depois de executar e observar cada passo, chame complete_step com o ID correspondente.",
@@ -697,8 +663,7 @@ export async function runQaPilotAgent(
         automationV2: input.executionPlan ? {
           mode: input.executionPlan.mode,
           resolutions: input.executionPlan.resolutions,
-          rule: "Use habilidades resolvidas primeiro. Acione descoberta somente nos passos marcados como DISCOVERY_REQUIRED ou PROVISION_REQUIRED.",
-          bootstrapEvidence,
+          rule: "As resoluções são sugestões por stepId, não ações já executadas. Use somente as habilidades do passo atual e registre seu resultado antes de avançar. Acione descoberta quando necessário para cumprir o contrato literal.",
         } : undefined,
       }),
     },

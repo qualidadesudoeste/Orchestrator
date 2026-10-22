@@ -6,7 +6,6 @@ import {
   compactPilotToolHistory,
   classifyObservedAbsence,
   classifyAutomationError,
-  executeV2Bootstrap,
   normalizeVerifierDecision,
   parseGherkinScenarioSteps,
   runApprovedAutomationRecipe,
@@ -115,24 +114,78 @@ describe("contrato executável do cenário", () => {
     expect(automationErrorRecoveryCategory("Campos de login não encontrados")).toBe("AUTH_SESSION");
     expect(automationErrorRecoveryCategory("element intercepts pointer events by dialog-mask")).toBe("UI_STATE");
   });
-  it("executa login e rota conhecidos antes de acionar descoberta por IA", async () => {
+  it("executa navegação, preenchimento e envio somente no passo correspondente, sem bootstrap antecipado", async () => {
     const gherkin = [
-      "Cenário: Relatório",
-      "Dado administrador autenticado",
-      "Quando acessar /relatorios",
-      "Então a tela de relatórios é exibida",
+      "Cenário: Enviar cadastro",
+      "Dado que acesso /cadastro com o formulário vazio",
+      "Quando preencho os dados válidos e envio o formulário",
+      "Então o cadastro é confirmado",
     ].join("\n");
     const compiled = compileSingleGherkinScenario(gherkin);
     const executionPlan = resolveScenarioPlan({ scenario: compiled });
     const { runtime, trace } = runtimeDouble();
-    const output = await executeV2Bootstrap({
-      runId: "v2-bootstrap", scenarioId: "V2-1", title: compiled.title, gherkin,
+    const scripted = [
+      callTool("open-form", "browser_navigate", { url: "https://example.test/cadastro" }),
+      callTool("empty-form", "complete_step", { stepId: "S1", status: "PASSOU", observed: "O formulário está aberto com os campos vazios." }),
+      callTool("fill-form", "browser_fill_visible_form"),
+      callTool("submit-form", "browser_submit_form"),
+      callTool("sent-form", "complete_step", { stepId: "S2", status: "PASSOU", observed: "O formulário foi preenchido e enviado uma única vez." }),
+      callTool("confirmation", "browser_observe"),
+      callTool("confirmed", "complete_step", { stepId: "S3", status: "PASSOU", observed: "A confirmação do cadastro está visível na tela." }),
+      callTool("final-shot", "browser_screenshot"),
+      callTool("done", "finish", { summary: "Cadastro confirmado.", observedResult: "Confirmação visível.", missingPreconditions: [] }),
+    ];
+    let calls = 0;
+    let index = 0;
+    const llm = async () => {
+      calls += 1;
+      if (calls === 1) return planResponse();
+      if (index === 0) expect(trace).toHaveLength(0);
+      if (index === 2) expect(trace.map(event => event.tool)).toEqual(["browser_navigate"]);
+      return scripted[index++];
+    };
+    const result = await runQaPilotAgent({
+      runId: "ordered-form", scenarioId: "V2-1", title: compiled.title, gherkin,
       environments: [{ name: "HML", url: "https://example.test/login", username: "admin", password: "secret" }],
       outputDirectory: pathForTest(), executionPlan,
-    }, runtime);
-    expect(trace.map(item => item.tool)).toEqual(["browser_login", "browser_navigate"]);
-    expect(JSON.stringify(output)).toContain("https://example.test/relatorios");
-    expect(JSON.stringify(output)).not.toContain("secret");
+    }, { llm, runtime, verify: false });
+    expect(result.final.status).toBe("PASSOU");
+    expect(trace.map(item => item.tool)).toEqual([
+      "browser_navigate", "browser_fill_visible_form", "browser_submit_form",
+      "browser_observe", "browser_screenshot", "finish",
+    ]);
+    expect(result.final.steps[0]).toMatchObject({ traceFrom: 0, traceTo: 1 });
+    expect(result.final.steps[1]).toMatchObject({ traceFrom: 1, traceTo: 3 });
+    expect(trace.every(event => event.iteration > 0)).toBe(true);
+  });
+
+  it("não preenche nem envia formulários mencionados apenas como precondição ou resultado", async () => {
+    const gherkin = [
+      "Cenário: Abrir cadastro",
+      "Dado que acesso /cadastro",
+      "Quando observo o formulário",
+      "Então o botão Salvar está visível e nenhum cadastro foi enviado",
+    ].join("\n");
+    const compiled = compileSingleGherkinScenario(gherkin);
+    const { runtime, trace } = runtimeDouble();
+    const scripted = [
+      callTool("navigate-only", "browser_navigate", { url: "https://example.test/cadastro" }),
+      callTool("step1-only", "complete_step", { stepId: "S1", status: "PASSOU", observed: "A página de cadastro foi aberta corretamente." }),
+      callTool("observe-only", "browser_observe"),
+      callTool("step2-only", "complete_step", { stepId: "S2", status: "PASSOU", observed: "O formulário vazio permanece visível na tela." }),
+      callTool("inspect-only", "browser_inspect_page", { query: "Salvar" }),
+      callTool("step3-only", "complete_step", { stepId: "S3", status: "PASSOU", observed: "O botão Salvar está visível e o formulário não foi enviado." }),
+      callTool("shot-only", "browser_screenshot"),
+      callTool("finish-only", "finish", { summary: "Formulário observado.", observedResult: "Nenhum envio realizado.", missingPreconditions: [] }),
+    ];
+    let calls = 0;
+    let index = 0;
+    await runQaPilotAgent({
+      runId: "observe-form", scenarioId: "V2-2", title: compiled.title, gherkin,
+      environments: [{ name: "HML", url: "https://example.test" }],
+      outputDirectory: pathForTest(), executionPlan: resolveScenarioPlan({ scenario: compiled }),
+    }, { llm: async () => calls++ === 0 ? planResponse() : scripted[index++], runtime, verify: false });
+    expect(trace.some(event => ["browser_fill_visible_form", "browser_submit_form"].includes(event.tool))).toBe(false);
   });
   it("autoriza termo sintético somente para buscas negativas sem massa", () => {
     expect(SYNTHETIC_NO_MATCH_GUIDANCE).toContain("QA_SEM_RESULTADO_AUTOMACAO");
