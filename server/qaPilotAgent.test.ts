@@ -220,7 +220,7 @@ describe("contrato executável do cenário", () => {
     }) as any;
     expect(compacted.action.label).toBe("Meus processos");
     expect(compacted.url).toBe("https://example.test/processos");
-    expect(compacted.elements).toHaveLength(25);
+    expect(compacted.elements).toHaveLength(40);
     expect(JSON.stringify(compacted)).not.toContain("segredo-");
   });
   it("preserva o diagnóstico do resolvedor quando a observação é compactada", () => {
